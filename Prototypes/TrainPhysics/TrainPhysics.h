@@ -130,7 +130,7 @@ public:
     // the per-tick cost and makes the G readouts free. This is the cheap half
     // of the cached-sample-table upgrade the spline header names; the full
     // table is still not needed.
-    const FFrame& GetFrame() const { return Current; }
+    const FTrackFrame& GetFrame() const { return Current; }
 
     // Lateral and vertical G at the heartline. The geometric part comes
     // straight from the track; see TrackSpline.h.
@@ -161,7 +161,7 @@ public:
 
         const double Total = Track.TotalLength();
         const double S0 = DistanceAlong;
-        const FFrame& F0 = Current;
+        const FTrackFrame& F0 = Current;
 
         // Every influence is resolved to an acceleration along the track at the
         // START of the step, so that gravity, the losses and the powered
@@ -238,7 +238,11 @@ public:
 
         const double S1 = std::max(0.0, std::min(Total, S0 + Advance));
         const double Travelled = S1 - S0;
-        const FFrame F1 = Track.EvaluateAt(S1);
+        // Continue from the cached frame rather than re-evaluating from the
+        // track start: O(one tick's travel) instead of O(track length). On a
+        // 425 m layout that is ~33 integrator steps a frame instead of ~42,500,
+        // which is the difference between fitting in a frame and not.
+        const FTrackFrame F1 = Track.AdvanceFrom(F0, S0, S1);
 
         // Gravity: exact, no discretisation error, at any step size. Everything
         // else does work over the distance actually travelled.
@@ -262,5 +266,5 @@ private:
     double DistanceAlong = 0.0;
     double SpeedMs = 0.0;
     double LastTangentialAccel = 0.0;
-    FFrame Current;
+    FTrackFrame Current;
 };

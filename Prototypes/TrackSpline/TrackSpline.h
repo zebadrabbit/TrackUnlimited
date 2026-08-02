@@ -117,7 +117,7 @@ inline FTrackSegment MakeClothoid(double InLength, double CurvatureStart, double
 // Two bases, and the difference between them is the whole heartline idea:
 // the path frame is what the track *does*, the rider frame is what the rider
 // *feels*. Banking rotates the second around the first.
-struct FFrame
+struct FTrackFrame
 {
     FVec3 Position;    // heartline position
     FVec3 Tangent;     // shared by both bases — roll is about this axis
@@ -147,7 +147,7 @@ struct FGForces
     double Vertical = 0.0;
 };
 
-inline FGForces FeltG(const FFrame& F, double SpeedMs)
+inline FGForces FeltG(const FTrackFrame& F, double SpeedMs)
 {
     const double V2 = SpeedMs * SpeedMs;
     // The path bends along the *unbanked* axes — banking rotates the rider, not
@@ -217,7 +217,7 @@ public:
     // about 0.2 ms on a 1 km track. Fine for tests and offline analysis; build a
     // cached arc-length sample table when the editor needs interactive scrubbing
     // or the physics tick needs this every frame.
-    FFrame EvaluateAt(double S) const
+    FTrackFrame EvaluateAt(double S) const
     {
         const double Total = TotalLength();
         S = S < 0.0 ? 0.0 : (S > Total ? Total : S);
@@ -236,7 +236,7 @@ public:
         {
             Index = i;
             const double Span = Remaining < Segments[i].Length ? Remaining : Segments[i].Length;
-            Integrate(Segments[i], Span, P, T, L, U);
+            Integrate(Segments[i], 0.0, Span, P, T, L, U);
             Local = Span;
             Remaining -= Span;
             if (Remaining <= 0.0)
@@ -245,32 +245,80 @@ public:
             }
         }
 
-        FFrame Out;
-        Out.Position = P;
-        Out.Tangent = T;
-        if (!Segments.empty())
+        return Finish(Index, Local, P, T, L, U);
+    }
+
+    // Continue an already-evaluated frame forward to ToS, instead of starting
+    // over at the track beginning. Cost is O(ToS - FromS), not O(ToS).
+    //
+    // This is the fast path a ticking train wants, and the reason it exists is
+    // measured: a 425 m layout is ~42,500 integrator steps per EvaluateAt, so
+    // one call per frame at 60 Hz does not fit in a frame. Advancing 0.33 m —
+    // one tick at 20 m/s — is about 33 steps instead.
+    //
+    // `From` must be the frame this track produced at FromS; its PathLateral
+    // and PathUp carry the unrolled basis the integrator needs. The result is
+    // not bit-identical to EvaluateAt(ToS), because the steps land in different
+    // places, but both are the same second-order integration of the same curve
+    // and the difference is far below the 0.027 mm/km accumulation either way.
+    FTrackFrame AdvanceFrom(const FTrackFrame& From, double FromS, double ToS) const
+    {
+        const double Total = TotalLength();
+        const double Target = ToS < 0.0 ? 0.0 : (ToS > Total ? Total : ToS);
+        if (Target == FromS)
+        {
+            // Already there — `From` IS the answer. Worth special-casing: a
+            // stalled train asks this every tick, and falling through to a full
+            // evaluation would make standing still the most expensive thing the
+            // simulation does.
+            return From;
+        }
+        if (Target < FromS || Segments.empty())
+        {
+            return EvaluateAt(Target);
+        }
+
+        FVec3 P = From.Position;
+        FVec3 T = From.Tangent;
+        FVec3 L = From.PathLateral;
+        FVec3 U = From.PathUp;
+
+        std::size_t Index = 0;
+        double Local = 0.0;
+        Locate(FromS, Index, Local);
+
+        double Remaining = Target - FromS;
+        while (Remaining > 0.0 && Index < Segments.size())
         {
             const FTrackSegment& Seg = Segments[Index];
-            const double A = Seg.Length > 0.0 ? Local / Seg.Length : 0.0;
-            Out.Roll = Lerp(Seg.RollStart, Seg.RollEnd, A);
-            Out.YawCurvature = Lerp(Seg.YawCurvatureStart, Seg.YawCurvatureEnd, A);
-            Out.PitchCurvature = Lerp(Seg.PitchCurvatureStart, Seg.PitchCurvatureEnd, A);
+            const double Span = std::min(Remaining, Seg.Length - Local);
+            if (Span > 0.0)
+            {
+                Integrate(Seg, Local, Local + Span, P, T, L, U);
+                Local += Span;
+                Remaining -= Span;
+            }
+            if (Remaining <= 0.0)
+            {
+                break;
+            }
+            ++Index;
+            Local = 0.0;
         }
-        Out.PathLateral = L;
-        Out.PathUp = U;
-        // Negated: a right-hand rotation about the tangent drops the rider's
-        // right side, so the sign is flipped to make +ve roll bank *into* a
-        // +ve (left) turn, which is what an author means by "bank left".
-        Out.Lateral = RotateAbout(L, T, -Out.Roll);
-        Out.Up = RotateAbout(U, T, -Out.Roll);
-        return Out;
+        if (Index >= Segments.size())
+        {
+            Index = Segments.size() - 1;
+            Local = Segments[Index].Length;
+        }
+
+        return Finish(Index, Local, P, T, L, U);
     }
 
     // The rails hang below the heartline; banking swings them around it, which
     // is the entire reason the heartline model exists.
     FVec3 RailCentreAt(double S) const
     {
-        const FFrame F = EvaluateAt(S);
+        const FTrackFrame F = EvaluateAt(S);
         return F.Position - F.Up * HeartlineHeight;
     }
 
@@ -299,13 +347,61 @@ public:
 private:
     static double Lerp(double A, double B, double T) { return A + (B - A) * T; }
 
+    // Which segment owns arc length S, and how far into it. At an exact joint
+    // the ENDING segment wins, matching EvaluateAt.
+    void Locate(double S, std::size_t& OutIndex, double& OutLocal) const
+    {
+        double Acc = 0.0;
+        for (std::size_t i = 0; i < Segments.size(); ++i)
+        {
+            if (S <= Acc + Segments[i].Length || i + 1 == Segments.size())
+            {
+                OutIndex = i;
+                OutLocal = S - Acc;
+                return;
+            }
+            Acc += Segments[i].Length;
+        }
+        OutIndex = 0;
+        OutLocal = 0.0;
+    }
+
+    // Turn an integrated path frame into the rider frame. Shared by EvaluateAt
+    // and AdvanceFrom so the roll convention can only ever be defined once.
+    FTrackFrame Finish(std::size_t Index, double Local,
+                  const FVec3& P, const FVec3& T, const FVec3& L, const FVec3& U) const
+    {
+        FTrackFrame Out;
+        Out.Position = P;
+        Out.Tangent = T;
+        if (!Segments.empty())
+        {
+            const FTrackSegment& Seg = Segments[Index];
+            const double A = Seg.Length > 0.0 ? Local / Seg.Length : 0.0;
+            Out.Roll = Lerp(Seg.RollStart, Seg.RollEnd, A);
+            Out.YawCurvature = Lerp(Seg.YawCurvatureStart, Seg.YawCurvatureEnd, A);
+            Out.PitchCurvature = Lerp(Seg.PitchCurvatureStart, Seg.PitchCurvatureEnd, A);
+        }
+        Out.PathLateral = L;
+        Out.PathUp = U;
+        // Negated: a right-hand rotation about the tangent drops the rider's
+        // right side, so the sign is flipped to make +ve roll bank *into* a
+        // +ve (left) turn, which is what an author means by "bank left".
+        Out.Lateral = RotateAbout(L, T, -Out.Roll);
+        Out.Up = RotateAbout(U, T, -Out.Roll);
+        return Out;
+    }
+
     // Exponential-midpoint integration: half-rotate the frame, translate along
     // the tangent, half-rotate again. Symmetric, second order, and keeps the
     // frame orthonormal by construction (it only ever applies rotations),
     // unlike a componentwise RK4 which drifts and needs re-orthonormalising.
-    static void Integrate(const FTrackSegment& Seg, double Span,
+    // Integrates the sub-range [From, To] of a segment's own arc length, so
+    // that a partial advance samples the curvature ramp at the right place.
+    static void Integrate(const FTrackSegment& Seg, double From, double To,
                           FVec3& P, FVec3& T, FVec3& L, FVec3& U)
     {
+        const double Span = To - From;
         if (Span <= 0.0)
         {
             return;
@@ -320,7 +416,7 @@ private:
 
         for (int i = 0; i < Steps; ++i)
         {
-            const double Mid = (i + 0.5) * Ds;
+            const double Mid = From + (i + 0.5) * Ds;
             const double A = Seg.Length > 0.0 ? Mid / Seg.Length : 0.0;
             const double Yaw = Lerp(Seg.YawCurvatureStart, Seg.YawCurvatureEnd, A);
             const double Pitch = Lerp(Seg.PitchCurvatureStart, Seg.PitchCurvatureEnd, A);

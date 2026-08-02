@@ -25,7 +25,7 @@ static void TestStraightIsStraight()
     FTrack Track;
     Track.AddSegment(MakeStraight(100.0));
 
-    const FFrame F = Track.EvaluateAt(100.0);
+    const FTrackFrame F = Track.EvaluateAt(100.0);
     assert(NearVec(F.Position, FVec3{100.0, 0.0, 0.0}));
     assert(NearVec(F.Tangent, FVec3{1.0, 0.0, 0.0}));
     assert(NearVec(F.Up, FVec3{0.0, 0.0, 1.0}));
@@ -40,7 +40,7 @@ static void TestArcMatchesExactCircle()
 
     // Starting at the origin heading +X and turning left puts the centre at
     // (0, R) and the quarter-circle endpoint at (R, R), heading +Y.
-    const FFrame F = Track.EvaluateAt(Track.TotalLength());
+    const FTrackFrame F = Track.EvaluateAt(Track.TotalLength());
     assert(NearVec(F.Position, FVec3{R, R, 0.0}));
     assert(NearVec(F.Tangent, FVec3{0.0, 1.0, 0.0}));
 
@@ -62,7 +62,7 @@ static void TestClothoidTurnsByIntegralOfCurvature()
     FTrack Track;
     Track.AddSegment(MakeClothoid(L, 0.0, 1.0 / R));
 
-    const FFrame F = Track.EvaluateAt(L);
+    const FTrackFrame F = Track.EvaluateAt(L);
     const double Expected = L / (2.0 * R);
     const double Actual = std::atan2(F.Tangent.Y, F.Tangent.X);
     assert(Near(Actual, Expected, 1e-4));
@@ -111,7 +111,7 @@ static void TestBankingCancelsLateralG()
     FTrack Track;
     Track.AddSegment(MakeArc(40.0, R, Bank));
 
-    const FFrame F = Track.EvaluateAt(20.0);
+    const FTrackFrame F = Track.EvaluateAt(20.0);
     const FGForces G = FeltG(F, V);
     assert(Near(G.Lateral, 0.0, 1e-6));
 
@@ -141,7 +141,7 @@ static void TestHeartlineIsWhatBankingRotatesAround()
     // by H*sin(bank) horizontally and H*cos(bank) below.
     FTrack Banked(H);
     Banked.AddSegment(MakeStraight(20.0, Bank));
-    const FFrame F = Banked.EvaluateAt(10.0);
+    const FTrackFrame F = Banked.EvaluateAt(10.0);
     const FVec3 Rail = Banked.RailCentreAt(10.0);
 
     assert(NearVec(F.Position, FVec3{10.0, 0.0, 0.0})); // heartline unmoved by roll
@@ -165,7 +165,7 @@ static void TestFrameStaysOrthonormal()
     Twisty.RollEnd = 1.2;
     Track.AddSegment(Twisty);
 
-    const FFrame F = Track.EvaluateAt(500.0);
+    const FTrackFrame F = Track.EvaluateAt(500.0);
     assert(Near(Length(F.Tangent), 1.0, 1e-12));
     assert(Near(Length(F.Lateral), 1.0, 1e-12));
     assert(Near(Length(F.Up), 1.0, 1e-12));
@@ -198,7 +198,7 @@ static void TestVerticalLoopGeometryAndG()
     Half.PitchCurvatureStart = Half.PitchCurvatureEnd = 1.0 / R;
     assert(Loop.AddSegment(Half));
 
-    const FFrame Apex = Loop.EvaluateAt(Loop.TotalLength());
+    const FTrackFrame Apex = Loop.EvaluateAt(Loop.TotalLength());
     assert(NearVec(Apex.Position, FVec3{0.0, 0.0, 2.0 * R}));
     assert(NearVec(Apex.Tangent, FVec3{-1.0, 0.0, 0.0}));
     assert(NearVec(Apex.Up, FVec3{0.0, 0.0, -1.0}));
@@ -247,7 +247,7 @@ static void TestGravityIsWorldReferencedNotPathReferenced()
     assert(Climb.AddSegment(PitchUp));
     assert(Climb.AddSegment(MakeStraight(20.0))); // holds 45 deg, curvature back to 0
 
-    const FFrame F = Climb.EvaluateAt(Climb.TotalLength() - 10.0);
+    const FTrackFrame F = Climb.EvaluateAt(Climb.TotalLength() - 10.0);
     assert(Near(F.Tangent.Z, std::sin(0.25 * Pi), 1e-6));
     assert(Near(F.PitchCurvature, 0.0, 1e-12));
 
@@ -298,6 +298,45 @@ static void TestDegenerateSegmentsRejected()
     assert(Near(Track.TotalLength(), 10.0));
 }
 
+static void TestAdvanceFromAgreesWithEvaluateAt()
+{
+    // The fast path a ticking train uses must trace the same curve as the slow
+    // one, including across segment joints and through a curvature ramp.
+    FTrack Track;
+    assert(Track.AddSegment(MakeStraight(10.0)));
+    assert(Track.AddSegment(MakeClothoid(20.0, 0.0, 1.0 / 25.0, 0.0, 0.5)));
+    assert(Track.AddSegment(MakeArc(30.0, 25.0, 0.5)));
+    FTrackSegment Hill;
+    Hill.Length = 40.0;
+    Hill.PitchCurvatureStart = 0.02;
+    Hill.PitchCurvatureEnd = -0.02;
+    Hill.RollStart = 0.5;
+    assert(Track.AddSegment(Hill));
+
+    // Walk it in small steps, the way a train would.
+    FTrackFrame Walk = Track.EvaluateAt(0.0);
+    double S = 0.0;
+    const double Step = 0.37; // deliberately not a divisor of any segment length
+    while (S < Track.TotalLength())
+    {
+        const double Next = std::min(S + Step, Track.TotalLength());
+        Walk = Track.AdvanceFrom(Walk, S, Next);
+        S = Next;
+
+        const FTrackFrame Direct = Track.EvaluateAt(S);
+        assert(NearVec(Walk.Position, Direct.Position, 1e-6));
+        assert(NearVec(Walk.Tangent, Direct.Tangent, 1e-9));
+        assert(NearVec(Walk.Up, Direct.Up, 1e-9));
+        assert(Near(Walk.Roll, Direct.Roll, 1e-12));
+        assert(Near(Walk.YawCurvature, Direct.YawCurvature, 1e-12));
+    }
+
+    // Going backwards or nowhere falls back to a full evaluation rather than
+    // silently returning the frame it was handed.
+    const FTrackFrame Back = Track.AdvanceFrom(Walk, S, 5.0);
+    assert(NearVec(Back.Position, Track.EvaluateAt(5.0).Position, 1e-9));
+}
+
 static void TestEvaluateClampsAndSpansSegments()
 {
     FTrack Track;
@@ -325,6 +364,7 @@ int main()
     TestClothoidEndpointMatchesFresnel();
     TestRollInterpolatesAcrossSegment();
     TestDegenerateSegmentsRejected();
+    TestAdvanceFromAgreesWithEvaluateAt();
     TestEvaluateClampsAndSpansSegments();
     std::printf("All track spline tests passed.\n");
     return 0;
