@@ -56,31 +56,76 @@ inline FVec3 RotateAbout(const FVec3& V, const FVec3& UnitAxis, double Angle)
 
 // ------------------------------------------------------------------- segments
 
-// One parametric segment. Curvature varies linearly over the segment's arc
-// length, which covers the whole authored vocabulary:
+// One parametric segment. The curvature VECTOR is what varies over arc length:
+// its magnitude ramps linearly, and it may additionally rotate about the
+// tangent at a constant rate. That covers the whole authored vocabulary:
 //   straight  — yaw = pitch = 0
 //   arc       — yaw constant (= 1/R)
 //   clothoid  — yaw linear from one curvature to another
+//   helix     — yaw constant, plus a constant Torsion
 // Roll likewise varies linearly across the segment.
 //
-// ponytail: linear curvature ramps only. That is the standard transition and
-// covers every segment type in the Phase 1 editor vocabulary; add a cubic
-// (or arbitrary) profile when an authoring case actually needs one.
+// ponytail: linear magnitude ramps and constant torsion only. Between them they
+// cover every segment type in the Phase 1 editor vocabulary; add a cubic (or
+// arbitrary) profile when an authoring case actually needs one.
 struct FTrackSegment
 {
     double Length = 0.0;
 
-    // 1/m. +ve yaw turns left; +ve pitch raises the nose.
+    // 1/m. +ve yaw turns left; +ve pitch raises the nose. These are the values
+    // BEFORE the torsion rotation below — read them as the curvature vector at
+    // the segment's own start, not as what a rider meets partway through.
     double YawCurvatureStart = 0.0;
     double YawCurvatureEnd = 0.0;
     double PitchCurvatureStart = 0.0;
     double PitchCurvatureEnd = 0.0;
+
+    // 1/m. Rate at which the curvature vector rotates about the tangent as arc
+    // length advances. This is what makes a helix expressible, and it is the
+    // representation gap PHASE0_FINDINGS.md recorded as disproved.
+    //
+    // The path frame is rotation-minimising, and the Frenet frame turns about
+    // the tangent at exactly the torsion rate relative to it. So a curve of
+    // constant curvature and constant torsion — a helix — appears in THIS frame
+    // as `Yaw = k*cos(tau*s)`, `Pitch = k*sin(tau*s)`. One extra field buys
+    // that; a general non-linear profile is not needed.
+    //
+    // Zero for straight, arc and clothoid, which leaves them bit-identical to
+    // the pre-torsion behaviour.
+    double Torsion = 0.0;
 
     // Radians. +ve banks *into* a +ve (left) turn: the rider's up-vector tilts
     // toward the centre of the turn, the way a motorcycle leans.
     double RollStart = 0.0;
     double RollEnd = 0.0;
 };
+
+// The curvature vector at local arc length U along a segment: linear ramp
+// first, then rotated about the tangent by Torsion*U.
+//
+// Rotating about the tangent takes Lateral toward Up (right-hand rule, since
+// Tangent x Lateral = Up), which is why the yaw component leaks into pitch with
+// this sign and not the other. Getting it backwards produces a mirror-image
+// helix that still looks like a helix.
+inline void CurvatureAt(const FTrackSegment& Seg, double U, double& OutYaw, double& OutPitch)
+{
+    const double A = Seg.Length > 0.0 ? U / Seg.Length : 0.0;
+    const double Yaw = Seg.YawCurvatureStart + (Seg.YawCurvatureEnd - Seg.YawCurvatureStart) * A;
+    const double Pitch =
+        Seg.PitchCurvatureStart + (Seg.PitchCurvatureEnd - Seg.PitchCurvatureStart) * A;
+
+    if (Seg.Torsion == 0.0)
+    {
+        OutYaw = Yaw;
+        OutPitch = Pitch;
+        return;
+    }
+    const double Phi = Seg.Torsion * U;
+    const double C = std::cos(Phi);
+    const double S = std::sin(Phi);
+    OutYaw = Yaw * C - Pitch * S;
+    OutPitch = Yaw * S + Pitch * C;
+}
 
 inline FTrackSegment MakeStraight(double InLength, double Roll = 0.0)
 {
@@ -109,6 +154,37 @@ inline FTrackSegment MakeClothoid(double InLength, double CurvatureStart, double
     Seg.YawCurvatureEnd = CurvatureEnd;
     Seg.RollStart = RollStart;
     Seg.RollEnd = RollEnd;
+    return Seg;
+}
+
+// A true helix — constant curvature AND constant torsion — from the parameters
+// anyone actually authors. Radius +ve = left, ClimbAngle +ve = ascending, Turns
+// is revolutions about the axis.
+//
+// For a helix of radius R climbing at angle a:
+//   curvature = cos^2(a) / R,  torsion = sin(a)cos(a) / R,  length = 2*pi*R/cos(a) per turn.
+//
+// IMPORTANT — the axis is inherited, not specified. This segment produces a
+// curve of constant curvature and torsion, which is a helix, but its axis is
+// whatever the incoming frame implies. **The track must already be pitched at
+// ClimbAngle when this segment starts**, or the axis comes out tilted. Real
+// track needs that transition anyway. See Docs/DEFERRED_DECISIONS.md item 2 on
+// whether the editor should insert it for you.
+//
+// Note also that the curvature vector has ROTATED by Torsion*Length by the exit
+// (2*pi*sin(a) per turn), so a helix does not generally end on pure yaw. That
+// is not an error — it is the geometry — but it means the exit transition has
+// to match a curvature vector with a pitch component in it.
+inline FTrackSegment MakeHelix(double Radius, double ClimbAngle, double Turns, double Roll = 0.0)
+{
+    const double Pi = 3.14159265358979323846;
+    const double C = std::cos(ClimbAngle);
+
+    FTrackSegment Seg;
+    Seg.Length = Turns * 2.0 * Pi * std::fabs(Radius) / C;
+    Seg.YawCurvatureStart = Seg.YawCurvatureEnd = (C * C) / Radius;
+    Seg.Torsion = std::sin(ClimbAngle) * C / Radius;
+    Seg.RollStart = Seg.RollEnd = Roll;
     return Seg;
 }
 
@@ -338,8 +414,17 @@ public:
         {
             const FTrackSegment& A = Segments[i];
             const FTrackSegment& B = Segments[i + 1];
-            if (std::fabs(A.YawCurvatureEnd - B.YawCurvatureStart) > Tolerance ||
-                std::fabs(A.PitchCurvatureEnd - B.PitchCurvatureStart) > Tolerance ||
+
+            // Compared through CurvatureAt, not against the raw End fields. A
+            // segment with torsion exits with its curvature vector ROTATED by
+            // Torsion*Length, so the raw fields describe a joint that is not
+            // the one a rider crosses. Reading them directly would call a
+            // genuinely stepped helix exit continuous.
+            double AYaw = 0.0, APitch = 0.0, BYaw = 0.0, BPitch = 0.0;
+            CurvatureAt(A, A.Length, AYaw, APitch);
+            CurvatureAt(B, 0.0, BYaw, BPitch);
+
+            if (std::fabs(AYaw - BYaw) > Tolerance || std::fabs(APitch - BPitch) > Tolerance ||
                 std::fabs(A.RollEnd - B.RollStart) > Tolerance)
             {
                 return false;
@@ -383,8 +468,11 @@ private:
             const FTrackSegment& Seg = Segments[Index];
             const double A = Seg.Length > 0.0 ? Local / Seg.Length : 0.0;
             Out.Roll = Lerp(Seg.RollStart, Seg.RollEnd, A);
-            Out.YawCurvature = Lerp(Seg.YawCurvatureStart, Seg.YawCurvatureEnd, A);
-            Out.PitchCurvature = Lerp(Seg.PitchCurvatureStart, Seg.PitchCurvatureEnd, A);
+            // Through CurvatureAt, so a helix reports the curvature actually
+            // acting here rather than its unrotated start value. FeltG reads
+            // these two against PathLateral and PathUp, so getting it wrong
+            // would misreport G everywhere torsion is non-zero.
+            CurvatureAt(Seg, Local, Out.YawCurvature, Out.PitchCurvature);
         }
         Out.PathLateral = L;
         Out.PathUp = U;
@@ -421,9 +509,8 @@ private:
         for (int i = 0; i < Steps; ++i)
         {
             const double Mid = From + (i + 0.5) * Ds;
-            const double A = Seg.Length > 0.0 ? Mid / Seg.Length : 0.0;
-            const double Yaw = Lerp(Seg.YawCurvatureStart, Seg.YawCurvatureEnd, A);
-            const double Pitch = Lerp(Seg.PitchCurvatureStart, Seg.PitchCurvatureEnd, A);
+            double Yaw = 0.0, Pitch = 0.0;
+            CurvatureAt(Seg, Mid, Yaw, Pitch);
 
             // Darboux vector, no tangential (roll) component: roll is applied
             // at evaluation time so it cannot bend the path.
@@ -449,19 +536,18 @@ private:
         }
     }
 
-    // ponytail: a helix is a REPRESENTATION gap, not a missing parameter — do
-    // not reach for it before Phase 1 without reading this.
-    // "Constant radius + constant climb" is not constant pitch curvature: it is
-    // zero pitch curvature with a fixed pitch angle, yawing about the *world*
-    // vertical rather than the body up-axis. Authored the obvious way it yields
-    // a tilted planar circle that returns to its starting height after a full
-    // turn (measured out-of-plane deviation 1.9e-12 m over 300 m — it really is
-    // a flat circle, not a bad helix). A true helix comes out of this integrator
-    // only from yaw and pitch of constant magnitude rotating at the torsion rate
-    // (Yaw = k*cos(tau*s), Pitch = k*sin(tau*s)), which a linear curvature ramp
-    // cannot express; approximating it costs roughly one segment per metre.
-    // Needs a non-linear profile shape, or a world-vertical yaw term in
-    // Integrate. Not "just the authoring parameterisation".
+    // The helix used to be a representation gap. It is not any more — see
+    // MakeHelix and FTrackSegment::Torsion — but the trap that made it one is
+    // still worth knowing, because it is the obvious way to author a helix and
+    // it silently produces the wrong curve.
+    //
+    // "Constant radius + constant climb" is NOT constant pitch curvature: it is
+    // zero pitch curvature at a fixed pitch angle, yawing about the *world*
+    // vertical rather than the body up-axis. Authored that way you get a tilted
+    // planar circle that returns to its starting height after a full turn
+    // (measured out-of-plane deviation 1.9e-12 m over 300 m — genuinely flat,
+    // not a bad helix). A real helix needs the curvature vector to ROTATE about
+    // the tangent at the torsion rate, which is what Torsion does.
 
     double HeartlineHeight;
     std::vector<FTrackSegment> Segments;

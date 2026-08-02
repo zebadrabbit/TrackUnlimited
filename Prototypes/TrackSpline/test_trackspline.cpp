@@ -350,6 +350,130 @@ static void TestEvaluateClampsAndSpansSegments()
     assert(NearVec(Track.EvaluateAt(999.0).Position, FVec3{20.0, 0.0, 0.0}));
 }
 
+// -------------------------------------------------------------------- helix
+
+static void TestHelixIsActuallyAHelix()
+{
+    // PHASE0_FINDINGS recorded the helix as a REPRESENTATION GAP: authored the
+    // obvious way (constant radius + constant climb) the old vocabulary gave a
+    // tilted flat circle, not a helix. Constant torsion closes that gap, and
+    // this is the test that says so — it checks the geometry, not the fields.
+    const double R = 20.0;
+    const double Alpha = 15.0 * Pi / 180.0;
+    const double Turns = 2.0;
+
+    // The axis is inherited from the incoming frame, so pitch up to the climb
+    // angle first. Entering level would give a helix about a tilted axis.
+    FTrack Track;
+    FTrackSegment PitchUp;
+    PitchUp.Length = Alpha / 0.02;
+    PitchUp.PitchCurvatureStart = PitchUp.PitchCurvatureEnd = 0.02;
+    Track.AddSegment(PitchUp);
+    const double Entry = Track.TotalLength();
+    Track.AddSegment(MakeHelix(R, Alpha, Turns));
+
+    const FTrackFrame E = Track.EvaluateAt(Entry);
+    assert(Near(std::asin(E.Tangent.Z), Alpha, 1e-6));
+
+    // A true vertical-axis helix keeps every point exactly R from one vertical
+    // line, and gains height linearly with arc length. A tilted circle fails
+    // both; a helix about a tilted axis fails the first.
+    const FVec3 Axis = E.Position + E.PathLateral * R; // PathLateral is horizontal here
+    const double HelixLength = Track.TotalLength() - Entry;
+    double RMin = 1e9, RMax = -1e9, ClimbMin = 1e9, ClimbMax = -1e9;
+
+    FTrackFrame Walk = E;
+    for (int i = 1; i <= 400; ++i)
+    {
+        const double Prev = HelixLength * (i - 1) / 400.0;
+        const double U = HelixLength * i / 400.0;
+        Walk = Track.AdvanceFrom(Walk, Entry + Prev, Entry + U);
+        const FVec3 D = Walk.Position - Axis;
+        const double Radial = std::sqrt(D.X * D.X + D.Y * D.Y);
+        RMin = std::fmin(RMin, Radial);
+        RMax = std::fmax(RMax, Radial);
+        const double Climb = (Walk.Position.Z - E.Position.Z) / U;
+        ClimbMin = std::fmin(ClimbMin, Climb);
+        ClimbMax = std::fmax(ClimbMax, Climb);
+    }
+    assert(Near(RMin, R, 1e-4) && Near(RMax, R, 1e-4));
+    assert(RMax - RMin < 1e-4);                    // constant radius, not a spiral
+    assert(Near(ClimbMin, std::sin(Alpha), 1e-6)); // constant climb, not a circle
+    assert(ClimbMax - ClimbMin < 1e-6);
+
+    // Closed forms: rise per turn is 2*pi*R*tan(a), arc length 2*pi*R/cos(a).
+    const FTrackFrame X = Track.EvaluateAt(Track.TotalLength());
+    assert(Near(X.Position.Z - E.Position.Z, 2.0 * Pi * R * Turns * std::tan(Alpha), 1e-3));
+    assert(Near(HelixLength, Turns * 2.0 * Pi * R / std::cos(Alpha), 1e-9));
+    // And it leaves at the angle it entered — a helix does not change its climb.
+    assert(Near(std::asin(X.Tangent.Z), Alpha, 1e-6));
+}
+
+static void TestHelixHandednessAndDegenerateCases()
+{
+    // A RIGHT-hand helix must mirror the left one, not merely differ. Torsion
+    // sign is the easiest thing to get backwards and the hardest to see.
+    const double R = 15.0, Alpha = 20.0 * Pi / 180.0;
+    const FTrackSegment L = MakeHelix(R, Alpha, 1.0);
+    const FTrackSegment Rt = MakeHelix(-R, Alpha, 1.0);
+    assert(L.YawCurvatureStart > 0.0 && Rt.YawCurvatureStart < 0.0);
+    assert(Near(L.Torsion, -Rt.Torsion, 1e-15));
+    assert(Near(L.Length, Rt.Length, 1e-12));
+    // Descending reverses the twist but not the turn direction.
+    const FTrackSegment Down = MakeHelix(R, -Alpha, 1.0);
+    assert(Near(Down.YawCurvatureStart, L.YawCurvatureStart, 1e-15));
+    assert(Near(Down.Torsion, -L.Torsion, 1e-15));
+
+    // Zero climb degenerates to a plain arc: no torsion, curvature 1/R.
+    const FTrackSegment Flat = MakeHelix(R, 0.0, 1.0);
+    assert(Near(Flat.Torsion, 0.0, 1e-15));
+    assert(Near(Flat.YawCurvatureStart, 1.0 / R, 1e-15));
+    assert(Near(Flat.Length, 2.0 * Pi * R, 1e-9));
+
+    // Everything without torsion is bit-identical to the old behaviour.
+    double Yaw = 0.0, Pitch = 0.0;
+    const FTrackSegment Cl = MakeClothoid(20.0, 0.0, 1.0 / 30.0);
+    CurvatureAt(Cl, 10.0, Yaw, Pitch);
+    assert(Near(Yaw, 0.5 / 30.0, 1e-15) && Near(Pitch, 0.0, 1e-15));
+
+    std::printf("  helix: true vertical axis, closed forms matched, handedness mirrored\n");
+}
+
+static void TestHelixExitIsNotContinuousWithAPlainArc()
+{
+    // The consequence authors need to know about: torsion ROTATES the curvature
+    // vector by tau*L (2*pi*sin(a) per turn), so a helix does not generally end
+    // on pure yaw. Bolting a plain arc onto the exit is a real curvature step,
+    // and IsCurvatureContinuous has to see it — which it only does because the
+    // check goes through CurvatureAt rather than reading the End fields.
+    const double R = 20.0, Alpha = 15.0 * Pi / 180.0;
+    const FTrackSegment H = MakeHelix(R, Alpha, 1.0);
+
+    double EndYaw = 0.0, EndPitch = 0.0;
+    CurvatureAt(H, H.Length, EndYaw, EndPitch);
+    assert(std::fabs(EndPitch) > 1e-3);              // genuinely rotated out of pure yaw
+    assert(Near(H.Torsion * H.Length, 2.0 * Pi * std::sin(Alpha), 1e-12));
+
+    // Raw fields would say "same curvature, continuous". Geometry says no.
+    FTrack Bad;
+    Bad.AddSegment(H);
+    Bad.AddSegment(MakeArc(30.0, R));
+    assert(Near(H.YawCurvatureEnd, 1.0 / R * std::cos(Alpha) * std::cos(Alpha), 1e-15));
+    assert(!Bad.IsCurvatureContinuous());
+
+    // Matching the ROTATED curvature is continuous.
+    FTrack Good;
+    Good.AddSegment(H);
+    FTrackSegment Match;
+    Match.Length = 30.0;
+    Match.YawCurvatureStart = Match.YawCurvatureEnd = EndYaw;
+    Match.PitchCurvatureStart = Match.PitchCurvatureEnd = EndPitch;
+    Good.AddSegment(Match);
+    assert(Good.IsCurvatureContinuous());
+    std::printf("  helix exit rotates curvature by %.4f rad — continuity check sees it\n",
+                H.Torsion * H.Length);
+}
+
 // ------------------------------------------------------------ cross-section
 
 static void TestCrossSectionRidesTheFrame()
@@ -411,6 +535,9 @@ static void TestCrossSectionSidednessAndWidth()
 
 int main()
 {
+    TestHelixIsActuallyAHelix();
+    TestHelixHandednessAndDegenerateCases();
+    TestHelixExitIsNotContinuousWithAPlainArc();
     TestCrossSectionRidesTheFrame();
     TestCrossSectionSidednessAndWidth();
     TestStraightIsStraight();
