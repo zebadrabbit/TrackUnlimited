@@ -75,5 +75,11 @@ private:
 
 	// Landmarks along the track, in metres, filled in by BuildTrack.
 	double BrakeStartS = 0.0;
+
+	// How far the ride's lowest structural point sits BELOW the heartline
+	// origin, in metres. Applied by ToWorld so that an actor at z = 0 puts the
+	// track on the ground instead of half through it. Computed in BuildTrack,
+	// because it depends on the whole layout.
+	double GroundOffsetM = 0.0;
 	float StoppedFor = 0.f;
 };

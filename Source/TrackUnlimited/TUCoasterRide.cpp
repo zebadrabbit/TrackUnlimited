@@ -133,16 +133,63 @@ void ATUCoasterRide::BuildTrack()
 	Train->AddZone(MakeBrake(BrakeStartS, Track.TotalLength(), 0.0, 6.0));
 	Train->Place(0.0, 0.0);
 
+	// Where the ride's lowest structural point sits relative to the heartline
+	// origin, so ToWorld can lift the whole thing onto the ground.
+	//
+	// The heartline is RIDER height, not track height: at the station the rails
+	// hang 1.1 m below it and the spine another 0.45 m below those, so track
+	// z = 0 is about 1.7 m above the bottom of the structure. Place the actor at
+	// world z = 0 without accounting for that and the station buries itself —
+	// the rails go under, and the camera, which rides the heartline exactly,
+	// gets cut in half by the ground plane.
+	//
+	// Computed, not typed, and that is the point. The offset depends on the
+	// whole layout: a banked or inverted section puts the structure somewhere
+	// else entirely relative to the heartline, and every edit to the track moves
+	// it again. A constant here would be a number someone has to remember to
+	// re-derive, which is exactly how this ended up as a hand-tuned actor Z
+	// twice already.
+	{
+		const double SpineRadius = Profile.SpineDiameter * 0.5;
+		const double Total = Track.TotalLength();
+		double Lowest = 0.0;
+
+		FTrackFrame Walk = Track.EvaluateAt(0.0);
+		double S = 0.0;
+		for (;;)
+		{
+			const FTrackCrossSection Section =
+				CrossSectionAt(Walk, Track.GetHeartlineHeight(), Profile);
+			Lowest = FMath::Min3(Lowest, FMath::Min(Section.LeftRail.Z, Section.RightRail.Z),
+				Section.SpineCentre.Z - SpineRadius);
+			if (S >= Total)
+			{
+				break;
+			}
+			// 1 m steps. This is looking for a minimum over a smooth curve, not
+			// resolving geometry — the sag between samples is far below the
+			// clearance any real support structure needs anyway.
+			const double Next = FMath::Min(S + 1.0, Total);
+			Walk = Track.AdvanceFrom(Walk, S, Next);
+			S = Next;
+		}
+		GroundOffsetM = -Lowest;
+	}
+
 	UE_LOG(LogTemp, Log,
-		TEXT("TrackUnlimited: %d segments, %.1f m, curvature-continuous=%s"),
+		TEXT("TrackUnlimited: %d segments, %.1f m, curvature-continuous=%s, ")
+		TEXT("sits %.2f m above the heartline origin so the structure clears grade"),
 		static_cast<int32>(Track.NumSegments()), Track.TotalLength(),
-		Track.IsCurvatureContinuous() ? TEXT("yes") : TEXT("NO"));
+		Track.IsCurvatureContinuous() ? TEXT("yes") : TEXT("NO"), GroundOffsetM);
 }
 
 FVector ATUCoasterRide::ToWorld(const FVec3& V) const
 {
 	// Mirror Y: the prototype frame is right-handed, Unreal is left-handed.
-	return GetActorLocation() + FVector(V.X, -V.Y, V.Z) * MetresToUU;
+	// Lift by GroundOffsetM: the heartline origin is RIDER height, not track
+	// height, so z = 0 in track space is about 1.7 m above the bottom of the
+	// spine. See BuildTrack for why this is computed rather than typed.
+	return GetActorLocation() + FVector(V.X, -V.Y, V.Z + GroundOffsetM) * MetresToUU;
 }
 
 FQuat ATUCoasterRide::ToWorldRotation(const FTrackFrame& Frame) const
