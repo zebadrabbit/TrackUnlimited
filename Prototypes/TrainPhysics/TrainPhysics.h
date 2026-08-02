@@ -103,6 +103,21 @@ struct FTrainConfig
     // its physically derived value: with no length in the model, the fit had
     // nowhere to put the discrepancy except into drag.
     double TrainLength = 0.0;
+
+    // Whether a train that runs out of energy rolls BACK down the hill instead
+    // of stopping dead where it is.
+    //
+    // Off by default, and not out of caution: stopping dead is what every
+    // number recorded before Phase 2 was measured against, and one test asserts
+    // it directly ("stays stopped rather than drifting or reversing"). Rolling
+    // back is the more honest physics, but it is a behaviour change, so it is a
+    // choice rather than a surprise.
+    //
+    // It is also not purely an improvement. A valley stall is a DESIGN ERROR to
+    // surface, and a train that rolls back oscillates and eventually settles,
+    // which can look like the ride working. The reporting is what makes it
+    // useful — see FRideProfile::bRolledBack, which says where it happened.
+    bool bAllowRollback = false;
 };
 
 class FTrain
@@ -136,7 +151,7 @@ public:
     void Place(double S, double Speed)
     {
         DistanceAlong = std::max(0.0, std::min(Track.TotalLength(), S));
-        SpeedMs = Speed;
+        VelocityMs = Speed;
         LastTangentialAccel = 0.0;
 
         // O(track length) per sample, but only on Place — Step advances these
@@ -157,7 +172,13 @@ public:
     double GetDistance() const { return DistanceAlong; }
     double GetFrontS() const { return ClampS(DistanceAlong + Config.TrainLength * 0.5); }
     double GetRearS() const { return ClampS(DistanceAlong - Config.TrainLength * 0.5); }
-    double GetSpeed() const { return SpeedMs; }
+
+    // Signed: negative means rolling backwards. GetSpeed stays a MAGNITUDE, so
+    // every caller and every assertion written before rollback existed keeps
+    // meaning what it meant.
+    double GetVelocity() const { return VelocityMs; }
+    bool IsRollingBack() const { return VelocityMs < 0.0; }
+    double GetSpeed() const { return std::fabs(VelocityMs); }
     bool IsAtEnd() const { return DistanceAlong >= Track.TotalLength(); }
 
     // Cached, not recomputed — the step that moved the train here already paid
@@ -169,7 +190,7 @@ public:
 
     // Lateral and vertical G at the heartline. The geometric part comes
     // straight from the track; see TrackSpline.h.
-    FGForces GetForces() const { return FeltG(GetFrame(), SpeedMs); }
+    FGForces GetForces() const { return FeltG(GetFrame(), VelocityMs); }
 
     // What a rider OffsetM ahead of (+) or behind (-) the train's centre feels.
     // The whole train shares one speed — it is rigid and on rails — so the
@@ -179,7 +200,7 @@ public:
     // car was. With TrainLength = 0 every offset returns the same thing.
     FGForces GetForcesAt(double OffsetM) const
     {
-        return FeltG(GetFrameAt(OffsetM), SpeedMs);
+        return FeltG(GetFrameAt(OffsetM), VelocityMs);
     }
 
     // The sample points themselves, rear to front. Uniformly spaced along the
@@ -252,8 +273,12 @@ public:
         // that has not crested yet.
         const double GravityAccel = -GravityMs2 * MeanTangentZ();
 
+        // Sign of travel: resistance always opposes it, which is what makes
+        // this correct in reverse rather than an energy source.
+        const double Dir = VelocityMs > 0.0 ? 1.0 : (VelocityMs < 0.0 ? -1.0 : 0.0);
+
         double Resistive = 0.0;
-        if (SpeedMs > 0.0)
+        if (Dir != 0.0)
         {
             // Rolling resistance follows the normal load, so it is heavier
             // through a valley or a hard banked turn than on level track at the
@@ -263,7 +288,7 @@ public:
             // why this averages too.
             const double NormalG = MeanNormalG();
             Resistive = Config.RollingResistance * NormalG * GravityMs2
-                      + Config.DragK * SpeedMs * SpeedMs;
+                      + Config.DragK * VelocityMs * VelocityMs;
         }
 
         // A powered section asks for whatever acceleration would land the train
@@ -279,7 +304,7 @@ public:
             {
                 continue;
             }
-            const double Needed = (Zone.TargetSpeed - SpeedMs) / DeltaSeconds - GravityAccel + Resistive;
+            const double Needed = (Zone.TargetSpeed - VelocityMs) / DeltaSeconds - GravityAccel + Resistive;
             const double Applied = std::max(-Zone.MaxDecel, std::min(Zone.MaxAccel, Needed));
             // Overlapping zones are an authoring error, but a ride control
             // system should fail toward the slower answer, so the most
@@ -288,7 +313,7 @@ public:
             bInZone = true;
         }
 
-        const double Accel = GravityAccel + ZoneAccel - Resistive;
+        const double Accel = GravityAccel + ZoneAccel - Dir * Resistive;
 
         // Position carries the acceleration term. Without it, v == 0 is an
         // absorbing state on any gradient: a stationary train never moves, so
@@ -296,27 +321,39 @@ public:
         // top of a drop just sits there.
         double Advance;
         bool bStopsThisStep = false;
-        if (Accel < 0.0 && SpeedMs + Accel * DeltaSeconds < 0.0)
+        // Turns round this step: velocity and its end-of-step value disagree in
+        // sign. Written this way rather than "decelerating past zero" so it is
+        // symmetric — a train rolling backwards up the far side of a valley
+        // turns round by exactly the same rule.
+        const double VEnd = VelocityMs + Accel * DeltaSeconds;
+        const bool bTurns = (VelocityMs > 0.0 && VEnd < 0.0) || (VelocityMs < 0.0 && VEnd > 0.0);
+        if (bTurns)
         {
             // Comes to rest partway through the step: advance exactly the
             // distance it takes to stop. The speed is then forced to zero
             // rather than derived — S1 - S0 is not bit-identical to Advance
             // once S0 dwarfs it, and the residue leaves the train creeping at
             // 1e-9 m/s forever instead of standing still.
-            Advance = -0.5 * SpeedMs * SpeedMs / Accel;
+            // Sign-correct in both directions already: forwards this is
+            // positive, and rolling backwards both numerator and denominator
+            // flip so it comes out negative.
+            Advance = -0.5 * VelocityMs * VelocityMs / Accel;
             bStopsThisStep = true;
         }
         else
         {
-            Advance = SpeedMs * DeltaSeconds + 0.5 * Accel * DeltaSeconds * DeltaSeconds;
+            Advance = VelocityMs * DeltaSeconds + 0.5 * Accel * DeltaSeconds * DeltaSeconds;
         }
-        // ponytail: a train that runs out of energy stops dead instead of
-        // rolling back. Reversal needs a signed velocity through the whole model
-        // and the block system has to hear about it, which is a Phase 2/3
-        // conversation; this is enough to prove ride feel on a track authored to
-        // make it round. A valley-stall here is a design error to surface, not a
-        // state to simulate.
-        Advance = std::max(0.0, Advance);
+        // Without rollback a train that runs out of energy stops dead: the
+        // backwards advance is thrown away, so it never changes height and
+        // never regains speed. That was the Phase 0 behaviour and it is still
+        // the default, because a valley stall is a design error to surface
+        // rather than a state to simulate. With rollback on, the same
+        // arithmetic simply keeps its sign.
+        if (!Config.bAllowRollback)
+        {
+            Advance = std::max(0.0, Advance);
+        }
 
         const double S1 = std::max(0.0, std::min(Total, S0 + Advance));
         const double Travelled = S1 - S0;
@@ -336,14 +373,27 @@ public:
         // train its length. Straddling a crest, its mass is lower than the
         // crest, so it does not pay the full height and arrives faster than a
         // point would — the whole reason the back car gets thrown harder.
-        double SpeedSq = SpeedMs * SpeedMs
+        // Resistance is charged over the DISTANCE COVERED, whichever way that
+        // was. Multiplying it by a signed travel would turn friction into an
+        // energy source the moment a train rolled backwards.
+        double SpeedSq = VelocityMs * VelocityMs
                        - 2.0 * GravityMs2 * (MeanZ1 - MeanZ0)
-                       + 2.0 * (ZoneAccel - Resistive) * Travelled;
+                       + 2.0 * ZoneAccel * Travelled
+                       - 2.0 * Resistive * std::fabs(Travelled);
 
-        const double NewSpeed = bStopsThisStep ? 0.0 : (SpeedSq > 0.0 ? std::sqrt(SpeedSq) : 0.0);
+        // Direction is carried from the velocity rather than read back off the
+        // distance travelled: at the end of the track the advance is clamped to
+        // zero, and inferring the sign from that would stop a moving train dead.
+        double NewDir = VelocityMs > 0.0 ? 1.0 : (VelocityMs < 0.0 ? -1.0 : 0.0);
+        if (NewDir == 0.0)
+        {
+            NewDir = Advance < 0.0 ? -1.0 : 1.0;
+        }
+        const double NewSpeed =
+            bStopsThisStep ? 0.0 : NewDir * (SpeedSq > 0.0 ? std::sqrt(SpeedSq) : 0.0);
 
-        LastTangentialAccel = (NewSpeed - SpeedMs) / DeltaSeconds;
-        SpeedMs = NewSpeed;
+        LastTangentialAccel = (NewSpeed - VelocityMs) / DeltaSeconds;
+        VelocityMs = NewSpeed;
         DistanceAlong = S1;
         Current = F1;
     }
@@ -400,7 +450,7 @@ private:
         double Sum = 0.0;
         for (const FTrackFrame& F : Samples)
         {
-            const FGForces G = FeltG(F, SpeedMs);
+            const FGForces G = FeltG(F, VelocityMs);
             Sum += std::sqrt(G.Lateral * G.Lateral + G.Vertical * G.Vertical);
         }
         return Sum / static_cast<double>(Samples.size());
@@ -431,7 +481,9 @@ private:
     std::vector<FTrackZone> Zones;
 
     double DistanceAlong = 0.0;
-    double SpeedMs = 0.0;
+    // SIGNED. GetSpeed() reports the magnitude, so callers written before
+    // rollback existed are unaffected.
+    double VelocityMs = 0.0;
     double LastTangentialAccel = 0.0;
     FTrackFrame Current;
 

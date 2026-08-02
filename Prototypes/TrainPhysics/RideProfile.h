@@ -57,6 +57,18 @@ struct FRideProfile
     double StalledAtS = 0.0;
     double StalledHeight = 0.0;
 
+    // Rolled backwards, which only happens when FTrainConfig::bAllowRollback is
+    // on. Reported separately from a stall because it is a different fault with
+    // a different fix: a stall says "this hill is too tall", a rollback says the
+    // same thing AND that the train is now loose on the track heading the wrong
+    // way — which is a signalling problem as much as a physics one.
+    //
+    // The run stops here. Left going, the train would oscillate in the valley
+    // until friction settled it, and an author watching an oscillation could
+    // easily read it as the ride working.
+    bool bRolledBack = false;
+    double RolledBackAtS = 0.0;
+
     double Duration = 0.0; // seconds
 
     // Extremes, each with where it happened. "4.25 g" is a number; "4.25 g at
@@ -150,6 +162,15 @@ inline FRideProfile RunRideProfile(FTrain& Train, const FTrack& Track,
         if (Train.IsAtEnd())
         {
             P.bCompleted = true;
+            break;
+        }
+
+        if (Train.IsRollingBack())
+        {
+            P.bRolledBack = true;
+            P.RolledBackAtS = S;
+            P.StalledAtS = S;
+            P.StalledHeight = F.Position.Z;
             break;
         }
 

@@ -470,6 +470,140 @@ static void TestStepRejectsBadDeltas()
     assert(Near(Train.GetFrame().Position.X, Track.TotalLength(), 1e-9));
 }
 
+// ------------------------------------------------------------------ rollback
+
+// Level run-in, then a climb far too long to crest. Whatever a train is sent
+// at this, it runs out of height somewhere on the slope.
+static FTrack UncrestableClimb()
+{
+    FTrack T;
+    T.AddSegment(MakeStraight(40.0));
+    FTrackSegment In;
+    In.Length = 26.18;
+    In.PitchCurvatureEnd = 0.02;
+    T.AddSegment(In);
+    FTrackSegment Out;
+    Out.Length = 26.18;
+    Out.PitchCurvatureStart = 0.02;
+    T.AddSegment(Out);
+    T.AddSegment(MakeStraight(200.0)); // 100 m of rise at 30 degrees
+    return T;
+}
+
+static void TestRollbackReturnsExactlyTheEnergyItSpent()
+{
+    // The assertion that says the sign handling is right rather than merely
+    // plausible. Frictionless, a train sent up a hill it cannot crest must come
+    // back past its starting point at exactly the speed it left — the hill
+    // stored the energy and gave all of it back.
+    //
+    // A resistance term multiplied by SIGNED travel instead of distance covered
+    // would fail here in the most flattering possible way: the train would come
+    // back FASTER than it left.
+    const FTrack Climb = UncrestableClimb();
+    FTrainConfig C = Frictionless();
+    C.bAllowRollback = true;
+
+    FTrain Train(Climb, C);
+    Train.Place(10.0, 15.0);
+
+    bool bWentUp = false;
+    double ReturnSpeed = 0.0;
+    for (int i = 0; i < 60000; ++i)
+    {
+        Train.Step(1.0 / 480.0);
+        if (Train.GetDistance() > 60.0) { bWentUp = true; }
+        if (bWentUp && Train.IsRollingBack() && Train.GetDistance() <= 10.0)
+        {
+            ReturnSpeed = Train.GetSpeed();
+            break;
+        }
+    }
+    assert(bWentUp);
+    assert(ReturnSpeed > 0.0);
+    assert(Near(ReturnSpeed, 15.0, 1e-2));
+
+    std::printf("  rollback: left at 15.000 m/s, came back at %.3f m/s\n", ReturnSpeed);
+}
+
+static void TestRollbackIsOffByDefaultAndChangesNothingWhenItIs()
+{
+    // Same track, same train, rollback off: it stops dead where it ran out, and
+    // stays there. This is the Phase 0 behaviour every earlier number was
+    // measured against, so it has to survive the feature being added.
+    const FTrack Climb = UncrestableClimb();
+    FTrainConfig Off = Frictionless();
+    assert(Off.bAllowRollback == false);
+
+    FTrain Train(Climb, Off);
+    Train.Place(10.0, 15.0);
+    for (int i = 0; i < 40000 && Train.GetSpeed() > 0.0; ++i)
+    {
+        Train.Step(1.0 / 480.0);
+    }
+    const double Stalled = Train.GetDistance();
+    assert(Train.GetSpeed() == 0.0);
+    assert(!Train.IsRollingBack());
+    for (int i = 0; i < 500; ++i) { Train.Step(1.0 / 480.0); }
+    assert(Train.GetDistance() == Stalled); // did not creep, either way
+    assert(Train.GetSpeed() == 0.0);
+}
+
+static void TestRollingBackIntoAValleySettlesRatherThanOscillatingForever()
+{
+    // With resistance, the oscillation has to decay: friction opposes travel in
+    // BOTH directions, so each pass costs energy. If it were applied along
+    // signed travel it would pump the train instead of damping it, and this
+    // would run forever.
+    // A valley with ground on BOTH sides. The first version of this ran the
+    // train back off the start of the track, where it clamped at S = 0 and
+    // could never turn round again — one reversal, not an oscillation. Running
+    // off the end of the track is not the same event as running out of energy,
+    // and a fixture that confuses them is testing the wrong thing.
+    FTrack Valley;
+    {
+        FTrackSegment Down; // 0 -> -34 degrees
+        Down.Length = 60.0;
+        Down.PitchCurvatureStart = Down.PitchCurvatureEnd = -0.01;
+        Valley.AddSegment(Down);
+        FTrackSegment Through; // -34 through level to +34: the bottom is at S=120
+        Through.Length = 120.0;
+        Through.PitchCurvatureStart = Through.PitchCurvatureEnd = 0.01;
+        Valley.AddSegment(Through);
+        FTrackSegment Level; // +34 back to level, so the far side has a top
+        Level.Length = 60.0;
+        Level.PitchCurvatureStart = Level.PitchCurvatureEnd = -0.01;
+        Valley.AddSegment(Level);
+    }
+
+    FTrainConfig C;
+    C.RollingResistance = 0.02; // exaggerated so it settles inside the budget
+    C.DragK = 0.001;
+    C.bAllowRollback = true;
+
+    FTrain Train(Valley, C);
+    Train.Place(20.0, 2.0);
+
+    int Reversals = 0;
+    double LastDir = 1.0;
+    double PeakSpeed = 0.0;
+    for (int i = 0; i < 200000; ++i)
+    {
+        Train.Step(1.0 / 240.0);
+        const double V = Train.GetVelocity();
+        PeakSpeed = std::fmax(PeakSpeed, std::fabs(V));
+        const double Dir = V > 0.01 ? 1.0 : (V < -0.01 ? -1.0 : LastDir);
+        if (Dir != LastDir) { ++Reversals; LastDir = Dir; }
+        if (i > 40000 && std::fabs(V) < 0.05) { break; }
+    }
+    assert(Reversals >= 2);                 // it really did swing back and forth
+    assert(std::fabs(Train.GetVelocity()) < 0.5); // and lost the energy doing it
+    assert(Train.GetDistance() > 0.0 && Train.GetDistance() < Valley.TotalLength());
+
+    std::printf("  rollback: %d reversals in the valley, settled at %.1f m doing %.3f m/s\n",
+                Reversals, Train.GetDistance(), std::fabs(Train.GetVelocity()));
+}
+
 // -------------------------------------------------------------- train length
 
 // A symmetric airtime hill: nose up, crest, nose back to level. Pitch curvature
@@ -767,6 +901,40 @@ static void TestRideProfileReportsAStallRatherThanHanging()
                 P.StalledAtS, P.StalledHeight);
 }
 
+static void TestRideProfileReportsARollbackDistinctlyFromAStall()
+{
+    // Same failing ride, two configurations. Both say the train does not get
+    // round; only one says it is loose on the track heading backwards, which is
+    // a different fault with a different fix.
+    const FTrack Climb = UncrestableClimb();
+
+    // Launched, because RunRideProfile starts from rest and this track opens
+    // with 40 m of level: a standing train there never moves, and "stalled at
+    // 0 m" would be true and useless.
+    FTrainConfig Stops;
+    FTrain A(Climb, Stops);
+    A.AddZone(MakeLaunch(0.0, 40.0, 15.0, 6.0));
+    const FRideProfile Stalled = RunRideProfile(A, Climb, 1.0);
+    assert(!Stalled.bCompleted);
+    assert(!Stalled.bRolledBack);
+    assert(Stalled.StalledAtS > 50.0); // out on the climb, not in the launch
+
+    FTrainConfig Rolls;
+    Rolls.bAllowRollback = true;
+    FTrain B(Climb, Rolls);
+    B.AddZone(MakeLaunch(0.0, 40.0, 15.0, 6.0));
+    const FRideProfile Back = RunRideProfile(B, Climb, 1.0);
+    assert(!Back.bCompleted);
+    assert(Back.bRolledBack);
+    assert(Back.RolledBackAtS > 50.0);
+    // Caught as it turns, not after it has run all the way home.
+    assert(Near(Back.RolledBackAtS, Stalled.StalledAtS, 3.0));
+
+    std::printf("  ride profile: stalls at %.1f m; with rollback on, reported rolling back "
+                "at %.1f m\n",
+                Stalled.StalledAtS, Back.RolledBackAtS);
+}
+
 static void TestRideProfileCarriesRollRateWhichGCannot()
 {
     // A banked turn entered from level track twists the rider while the G trace
@@ -821,12 +989,16 @@ int main()
     TestAddZoneRejectsMalformedZones();
     TestStallsInsteadOfProducingNaN();
     TestStepRejectsBadDeltas();
+    TestRollbackReturnsExactlyTheEnergyItSpent();
+    TestRollbackIsOffByDefaultAndChangesNothingWhenItIs();
+    TestRollingBackIntoAValleySettlesRatherThanOscillatingForever();
     TestTrainLengthIsBitIdenticalAtZero();
     TestLengthConservesEnergyOverASymmetricHill();
     TestLongTrainCrestsFasterThanAPoint();
     TestBackCarIsThrownHarderThanTheFront();
     TestRideProfileMeasuresTheWholeRideAtEditTime();
     TestRideProfileReportsAStallRatherThanHanging();
+    TestRideProfileReportsARollbackDistinctlyFromAStall();
     TestRideProfileCarriesRollRateWhichGCannot();
     std::printf("All train physics tests passed.\n");
     return 0;

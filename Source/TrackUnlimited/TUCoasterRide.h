@@ -139,6 +139,18 @@ public:
 	float TrainLengthM = 15.f;
 
 	/**
+	 * Let a train that runs out of energy roll BACK down the hill instead of
+	 * stopping dead where it ran out.
+	 *
+	 * Off by default. Rolling back is the more honest physics, but a valley
+	 * stall is a design error to surface, and a train that rolls back
+	 * oscillates and settles — which can look like the ride working. The ride
+	 * profile reports it either way, and says which of the two happened.
+	 */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited")
+	bool bAllowRollback = false;
+
+	/**
 	 * Which row the rider sits in: -1 is the back, 0 the middle, +1 the front.
 	 *
 	 * Now that the train has length this is a real choice rather than a camera

@@ -225,6 +225,7 @@ void ATUCoasterRide::RebuildFromSegments()
 
 	FTrainConfig TrainConfig;
 	TrainConfig.TrainLength = TrainLengthM;
+	TrainConfig.bAllowRollback = bAllowRollback;
 	Train = MakeUnique<FTrain>(Track, TrainConfig);
 
 	// Zones come from contiguous runs of segments carrying the same kind, so a
@@ -352,8 +353,9 @@ void ATUCoasterRide::RebuildFromSegments()
 	if (!Profile_.bCompleted)
 	{
 		UE_LOG(LogTemp, Warning,
-			TEXT("TrackUnlimited: the train does not get round — it stalls at %.1f m, ")
-			TEXT("%.1f m up. Everything past that point is unridden."),
+			TEXT("TrackUnlimited: the train does not get round — it %s at %.1f m, %.1f m up. ")
+			TEXT("Everything past that point is unridden."),
+			Profile_.bRolledBack ? TEXT("ROLLS BACK") : TEXT("stalls"),
 			Profile_.StalledAtS, Profile_.StalledHeight);
 	}
 	else
