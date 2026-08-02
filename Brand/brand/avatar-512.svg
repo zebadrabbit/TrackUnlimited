@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="TrackUnlimited mark">
+<rect width="512" height="512" rx="0" fill="#0B0E11"/>
+<g fill="none" stroke-linecap="square" transform="translate(-15.36,-15.36) scale(1.060)">
+<path d="M 51.20 358.40 L 460.80 358.40" stroke="#3E7E9B" stroke-width="8.19"/>
+<path d="M 51.20 358.40 L 51.20 384.00 M 102.40 358.40 L 102.40 384.00 M 153.60 358.40 L 153.60 384.00 M 204.80 358.40 L 204.80 384.00 M 256.00 358.40 L 256.00 384.00 M 307.20 358.40 L 307.20 384.00 M 358.40 358.40 L 358.40 384.00 M 409.60 358.40 L 409.60 384.00 M 460.80 358.40 L 460.80 384.00" stroke="#3E7E9B" stroke-width="7.17"/>
+<path d="M 20.48 71.68 L 20.48 20.48 L 71.68 20.48 M 491.52 71.68 L 491.52 20.48 L 440.32 20.48 M 20.48 440.32 L 20.48 491.52 L 71.68 491.52 M 491.52 440.32 L 491.52 491.52 L 440.32 491.52" stroke="#FFB020" stroke-width="9.22"/>
+<path d="M 51.20 358.40 L 100.35 358.40 L 190.46 153.60 L 321.54 153.60 L 411.65 358.40 L 460.80 358.40" stroke="#7FD8FF" stroke-width="28.16" stroke-linejoin="round"/>
+</g></svg>

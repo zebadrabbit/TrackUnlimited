@@ -36,6 +36,8 @@ public:
 	/** Runs on place, load, move and property change — so the preview is live without pressing play. */
 	virtual void OnConstruction(const FTransform& Transform) override;
 
+	virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
+
 #if WITH_EDITOR
 	/** Rebuild and re-check the moment a number changes, so editing has feedback. */
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& Event) override;
@@ -67,6 +69,12 @@ public:
 		meta = (ClampMin = "2.0", UIMax = "60.0",
 		EditCondition = "CameraMode == ETUCameraMode::Chase", EditConditionHides))
 	float ChaseDistanceM = 18.f;
+
+	/** Free camera: metres per second, before the boost modifier. */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Camera",
+		meta = (ClampMin = "1.0", UIMax = "200.0",
+		EditCondition = "CameraMode == ETUCameraMode::Free", EditConditionHides))
+	float FreeCameraSpeedMs = 30.f;
 
 	/** Chase only: how far above it, in metres. */
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Camera",
@@ -193,4 +201,33 @@ private:
 	// direction of travel to derive one from.
 	FVector LastChaseForward = FVector(1.f, 0.f, 0.f);
 	bool bChaseInitialised = false;
+
+	// Free camera. Seeded from wherever the previous mode had the camera, so
+	// switching to it does not teleport you somewhere unrecognisable.
+	FVector FreeLocation = FVector::ZeroVector;
+	FRotator FreeRotation = FRotator::ZeroRotator;
+	bool bFreeInitialised = false;
+
+	// Axis values written by the input bindings and consumed by Tick.
+	float MoveForward = 0.f;
+	float MoveRight = 0.f;
+	float MoveUp = 0.f;
+	float LookYaw = 0.f;
+	float LookPitch = 0.f;
+	bool bBoost = false;
+
+	void CycleCameraMode();
+	void BoostOn() { bBoost = true; }
+	void BoostOff() { bBoost = false; }
+
+	// One per key rather than one per axis: BindAxisKey reports 1.0 while a key
+	// is held, so the sign has to come from which key was bound.
+	void AxisForward(float V) { MoveForward += V; }
+	void AxisBack(float V) { MoveForward -= V; }
+	void AxisRight(float V) { MoveRight += V; }
+	void AxisLeft(float V) { MoveRight -= V; }
+	void AxisUp(float V) { MoveUp += V; }
+	void AxisDown(float V) { MoveUp -= V; }
+	void AxisLookYaw(float V) { LookYaw += V; }
+	void AxisLookPitch(float V) { LookPitch += V; }
 };

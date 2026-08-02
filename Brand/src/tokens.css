@@ -1,0 +1,42 @@
+/* TrackUnlimited — design tokens. Dark CAD / control-room.
+   Contrast ratios in comments are measured against --tu-ground (#0B0E11). */
+:root {
+  /* ground plane */
+  --tu-black:  #06080A;
+  --tu-ground: #0B0E11;   /* page / loading-screen field */
+  --tu-panel:  #10151A;   /* raised surface, title blocks, cards */
+  --tu-raised: #161D24;   /* hover / active surface */
+
+  /* rules and grid */
+  --tu-grid-minor: #18212A;
+  --tu-grid-major: #24313B;
+  --tu-rule:       #2C3A45;
+
+  /* type */
+  --tu-text:  #E8F2F8;    /* 17.0 : 1 */
+  --tu-text-2:#93A6B4;    /*  7.7 : 1 */
+  --tu-text-3:#78899A;    /*  5.4 : 1  — smallest permitted text colour */
+
+  /* line work */
+  --tu-line:     #7FD8FF; /* 12.1 : 1 — primary geometry */
+  --tu-line-dim: #3E7E9B; /*  4.3 : 1 — construction / axis lines */
+
+  /* signal accents — borrowed from the ride-control panel */
+  --tu-amber: #FFB020;    /* 10.6 : 1 — lift / powered / attention */
+  --tu-red:   #FF5C4D;    /*  6.4 : 1 — block OCCUPIED, over-limit G */
+  --tu-green: #4ADE80;    /* 11.1 : 1 — block CLEAR, pass */
+  --tu-violet:#B79CFF;    /*  8.5 : 1 — fourth data series only */
+
+  /* line weights — a three-weight system, as on a real drawing */
+  --tu-w-thin:  1px;      /* grid, construction, extension lines */
+  --tu-w-med:   1.6px;    /* dimension lines, borders, secondary geometry */
+  --tu-w-thick: 3px;      /* the subject of the drawing: the track itself */
+
+  /* type stack. IBM Plex Mono / JetBrains Mono are the intended purchases;
+     the stack degrades to the system technical mono with no webfont fetch. */
+  --tu-mono: "IBM Plex Mono", "JetBrains Mono", ui-monospace, "SF Mono",
+             "Cascadia Mono", "Roboto Mono", Consolas, "Liberation Mono", monospace;
+  --tu-sans: "Inter", "Helvetica Neue", Arial, system-ui, sans-serif;
+
+  --tu-track: 0.14em;     /* label letterspacing */
+}

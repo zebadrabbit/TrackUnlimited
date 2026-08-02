@@ -423,6 +423,51 @@ FQuat ATUCoasterRide::ToWorldRotation(const FTrackFrame& Frame) const
 	return FMatrix(Forward, Right, Up, FVector::ZeroVector).ToQuat();
 }
 
+void ATUCoasterRide::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
+{
+	Super::SetupPlayerInputComponent(PlayerInputComponent);
+	if (PlayerInputComponent == nullptr)
+	{
+		return;
+	}
+
+	// ponytail: direct key bindings, no Enhanced Input mapping context and no
+	// input assets. Enhanced Input's real advantages — rebinding, modifiers,
+	// layered contexts — only arrive with content assets to hold them, and
+	// creating those objects transiently in code buys the machinery without
+	// most of the benefit. This is ~20 lines and works. Move to Enhanced Input
+	// when a shipped build needs users to rebind keys, which is a Phase 6
+	// concern rather than a today one.
+	PlayerInputComponent->BindKey(EKeys::C, IE_Pressed, this, &ATUCoasterRide::CycleCameraMode);
+
+	PlayerInputComponent->BindAxisKey(EKeys::W, this, &ATUCoasterRide::AxisForward);
+	PlayerInputComponent->BindAxisKey(EKeys::S, this, &ATUCoasterRide::AxisBack);
+	PlayerInputComponent->BindAxisKey(EKeys::D, this, &ATUCoasterRide::AxisRight);
+	PlayerInputComponent->BindAxisKey(EKeys::A, this, &ATUCoasterRide::AxisLeft);
+	PlayerInputComponent->BindAxisKey(EKeys::E, this, &ATUCoasterRide::AxisUp);
+	PlayerInputComponent->BindAxisKey(EKeys::Q, this, &ATUCoasterRide::AxisDown);
+	PlayerInputComponent->BindAxisKey(EKeys::MouseX, this, &ATUCoasterRide::AxisLookYaw);
+	PlayerInputComponent->BindAxisKey(EKeys::MouseY, this, &ATUCoasterRide::AxisLookPitch);
+
+	PlayerInputComponent->BindKey(EKeys::LeftShift, IE_Pressed, this,
+		&ATUCoasterRide::BoostOn);
+	PlayerInputComponent->BindKey(EKeys::LeftShift, IE_Released, this,
+		&ATUCoasterRide::BoostOff);
+}
+
+void ATUCoasterRide::CycleCameraMode()
+{
+	switch (CameraMode)
+	{
+	case ETUCameraMode::Rider: CameraMode = ETUCameraMode::Chase; break;
+	case ETUCameraMode::Chase: CameraMode = ETUCameraMode::Free; break;
+	default: CameraMode = ETUCameraMode::Rider; break;
+	}
+	// Re-seed on the way in, so the free camera starts from wherever you were
+	// just looking rather than teleporting you somewhere unrecognisable.
+	bFreeInitialised = false;
+}
+
 void ATUCoasterRide::OnConstruction(const FTransform& Transform)
 {
 	Super::OnConstruction(Transform);
@@ -627,7 +672,31 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 		}
 	}
 
-	if (CameraMode == ETUCameraMode::Rider)
+	if (CameraMode == ETUCameraMode::Free)
+	{
+		// Flown by hand while the ride carries on without you. Seeded from
+		// wherever the camera already was, so switching in does not teleport.
+		if (!bFreeInitialised)
+		{
+			FreeLocation = Camera->GetComponentLocation();
+			FreeRotation = Camera->GetComponentRotation();
+			FreeRotation.Roll = 0.f;
+			bFreeInitialised = true;
+		}
+
+		FreeRotation.Yaw += LookYaw * 2.2f;
+		FreeRotation.Pitch = FMath::Clamp(FreeRotation.Pitch + LookPitch * 2.2f, -87.f, 87.f);
+		FreeRotation.Roll = 0.f; // a free camera that rolls is a lost camera
+
+		const FVector Forward = FreeRotation.Vector();
+		const FVector Right = FRotationMatrix(FreeRotation).GetScaledAxis(EAxis::Y);
+		const float Speed = FreeCameraSpeedMs * MetresToUU * (bBoost ? 5.f : 1.f) * DeltaSeconds;
+		FreeLocation += (Forward * MoveForward + Right * MoveRight) * Speed
+			+ FVector(0.f, 0.f, MoveUp * Speed);
+
+		Camera->SetWorldLocationAndRotation(FreeLocation, FreeRotation.Quaternion());
+	}
+	else if (CameraMode == ETUCameraMode::Rider)
 	{
 		Camera->SetWorldLocationAndRotation(ToWorld(Frame.Position), Rotation);
 	}
@@ -697,6 +766,15 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 		GEngine->AddOnScreenDebugMessage(3, 0.f, FColor::Silver,
 			S >= BrakeStartS ? TEXT("BRAKE RUN") : TEXT("on course"));
 
+		// Discoverable, because a keybinding nobody knows about does not exist.
+		const TCHAR* ModeName =
+			CameraMode == ETUCameraMode::Rider ? TEXT("rider")
+			: (CameraMode == ETUCameraMode::Chase ? TEXT("chase") : TEXT("free"));
+		GEngine->AddOnScreenDebugMessage(7, 0.f, FColor(120, 170, 200),
+			CameraMode == ETUCameraMode::Free
+				? FString::Printf(TEXT("[C] camera: free    WASD / Q E / mouse, Shift to hurry"))
+				: FString::Printf(TEXT("[C] camera: %s"), ModeName));
+
 		// The ride's own worst case, alongside the current reading, so a number
 		// on screen means something without having to remember the whole lap.
 		// Roll rate is here rather than in the G line because it belongs to a
@@ -715,6 +793,8 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 					Profile_.StalledAtS));
 		}
 	}
+
+	MoveForward = MoveRight = MoveUp = LookYaw = LookPitch = 0.f;
 
 	// Send it round again once it has settled in the brakes.
 	if (Train->GetSpeed() <= 0.0)

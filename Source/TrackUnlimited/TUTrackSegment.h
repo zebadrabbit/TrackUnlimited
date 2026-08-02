@@ -72,6 +72,11 @@ enum class ETUCameraMode : uint8
 	// inversion, which is disorienting rather than dramatic and is what the old
 	// non-ride view did.
 	Chase UMETA(DisplayName = "Chase"),
+
+	// Detached and flown by hand. The ride carries on without you, which is the
+	// point — standing beside the loop watching a train come through is a thing
+	// only a free camera can do.
+	Free UMETA(DisplayName = "Free (WASD, mouse, Q/E, Shift)"),
 };
 
 USTRUCT(BlueprintType)

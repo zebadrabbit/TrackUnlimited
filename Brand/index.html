@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TrackUnlimited — an open-source successor to NoLimits 2</title>
+<meta name="description" content="A free, open-source, Unreal Engine 5 roller coaster simulator: curvature-continuous track, energy-exact physics, and a real block-signalling and ride-control system.">
+<meta property="og:title" content="TrackUnlimited">
+<meta property="og:description" content="Engineering-grade coaster simulation, open source. Curvature-continuous track, energy-exact physics, real block signalling.">
+<meta property="og:type" content="website">
+<!-- og:image — point this at social/og-1200x630.png once exported from social-pack.html -->
+<meta property="og:image" content="og-1200x630.png">
+<meta name="twitter:card" content="summary_large_image">
+<style>
+/* TrackUnlimited — design tokens. Dark CAD / control-room.
+   Contrast ratios in comments are measured against --tu-ground (#0B0E11). */
+:root {
+  /* ground plane */
+  --tu-black:  #06080A;
+  --tu-ground: #0B0E11;   /* page / loading-screen field */
+  --tu-panel:  #10151A;   /* raised surface, title blocks, cards */
+  --tu-raised: #161D24;   /* hover / active surface */
+
+  /* rules and grid */
+  --tu-grid-minor: #18212A;
+  --tu-grid-major: #24313B;
+  --tu-rule:       #2C3A45;
+
+  /* type */
+  --tu-text:  #E8F2F8;    /* 17.0 : 1 */
+  --tu-text-2:#93A6B4;    /*  7.7 : 1 */
+  --tu-text-3:#78899A;    /*  5.4 : 1  — smallest permitted text colour */
+
+  /* line work */
+  --tu-line:     #7FD8FF; /* 12.1 : 1 — primary geometry */
+  --tu-line-dim: #3E7E9B; /*  4.3 : 1 — construction / axis lines */
+
+  /* signal accents — borrowed from the ride-control panel */
+  --tu-amber: #FFB020;    /* 10.6 : 1 — lift / powered / attention */
+  --tu-red:   #FF5C4D;    /*  6.4 : 1 — block OCCUPIED, over-limit G */
+  --tu-green: #4ADE80;    /* 11.1 : 1 — block CLEAR, pass */
+  --tu-violet:#B79CFF;    /*  8.5 : 1 — fourth data series only */
+
+  /* line weights — a three-weight system, as on a real drawing */
+  --tu-w-thin:  1px;      /* grid, construction, extension lines */
+  --tu-w-med:   1.6px;    /* dimension lines, borders, secondary geometry */
+  --tu-w-thick: 3px;      /* the subject of the drawing: the track itself */
+
+  /* type stack. IBM Plex Mono / JetBrains Mono are the intended purchases;
+     the stack degrades to the system technical mono with no webfont fetch. */
+  --tu-mono: "IBM Plex Mono", "JetBrains Mono", ui-monospace, "SF Mono",
+             "Cascadia Mono", "Roboto Mono", Consolas, "Liberation Mono", monospace;
+  --tu-sans: "Inter", "Helvetica Neue", Arial, system-ui, sans-serif;
+
+  --tu-track: 0.14em;     /* label letterspacing */
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0; background: var(--tu-ground); color: var(--tu-text);
+  font-family: var(--tu-mono); font-size: 15px; line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+  background-image:
+    linear-gradient(var(--tu-grid-minor) 1px, transparent 1px),
+    linear-gradient(90deg, var(--tu-grid-minor) 1px, transparent 1px);
+  background-size: 48px 48px, 48px 48px;
+}
+a { color: var(--tu-line); text-decoration: none; border-bottom: 1px solid transparent; }
+a:hover { border-bottom-color: var(--tu-line); }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--tu-amber); outline-offset: 3px; }
+.wrap { max-width: 1180px; margin: 0 auto; padding: 0 28px; }
+h1, h2, h3 { font-weight: 400; margin: 0; letter-spacing: -0.01em; }
+p { margin: 0 0 1em; color: var(--tu-text-2); }
+.lead { color: var(--tu-text); font-size: 18px; }
+.tag { font-size: 11px; letter-spacing: .18em; color: var(--tu-text-3); text-transform: uppercase; }
+
+/* ---- nav ---- */
+header.nav {
+  position: sticky; top: 0; z-index: 20; backdrop-filter: blur(8px);
+  background: rgba(11,14,17,.82); border-bottom: 1px solid var(--tu-grid-major);
+}
+.nav .wrap { display: flex; align-items: center; gap: 28px; height: 64px; }
+.nav nav { margin-left: auto; display: flex; gap: 26px; flex-wrap: wrap; }
+.nav nav a { color: var(--tu-text-2); font-size: 13px; letter-spacing: .08em; }
+.nav nav a:hover { color: var(--tu-text); }
+@media (max-width: 780px) {
+  .nav .wrap { height: auto; padding-top: 10px; padding-bottom: 10px; flex-wrap: wrap; gap: 10px; }
+  .nav nav { margin-left: 0; width: 100%; gap: 18px; overflow-x: auto; padding-bottom: 2px; }
+  .nav nav a { white-space: nowrap; }
+  .wrap { padding: 0 18px; }
+  section { padding: 52px 0; }
+  .hero { padding: 40px 0 40px; }
+  body { font-size: 14px; }
+}
+
+/* ---- section scaffolding ---- */
+section { padding: 76px 0; border-top: 1px solid var(--tu-grid-major); }
+.sechead { display: flex; align-items: baseline; gap: 18px; margin-bottom: 34px; }
+.sechead .num { color: var(--tu-amber); font-size: 12px; letter-spacing: .2em; }
+.sechead h2 { font-size: 22px; letter-spacing: .04em; }
+.sechead .rule { flex: 1; height: 1px; background: var(--tu-grid-major); }
+
+/* ---- hero ---- */
+.hero { padding: 68px 0 56px; border-top: 0; }
+.hero h1 { font-size: clamp(30px, 4.6vw, 54px); line-height: 1.12; max-width: 20ch; }
+.hero h1 em { font-style: normal; color: var(--tu-line); }
+.hero .sub { max-width: 66ch; margin-top: 22px; font-size: 17px; }
+.cta { display: flex; gap: 14px; margin-top: 32px; flex-wrap: wrap; }
+.btn {
+  display: inline-block; padding: 12px 22px; border: 1px solid var(--tu-line);
+  color: var(--tu-line); font-size: 13px; letter-spacing: .12em; text-transform: uppercase;
+}
+.btn:hover { background: rgba(127,216,255,.10); border-bottom-color: var(--tu-line); }
+.btn.ghost { border-color: var(--tu-grid-major); color: var(--tu-text-2); }
+.btn.ghost:hover { border-color: var(--tu-text-2); color: var(--tu-text); background: none; }
+
+.drawing { margin-top: 54px; border: 1px solid var(--tu-grid-major); background: var(--tu-panel); }
+.drawing .cap {
+  display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+  padding: 10px 16px; border-top: 1px solid var(--tu-grid-major);
+  font-size: 11px; letter-spacing: .14em; color: var(--tu-text-3);
+}
+.drawing svg { display: block; width: 100%; height: auto; }
+
+/* ---- status strip ---- */
+.strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(206px, 1fr)); gap: 1px;
+  background: var(--tu-panel); border: 1px solid var(--tu-grid-major); }
+.strip div { background: var(--tu-panel); padding: 18px 20px; box-shadow: 0 0 0 1px var(--tu-grid-major); }
+.strip .k { font-size: 11px; letter-spacing: .18em; color: var(--tu-text-3); }
+.strip .v { font-size: 20px; color: var(--tu-text); margin-top: 6px; }
+.strip .v.hi { color: var(--tu-line); }
+
+/* ---- spec rows ---- */
+.spec { border-top: 1px solid var(--tu-grid-major); }
+.spec > div {
+  display: grid; grid-template-columns: 54px 1.1fr 1.4fr; gap: 24px;
+  padding: 26px 0; border-bottom: 1px solid var(--tu-grid-major); align-items: start;
+}
+.spec .i { color: var(--tu-amber); font-size: 12px; letter-spacing: .18em; padding-top: 4px; }
+.spec h3 { font-size: 17px; color: var(--tu-text); }
+.spec p { margin: 0; }
+@media (max-width: 720px) { .spec > div { grid-template-columns: 1fr; gap: 10px; } }
+
+/* ---- cards ---- */
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(268px, 1fr)); gap: 18px; }
+.card { border: 1px solid var(--tu-grid-major); background: var(--tu-panel); padding: 22px; position: relative; }
+.card::before, .card::after {
+  content: ''; position: absolute; width: 9px; height: 9px; border: 1px solid var(--tu-amber);
+}
+.card::before { top: -1px; left: -1px; border-right: 0; border-bottom: 0; }
+.card::after { bottom: -1px; right: -1px; border-left: 0; border-top: 0; }
+.card h3 { font-size: 15px; color: var(--tu-line); letter-spacing: .04em; }
+.card p { margin: 10px 0 0; font-size: 14px; }
+.card .meta { margin-top: 14px; font-size: 11px; letter-spacing: .16em; color: var(--tu-text-3); }
+
+/* ---- table ---- */
+.tablewrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 560px; }
+th, td { text-align: left; padding: 13px 14px; border-bottom: 1px solid var(--tu-grid-major); vertical-align: top; }
+th { font-size: 11px; letter-spacing: .18em; color: var(--tu-text-3); font-weight: 400; }
+td.ph { color: var(--tu-text); white-space: nowrap; }
+td.gl { color: var(--tu-text-2); }
+.pill { display: inline-block; font-size: 10px; letter-spacing: .16em; padding: 3px 8px; border: 1px solid currentColor; }
+.pill.done { color: var(--tu-green); }
+.pill.now  { color: var(--tu-amber); }
+.pill.next { color: var(--tu-text-3); }
+
+footer { padding: 52px 0 72px; border-top: 1px solid var(--tu-grid-major); color: var(--tu-text-3); font-size: 13px; }
+footer .cols { display: flex; gap: 40px; flex-wrap: wrap; justify-content: space-between; }
+</style>
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap">
+    <a href="#top" aria-label="TrackUnlimited"><span id="navmark"></span></a>
+    <nav>
+      <a href="#different">Different</a>
+      <a href="#layout">Reference layout</a>
+      <a href="#prototypes">Prototypes</a>
+      <a href="#roadmap">Roadmap</a>
+      <a href="#" data-link="repo">Repository</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+<div class="wrap">
+  <section class="hero">
+    <p class="tag">Free · open source · Unreal Engine 5 · PC flatscreen first · Phases 0–1 complete</p>
+    <h1>An open-source successor to <em>NoLimits&nbsp;2</em>.</h1>
+    <p class="sub lead">Engineering-grade coaster simulation — curvature-continuous track, energy-exact
+      physics, honest G-forces — with a modern interface, and a real block-signalling and ride-control
+      system that neither NoLimits&nbsp;2 nor Planet Coaster has attempted.</p>
+    <div class="cta">
+      <a class="btn" href="#" data-link="repo">Browse the repository</a>
+      <a class="btn ghost" href="#" data-link="plan">Read the project plan</a>
+      <a class="btn ghost" href="#" data-link="board">Project board</a>
+    </div>
+
+    <div class="drawing">
+      <svg id="hero" viewBox="0 0 1200 320" preserveAspectRatio="xMidYMid meet" role="img"
+           aria-label="Side elevation of the reference layout: a 43.35 metre lift, a drop, a teardrop loop and a banked turn."></svg>
+      <div class="cap">
+        <span>REFERENCE LAYOUT · SIDE ELEVATION · 16 SEGMENTS</span>
+        <span id="capfacts"></span>
+      </div>
+    </div>
+  </section>
+
+  <section id="different">
+    <div class="sechead"><span class="num">01</span><h2>What makes this different</h2><span class="rule"></span></div>
+    <div class="spec">
+      <div>
+        <div class="i">A</div>
+        <h3>Numeric, formula-driven track authoring</h3>
+        <p>No click-drag-place viewport editing. A track is an ordered list of typed parametric
+          segments — straight, constant-radius curve, clothoid transition, helix — each defined by
+          values or expressions. The 3D view is a read-only preview, not the editing surface. It
+          diffs in version control, because it is data.</p>
+      </div>
+      <div>
+        <div class="i">B</div>
+        <h3>Curvature continuity as a property of the data</h3>
+        <p>A segment carries curvature varying linearly over arc length, and geometry comes from
+          integrating a moving orthonormal frame along that profile. C² continuity is therefore
+          something the representation guarantees rather than something fitted afterwards, and
+          transition curves are the native case instead of special handling.</p>
+      </div>
+      <div>
+        <div class="i">C</div>
+        <h3>Real block signalling, not "train present / absent" <span style="color:var(--tu-amber);font-size:11px;letter-spacing:.16em">PHASE 3</span></h3>
+        <p>Designed and prototyped, not yet wired into the ride. Every block is a state machine —
+          CLEAR → OCCUPIED → BUFFER(x) → CLEAR — where the buffer
+          is the safety overlap a block holds after a train has physically left it. Dispatch
+          permissives read forward through the block list. Automatic and manual dispatch modes change
+          who decides the timing, never whether the interlocks apply.</p>
+      </div>
+      <div>
+        <div class="i">D</div>
+        <h3>A control panel generated from the coaster's own data <span style="color:var(--tu-amber);font-size:11px;letter-spacing:.16em">PHASE 3</span></h3>
+        <p>The design, for when the signalling lands. Not a cosmetic prop: walk the same ordered
+          block and segment list that will drive the mesh and
+          the physics: each block emits an indicator, each powered segment emits a VFD module with
+          target speed, motor feedback, torque and ramp rate. The causal chain is visible —
+          sensor trips, indicator lights, logic evaluates, actuator responds.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="layout">
+    <div class="sechead"><span class="num">02</span><h2>The reference layout, measured</h2><span class="rule"></span></div>
+    <p style="max-width:70ch">Every number on this page — and every line in the drawing above — is
+      produced by compiling the project's own prototype headers and running the ride profile over the
+      hand-authored reference layout. Nothing here is illustrative.</p>
+    <div class="strip" id="stats"></div>
+  </section>
+
+  <section id="prototypes">
+    <div class="sechead"><span class="num">03</span><h2>The hard parts, prototyped first</h2><span class="rule"></span></div>
+    <p style="max-width:70ch">Five standalone prototypes, plain C++17 with no engine dependency — they
+      build and run without an Unreal install, which is the lowest-friction way into the codebase and
+      keeps the maths from quietly depending on engine behaviour.</p>
+    <div class="cards">
+      <div class="card">
+        <h3>TrackSpline</h3>
+        <p>Curvature-continuous track geometry. Segments are curvature profiles over arc length;
+          heartline-relative banking and felt G come out of the same frame.</p>
+        <div class="meta">GEOMETRY · C++17</div>
+      </div>
+      <div class="card">
+        <h3>TrainPhysics</h3>
+        <p>1D train motion along that track. Gravity is an exact energy exchange rather than an
+          integrated force, so a frictionless circuit conserves energy at any timestep.</p>
+        <div class="meta">SIMULATION · C++17</div>
+      </div>
+      <div class="card">
+        <h3>BlockSignal</h3>
+        <p>The CLEAR → OCCUPIED → BUFFER(x) → CLEAR state machine and the dispatch permissive logic,
+          with unit tests.</p>
+        <div class="meta">SIGNALLING · C++17</div>
+      </div>
+      <div class="card">
+        <h3>NL2Csv</h3>
+        <p>Reads and writes NoLimits 2's documented spline export, so real layouts can be driven
+          through the model. A validation path, deliberately not an authoring path.</p>
+        <div class="meta">VALIDATION · C++17</div>
+      </div>
+      <div class="card">
+        <h3>NL2Telemetry</h3>
+        <p>Live telemetry capture, so the model can be checked against an independent simulator
+          rather than only against closed forms.</p>
+        <div class="meta">VALIDATION · C++17</div>
+      </div>
+      <div class="card">
+        <h3>In-engine vertical slice</h3>
+        <p>The reference layout builds clean against UE 5.8.1, rides, and reads out speed and G on
+          screen — from the same headers the standalone assert suites test. The train has length, and
+          you can pick a seat.</p>
+        <div class="meta">UE 5.8.1 · PHASE 0</div>
+      </div>
+      <div class="card">
+        <h3>Editor, undo and save format</h3>
+        <p>The track is a typed segment list in the Details panel with snapshot undo, a diffable JSON
+          save format that stores what was authored rather than what was derived, a damped
+          Gauss-Newton closure solver, and self-clearance checking.</p>
+        <div class="meta">PHASE 1 · COMPLETE</div>
+      </div>
+    </div>
+  </section>
+
+  <section id="roadmap">
+    <div class="sechead"><span class="num">04</span><h2>Roadmap</h2><span class="rule"></span></div>
+    <div class="tablewrap">
+    <table>
+      <thead><tr><th style="width:220px">Phase</th><th>Shippable artifact</th><th style="width:120px">Status</th></tr></thead>
+      <tbody>
+        <tr><td class="ph">0 — Prototype</td><td class="gl">A single hand-authored layout you can ride, with correct-feeling G-forces.</td><td><span class="pill done">COMPLETE</span></td></tr>
+        <tr><td class="ph">1 — Track Editor MVP</td><td class="gl">Build an arbitrary coaster from scratch in-editor: numeric segment list, banking, undo/redo from day one, live G graph, circuit closure solver.</td><td><span class="pill done">COMPLETE</span></td></tr>
+        <tr><td class="ph">2 — Physics &amp; Ride Feel</td><td class="gl">A ride-through that feels right to a NoLimits 2 veteran. The credibility milestone.</td><td><span class="pill now">IN PROGRESS</span></td></tr>
+        <tr><td class="ph">3 — Ride Control System</td><td class="gl">Watch — or run — a coaster dispatch itself safely from a generated control panel.</td><td><span class="pill next">PLANNED</span></td></tr>
+        <tr><td class="ph">4 — Track Meshing &amp; Supports</td><td class="gl">A coaster that looks like a real structure, not a spline in space.</td><td><span class="pill next">PLANNED</span></td></tr>
+        <tr><td class="ph">5 — Scenery &amp; Park Layer</td><td class="gl">A small themed area around the coaster.</td><td><span class="pill next">PLANNED</span></td></tr>
+        <tr><td class="ph">6 — Sharing &amp; OSS Launch</td><td class="gl">A public 0.1 release, documented save format, first devlog.</td><td><span class="pill next">PLANNED</span></td></tr>
+        <tr><td class="ph">7 — Community Growth</td><td class="gl">Contributor onboarding, issue triage, more coaster styles.</td><td><span class="pill next">PLANNED</span></td></tr>
+        <tr><td class="ph">Stretch</td><td class="gl">VR ride-throughs; a walk-in 3D control booth over the same generated data.</td><td><span class="pill next">DEFERRED</span></td></tr>
+      </tbody>
+    </table>
+    </div>
+  </section>
+
+  <section id="where">
+    <div class="sechead"><span class="num">05</span><h2>Where things live</h2><span class="rule"></span></div>
+    <div class="cards">
+      <div class="card"><h3>Repository docs</h3><p>The design reference. Vision, architecture, constraints, and the findings ledger.</p><div class="meta">DESIGN REFERENCE</div></div>
+      <div class="card"><h3>Project board</h3><p>Live, day-to-day task status — what is in progress and what is done.</p><div class="meta"><a href="#" data-link="board">TRELLO</a></div></div>
+      <div class="card"><h3>GitHub Issues</h3><p>The inbound channel for bugs and proposals.</p><div class="meta"><a href="#" data-link="issues">ISSUES</a></div></div>
+    </div>
+  </section>
+</div>
+</main>
+
+<footer>
+  <div class="wrap cols">
+    <div>
+      <div id="footmark" style="margin-bottom:14px"></div>
+      MIT licensed. Project code and content only — not Unreal Engine source.<br>
+      You will need your own Unreal Engine installation to build.
+    </div>
+    <div style="text-align:right">
+      Solo-developer-led · built in public<br>
+      No manufacturer trademarks or ride designs are used.
+    </div>
+  </div>
+</footer>
+
+<script>
+// TrackUnlimited — reference layout, measured.
+//
+// NOT hand-drawn. Generated by compiling Prototypes/TrackSpline + Prototypes/TrainPhysics
+// against the ReferenceLayout() segment list in Source/TrackUnlimited/TUCoasterRide.cpp
+// and running RunRideProfile(). Every coordinate below is the project's own geometry.
+//
+// S  = arc length along the heartline, m
+// X  = horizontal station, m (side-elevation abscissa)
+// Z  = heartline height above station datum, m
+// TS = arc length for the trace plots, m
+// V  = speed, km/h
+// G  = felt vertical G (1.00 = sitting on level track, 0 = airtime)
+const TU = {
+  meta: {
+    segments: 16,
+    developedLength: 563.84,   // m, sum of segment arc lengths
+    horizontalExtent: 342.87,  // m
+    crest: 43.35,              // m, highest heartline point
+    crestS: 143.1,
+    heartline: 1.1,            // m above rail centreline
+    chainSpeed: 4.0,           // m/s
+    trainLength: 15.0,         // m — the slice rides a train with length, not a point
+    topSpeedKph: 101.0,
+    topSpeedS: 255.4,
+    maxG: 4.20,  maxGS: 357.8,
+    minG: 0.66,  minGS: 158.0,
+    maxLateralG: 0.36, maxLateralGS: 400.9,
+    loopRadius: 9.0, loopEase: 54.0, loopApex: 27.90, loopApexS: 331.6,
+    turnRadius: 32.0, bankDeg: 65.92,
+    duration: 59.2,            // s, dispatch to brake-run stop
+    curvatureContinuous: true, // verified to 1e-9 across all 15 joints
+  },
+  // Zones as authored: contiguous runs of segments carrying the same zone kind.
+  zones: [
+    { id: 'B1', name: 'STATION',     s0: 0.00,   s1: 20.00,  kind: 'lift',  note: 'chain 4.0 m/s' },
+    { id: 'B2', name: 'LIFT',        s0: 20.00,  s1: 165.39, kind: 'lift',  note: 'chain over crest' },
+    { id: 'B3', name: 'COURSE',      s0: 165.39, s1: 386.84, kind: 'free',  note: 'drop / pull-out / loop' },
+    { id: 'B4', name: 'BANKED TURN', s0: 386.84, s1: 493.84, kind: 'free',  note: 'R32.0 clothoid in/out' },
+    { id: 'B5', name: 'BRAKE RUN',   s0: 493.84, s1: 563.84, kind: 'brake', note: 'release 0.0 m/s' },
+  ],
+  // Feature callouts, keyed to arc length.
+  marks: [
+    { s: 143.1, label: 'LIFT CREST',   detail: '43.35 m' },
+    { s: 255.4, label: 'MAX SPEED',    detail: '101.0 km/h' },
+    { s: 331.6, label: 'LOOP APEX',    detail: '27.90 m · inverted' },
+    { s: 357.8, label: 'MAX +Gv',      detail: '+4.20 g' },
+    { s: 440.0, label: 'BANK β',  detail: '65.92°' },
+  ],
+  S:[0.0,2.0,4.1,6.2,8.2,10.2,12.2,14.2,16.2,18.3,20.4,22.4,24.5,26.6,28.6,30.7,32.8,34.8,36.9,39.0,41.0,43.1,45.2,47.2,49.3,51.4,53.4,55.5,57.6,59.6,61.7,63.8,65.8,67.9,70.0,72.0,74.1,76.2,78.2,80.3,82.4,84.4,86.5,88.6,90.6,92.7,94.8,96.8,98.9,101.0,103.0,105.1,107.2,109.2,111.3,113.4,115.4,117.5,119.6,121.6,123.7,125.7,127.7,129.7,131.7,133.7,135.7,137.7,139.7,141.7,143.7,145.7,147.7,149.7,151.7,153.7,155.7,157.7,159.7,161.7,163.7,165.7,167.8,169.8,171.9,174.0,176.1,178.2,180.3,182.4,184.0,185.6,187.7,189.3,191.0,193.1,195.1,196.8,198.4,200.1,201.8,203.9,206.0,208.1,209.7,211.3,212.9,214.6,216.3,218.0,219.7,221.5,223.3,225.1,226.8,228.8,230.8,232.8,234.9,237.0,239.0,241.1,243.2,245.3,247.4,249.6,251.7,253.8,255.9,258.0,260.1,262.3,264.4,266.5,268.6,270.7,272.8,274.4,275.0,275.5,276.0,276.5,277.1,277.6,278.1,278.6,279.2,279.7,280.2,280.7,281.3,281.8,282.3,282.8,283.4,283.9,284.4,284.9,285.5,286.0,286.5,287.0,287.5,288.1,288.6,289.1,289.6,290.1,290.6,291.2,291.7,292.2,292.7,293.2,293.7,294.2,294.7,295.2,295.7,296.3,296.9,297.5,298.1,298.7,299.3,299.8,300.4,301.0,301.6,302.1,302.7,303.2,303.8,304.3,304.9,305.4,305.9,306.5,307.0,307.5,308.0,308.5,309.0,309.6,310.2,310.7,311.3,311.8,312.4,312.9,313.4,313.9,314.4,315.0,315.5,316.1,316.6,317.1,317.6,318.2,318.7,319.3,319.8,320.3,320.8,321.4,321.9,322.4,322.9,323.4,323.9,324.5,325.0,325.5,326.0,326.5,327.1,327.6,328.1,328.6,329.1,329.7,330.2,330.7,331.2,331.7,332.2,332.7,333.2,333.8,334.3,334.8,335.3,335.8,336.3,336.9,337.4,337.9,338.4,338.9,339.5,340.0,340.5,341.0,341.5,342.1,342.6,343.1,343.6,344.2,344.7,345.2,345.8,346.3,346.8,347.4,347.9,348.4,349.0,349.6,350.1,350.6,351.1,351.7,352.2,352.8,353.3,353.9,354.4,355.0,355.6,356.1,356.6,357.1,357.7,358.2,358.7,359.2,359.8,360.3,360.9,361.4,362.0,362.5,363.1,363.6,364.2,364.8,365.3,365.9,366.5,367.1,367.6,368.2,368.8,369.4,370.0,370.6,371.2,371.7,372.3,372.9,373.5,374.1,374.7,375.3,375.9,376.5,377.1,377.7,378.3,378.9,379.5,380.1,380.7,381.3,381.9,382.5,383.1,383.7,384.3,384.9,385.5,386.1,386.7,387.3,387.9,388.5,390.3,392.1,393.8,395.6,397.4,399.2,401.0,402.8,404.5,406.3,408.1,409.8,411.6,413.4,415.1,416.9,418.7,420.4,422.2,423.9,425.7,427.4,429.2,430.9,432.7,434.4,436.1,437.9,439.6,441.4,443.1,444.8,446.5,448.3,450.0,451.7,453.4,455.1,456.9,458.6,460.3,462.0,463.7,465.4,467.1,468.8,470.5,472.2,473.9,475.6,477.3,479.0,480.7,482.4,484.0,485.7,487.4,489.1,490.8,492.5,494.1,495.8,497.4,499.5,501.5,503.3,504.9,506.6,508.7,510.8,512.5,514.1,516.1,517.7,519.8,521.4,523.5,525.6,527.7,529.7,531.8,533.8],
+  X:[0.0,2.0,4.1,6.2,8.2,10.2,12.2,14.2,16.2,18.3,20.4,22.4,24.5,26.6,28.6,30.7,32.7,34.7,36.7,38.7,40.7,42.6,44.5,46.3,48.2,50.1,52.0,53.8,55.7,57.6,59.5,61.3,63.2,65.1,66.9,68.8,70.7,72.6,74.4,76.3,78.2,80.1,81.9,83.8,85.7,87.6,89.4,91.3,93.2,95.0,96.9,98.8,100.7,102.5,104.4,106.3,108.2,110.0,111.9,113.8,115.6,117.5,119.3,121.1,123.0,124.9,126.8,128.7,130.7,132.7,134.7,136.7,138.6,140.6,142.5,144.3,146.1,147.9,149.6,151.3,152.9,154.6,156.3,158.0,159.7,161.4,163.2,164.9,166.7,168.4,169.7,171.1,172.8,174.2,175.6,177.3,179.1,180.5,181.9,183.3,184.8,186.7,188.5,190.3,191.7,193.2,194.7,196.2,197.8,199.3,200.9,202.6,204.2,205.9,207.5,209.5,211.4,213.4,215.4,217.5,219.5,221.6,223.6,225.7,227.8,229.9,232.0,234.1,236.3,238.4,240.5,242.6,244.7,246.9,249.0,251.1,253.2,254.8,255.3,255.8,256.4,256.9,257.4,257.9,258.5,259.0,259.5,260.0,260.6,261.1,261.6,262.1,262.7,263.2,263.7,264.2,264.8,265.3,265.8,266.3,266.8,267.4,267.9,268.4,268.9,269.4,269.9,270.4,270.9,271.4,271.9,272.4,272.9,273.4,273.9,274.4,274.8,275.3,275.8,276.3,276.9,277.4,277.9,278.4,278.9,279.4,279.9,280.4,280.8,281.3,281.7,282.1,282.5,282.9,283.3,283.6,284.0,284.3,284.6,284.9,285.1,285.4,285.6,285.9,286.1,286.3,286.5,286.6,286.8,286.9,287.0,287.0,287.1,287.1,287.1,287.1,287.1,287.0,286.9,286.8,286.6,286.5,286.3,286.1,285.9,285.6,285.4,285.1,284.8,284.4,284.1,283.7,283.3,282.9,282.5,282.1,281.6,281.2,280.7,280.2,279.7,279.2,278.7,278.2,277.7,277.2,276.7,276.1,275.6,275.1,274.6,274.1,273.7,273.2,272.7,272.3,271.9,271.4,271.1,270.7,270.3,270.0,269.7,269.3,269.1,268.8,268.6,268.4,268.2,268.0,267.9,267.7,267.6,267.6,267.5,267.5,267.5,267.5,267.5,267.6,267.7,267.8,267.9,268.1,268.2,268.4,268.6,268.9,269.1,269.4,269.7,270.0,270.3,270.6,270.9,271.3,271.6,272.0,272.4,272.8,273.2,273.6,274.1,274.5,275.0,275.4,275.9,276.4,276.9,277.4,278.0,278.5,279.0,279.6,280.1,280.7,281.2,281.8,282.4,282.9,283.5,284.1,284.7,285.3,285.9,286.4,287.0,287.6,288.2,288.8,289.4,290.0,290.6,291.2,291.8,292.4,293.0,293.6,294.2,294.8,295.4,296.0,296.6,297.2,297.8,298.4,299.0,299.6,301.4,303.2,304.9,306.7,308.5,310.3,312.1,313.8,315.6,317.3,319.0,320.7,322.4,324.0,325.6,327.1,328.6,330.1,331.4,332.8,334.0,335.2,336.3,337.3,338.2,339.1,339.9,340.6,341.2,341.7,342.1,342.4,342.7,342.8,342.9,342.8,342.7,342.5,342.2,341.8,341.3,340.7,340.0,339.3,338.5,337.6,336.6,335.5,334.5,333.3,332.1,330.9,329.6,328.3,327.0,325.7,324.4,323.0,321.6,320.3,318.9,317.5,316.2,314.5,312.8,311.4,310.0,308.7,306.9,305.2,303.9,302.6,300.9,299.5,297.8,296.5,294.8,293.1,291.4,289.7,288.0,286.4],
+  Z:[0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.1,0.2,0.4,0.7,1.1,1.6,2.3,3.0,3.7,4.6,5.4,6.3,7.2,8.0,8.9,9.8,10.7,11.5,12.4,13.3,14.2,15.0,15.9,16.8,17.7,18.5,19.4,20.3,21.1,22.0,22.9,23.8,24.6,25.5,26.4,27.3,28.1,29.0,29.9,30.8,31.6,32.5,33.4,34.2,35.1,36.0,36.9,37.7,38.6,39.4,40.2,41.0,41.7,42.3,42.7,43.1,43.3,43.3,43.2,42.9,42.4,41.7,40.9,40.1,39.1,38.1,37.0,35.9,34.8,33.6,32.5,31.3,30.2,29.0,27.8,26.6,25.5,24.6,23.7,22.5,21.6,20.7,19.6,18.5,17.7,16.8,15.9,15.1,14.1,13.1,12.1,11.3,10.6,9.9,9.2,8.5,7.9,7.2,6.6,6.0,5.4,4.9,4.3,3.8,3.3,2.9,2.5,2.1,1.8,1.5,1.2,1.0,0.8,0.6,0.5,0.3,0.2,0.2,0.1,0.1,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.1,0.1,0.1,0.1,0.2,0.2,0.2,0.3,0.3,0.4,0.4,0.5,0.6,0.6,0.7,0.8,0.9,1.0,1.1,1.2,1.4,1.5,1.6,1.8,2.0,2.1,2.3,2.5,2.7,3.0,3.2,3.5,3.8,4.1,4.4,4.7,5.0,5.4,5.7,6.1,6.4,6.8,7.2,7.6,8.0,8.4,8.8,9.3,9.7,10.1,10.6,11.0,11.5,12.1,12.6,13.1,13.6,14.1,14.7,15.2,15.7,16.2,16.7,17.3,17.8,18.4,18.9,19.4,19.9,20.5,21.0,21.4,21.9,22.4,22.9,23.3,23.7,24.2,24.6,24.9,25.3,25.6,26.0,26.3,26.5,26.8,27.0,27.2,27.4,27.6,27.7,27.8,27.9,27.9,27.9,27.9,27.8,27.7,27.6,27.5,27.3,27.1,26.9,26.7,26.4,26.1,25.8,25.5,25.1,24.7,24.3,23.9,23.5,23.1,22.6,22.1,21.6,21.2,20.7,20.2,19.6,19.1,18.6,18.1,17.5,17.0,16.4,15.9,15.3,14.8,14.3,13.8,13.3,12.8,12.3,11.7,11.2,10.7,10.2,9.7,9.3,8.9,8.5,8.1,7.7,7.3,6.9,6.5,6.2,5.8,5.5,5.1,4.8,4.5,4.2,3.9,3.6,3.4,3.1,2.9,2.6,2.4,2.2,2.0,1.8,1.6,1.5,1.3,1.2,1.0,0.9,0.8,0.7,0.6,0.5,0.4,0.4,0.3,0.3,0.2,0.2,0.1,0.1,0.1,0.1,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0],
+  TS:[0,3,6,9,12,15,18,22,25,28,31,34,37,40,43,46,49,53,56,59,62,65,68,71,74,77,80,84,87,90,93,96,99,102,105,108,111,115,118,121,124,127,130,133,136,139,142,145,148,151,154,157,160,163,166,170,173,176,179,182,186,189,192,195,199,202,206,209,212,215,218,222,225,228,232,235,239,242,246,249,253,256,260,263,267,270,273,277,280,284,287,291,294,297,301,304,307,310,313,317,320,323,326,330,333,336,339,342,346,349,352,356,359,362,365,368,372,375,378,381,385,388,391,394,398,401,404,407,411,414,417,420,424,427,430,433,436,439,443,446,449,452,455,458,461,465,468,471,474,477,480,483,486,489,492,495,499,502,505,509,512,515,518,522,525,528,531,534,537,540],
+  V:[0.0,14.4,14.4,14.4,14.4,14.4,14.4,14.4,14.4,14.4,14.4,14.4,14.4,14.4,14.4,14.4,14.4,14.4,14.4,14.4,14.4,14.4,14.4,14.4,14.4,14.4,14.4,14.4,14.4,14.4,14.4,14.4,14.4,14.4,14.4,14.4,14.4,14.4,14.4,14.4,14.4,14.4,14.4,14.4,14.4,14.4,14.4,14.4,19.1,25.0,30.8,36.4,41.7,46.6,51.1,55.3,59.1,62.8,66.1,69.4,72.6,75.3,78.0,80.6,83.2,85.6,87.7,89.5,91.2,92.8,94.3,95.7,96.8,97.8,98.7,99.4,99.9,100.3,100.6,100.8,100.9,101.0,100.9,100.8,100.7,100.5,100.3,100.1,99.8,99.2,98.4,97.1,95.4,93.1,90.3,86.9,82.4,77.2,71.9,65.8,59.9,54.8,51.1,49.7,50.9,54.4,59.3,64.9,70.6,75.8,80.5,84.6,87.8,90.1,91.9,93.1,93.9,94.4,94.5,94.5,94.4,94.2,94.0,93.9,93.7,93.5,93.3,93.1,92.9,92.7,92.5,92.4,92.2,92.0,91.8,91.6,91.4,91.2,91.0,90.8,90.6,90.4,90.3,90.1,89.9,89.7,89.5,89.3,89.2,89.0,88.8,88.7,88.5,88.4,88.2,86.7,83.4,80.0,76.6,73.3,69.5,65.6,61.7,57.2,52.6,47.6,42.0,35.7,27.9,17.3],
+  G:[1.00,1.00,1.00,1.00,1.00,1.00,1.00,1.01,1.02,1.02,1.03,1.03,1.00,0.97,0.94,0.92,0.91,0.91,0.91,0.91,0.91,0.91,0.91,0.91,0.91,0.91,0.91,0.91,0.91,0.91,0.91,0.91,0.91,0.91,0.91,0.91,0.91,0.91,0.91,0.91,0.91,0.90,0.90,0.91,0.92,0.93,0.93,0.92,0.85,0.77,0.70,0.66,0.67,0.74,0.83,0.83,0.83,0.83,0.84,0.88,0.92,0.96,1.01,1.07,1.14,1.22,1.29,1.37,1.45,1.53,1.62,1.71,1.80,1.84,1.80,1.76,1.70,1.65,1.59,1.53,1.46,1.39,1.33,1.26,1.19,1.12,1.05,1.11,1.67,2.21,2.72,3.18,3.57,3.85,4.02,4.06,3.94,3.66,3.26,2.72,2.16,1.64,1.27,1.16,1.27,1.55,2.02,2.58,3.15,3.62,3.97,4.16,4.19,4.08,3.86,3.55,3.16,2.73,2.27,1.79,1.32,1.00,1.05,1.15,1.30,1.49,1.71,1.95,2.18,2.34,2.33,2.32,2.31,2.31,2.30,2.29,2.28,2.27,2.27,2.26,2.25,2.24,2.24,2.23,2.22,2.21,2.21,2.01,1.80,1.59,1.41,1.25,1.13,1.05,1.01,1.00,1.00,1.00,1.00,1.00,1.00,1.00,1.00,1.00,1.00,1.00,1.00,1.00,1.00,1.00],
+};
+
+
+const LOGO = {"wordmark": {"light": "M31.36 -40.38V-45.95H0.70V-40.38H13.50V0.00H18.62V-40.38Z M71.49 0.00V-1.02C69.95 -2.11 69.63 -2.82 69.57 -5.63L69.31 -13.95C68.99 -19.20 68.03 -21.06 64.77 -22.59C68.67 -25.54 70.02 -28.35 70.02 -33.54C70.02 -41.60 65.66 -45.95 57.66 -45.95H40.19V0.00H45.31V-19.71H57.66C62.27 -19.71 64.38 -17.41 64.38 -11.52C64.38 -6.66 64.77 -1.86 65.22 0.00ZM64.77 -33.02C64.77 -27.58 62.34 -25.02 57.09 -25.02H45.31V-40.64H57.98C62.53 -40.64 64.77 -38.14 64.77 -33.02Z M111.30 0.00 97.66 -45.95H91.84L77.70 0.00H82.94L86.91 -13.38H102.02L105.73 0.00ZM100.16 -18.94H88.45L94.53 -39.30Z M151.23 -16.90H146.30C144.51 -7.81 140.74 -4.35 135.23 -4.35C127.55 -4.35 123.07 -11.07 123.07 -22.72C123.07 -34.50 127.74 -41.60 135.55 -41.60C140.80 -41.60 144.38 -38.91 145.92 -32.13H150.85C149.63 -41.73 143.68 -47.17 135.42 -47.17C124.67 -47.17 117.82 -37.76 117.82 -22.91C117.82 -8.13 124.42 1.22 134.78 1.22C138.94 1.22 142.78 -0.38 145.66 -3.39C148.48 -6.34 149.95 -9.60 151.23 -16.90Z M191.74 0.00 175.62 -27.39 191.36 -45.95H184.32L166.02 -23.68V-45.95H160.90V0.00H166.02V-16.13L171.97 -23.04L185.15 0.00Z", "bold": "M236.03 -16.06V-45.95H228.03V-15.68C228.03 -9.98 225.47 -6.91 220.74 -6.91C216.19 -6.91 213.63 -10.24 213.63 -16.13V-45.95H205.63V-15.49C205.63 -4.86 211.14 1.22 220.74 1.22C230.72 1.22 236.03 -4.80 236.03 -16.06Z M277.57 0.00V-45.95H270.27V-13.70L255.17 -45.95H246.91V0.00H254.21V-32.96L269.76 0.00Z M315.26 0.00V-8.32H296.51V-45.95H288.64V0.00Z M331.46 0.00V-45.95H323.58V0.00Z M378.50 0.00V-45.95H367.17L360.38 -9.47L353.47 -45.95H342.02V0.00H349.31V-38.98L356.29 0.00H364.03L371.20 -38.98V0.00Z M396.80 0.00V-45.95H388.93V0.00Z M435.07 -37.82V-45.95H404.42V-37.82H415.81V0.00H423.68V-37.82Z M471.87 0.00V-8.13H450.94V-20.03H469.38V-28.16H450.94V-37.82H470.98V-45.95H443.26V0.00Z M513.79 -23.94C513.79 -37.89 508.16 -45.95 498.43 -45.95H481.79V0.00H498.11C508.48 0.00 513.79 -10.43 513.79 -23.94ZM505.79 -23.68C505.79 -13.70 502.59 -7.87 497.15 -7.87H489.47V-38.08H497.02C503.23 -38.08 505.79 -32.90 505.79 -23.68Z", "width": 515.7120000000001, "cap": 46.08}, "mark100": {"trace": "M 10.00 70.00 L 19.60 70.00 L 37.20 30.00 L 62.80 30.00 L 80.40 70.00 L 90.00 70.00", "axis": "M 10.00 70.00 L 90.00 70.00", "ticks": "M 10.00 70.00 L 10.00 75.00 M 20.00 70.00 L 20.00 75.00 M 30.00 70.00 L 30.00 75.00 M 40.00 70.00 L 40.00 75.00 M 50.00 70.00 L 50.00 75.00 M 60.00 70.00 L 60.00 75.00 M 70.00 70.00 L 70.00 75.00 M 80.00 70.00 L 80.00 75.00 M 90.00 70.00 L 90.00 75.00", "corners": "M 4.00 14.00 L 4.00 4.00 L 14.00 4.00 M 96.00 14.00 L 96.00 4.00 L 86.00 4.00 M 4.00 86.00 L 4.00 96.00 L 14.00 96.00 M 96.00 86.00 L 96.00 96.00 L 86.00 96.00", "peakY": 30.0, "baseY": 70.0, "x0": 10.0, "x1": 90.0}};
+
+/* ------------------------------------------------------------------ EDIT ME
+   Fill these in once the repository is public. Every link on the page reads
+   from here, so there is exactly one place to change. */
+const LINKS = {
+  repo:   'https://github.com/CHANGEME/TrackUnlimited',
+  plan:   'https://github.com/CHANGEME/TrackUnlimited/blob/main/Docs/PROJECT_PLAN.md',
+  issues: 'https://github.com/CHANGEME/TrackUnlimited/issues',
+  board:  'https://trello.com/b/Uzqm38o7/coaster-sim-nolimits-successor',
+};
+document.querySelectorAll('[data-link]').forEach(a => {
+  const href = LINKS[a.dataset.link];
+  if (href) { a.href = href; if (/^https?:/.test(href) && !href.includes('CHANGEME')) a.rel = 'noopener'; }
+});
+
+const NS = 'http://www.w3.org/2000/svg';
+function el(tag, attrs = {}, parent) {
+  const n = document.createElementNS(NS, tag);
+  for (const k in attrs) if (attrs[k] != null) n.setAttribute(k, attrs[k]);
+  (parent || document.body).appendChild(n);
+  return n;
+}
+
+/* ---- brand lockups ---- */
+function lockup(host, height) {
+  const w = LOGO.wordmark, ms = height, k = ms / 100, ts = (height * 0.62) / 64;
+  const width = ms + height * 0.42 + w.width * ts;
+  const svg = el('svg', { viewBox: `0 0 ${width.toFixed(1)} ${ms}`, height: height,
+    width: width.toFixed(0), role: 'img', 'aria-label': 'TrackUnlimited' }, host);
+  svg.style.display = 'block';
+  const m = LOGO.mark100;
+  const gm = el('g', { transform: `scale(${k})`, fill: 'none', 'stroke-linecap': 'square' }, svg);
+  el('path', { d: m.axis,    stroke: 'var(--tu-line-dim)', 'stroke-width': 1.6 / k }, gm);
+  el('path', { d: m.ticks,   stroke: 'var(--tu-line-dim)', 'stroke-width': 1.4 / k }, gm);
+  el('path', { d: m.corners, stroke: 'var(--tu-amber)',    'stroke-width': 1.9 / k }, gm);
+  el('path', { d: m.trace,   stroke: 'var(--tu-line)', 'stroke-width': 5.5 / k, 'stroke-linejoin': 'round' }, gm);
+  const gt = el('g', { transform: `translate(${ms + height * 0.42},${ms * 0.5 + w.cap * ts * 0.5}) scale(${ts})` }, svg);
+  el('path', { d: w.light, fill: 'var(--tu-text)' }, gt);
+  el('path', { d: w.bold,  fill: 'var(--tu-text)' }, gt);
+}
+lockup(document.getElementById('navmark'), 34);
+lockup(document.getElementById('footmark'), 30);
+
+/* ---- hero elevation ---- */
+(function hero() {
+  const svg = document.getElementById('hero');
+  const W = 1200, L = 56, R = 26, TOP = 30;
+  const s = (W - L - R) / TU.meta.horizontalExtent;   // fit to width, true 1:1
+  const DATUM = TOP + TU.meta.crest * s;
+  const H = Math.round(DATUM + 74);
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  const px = m => L + m * s, py = m => DATUM - m * s;
+
+  const defs = el('defs', {}, svg);
+  const h = el('pattern', { id: 'h2', width: 10, height: 10, patternUnits: 'userSpaceOnUse',
+    patternTransform: 'rotate(45)' }, defs);
+  el('line', { x1: 0, y1: 0, x2: 0, y2: 10, stroke: 'var(--tu-grid-major)', 'stroke-width': 1 }, h);
+
+  for (let m = 10; m <= 40; m += 10) {
+    el('line', { x1: L - 12, y1: py(m), x2: W - R, y2: py(m), stroke: 'var(--tu-grid-minor)',
+      'stroke-width': 1, 'stroke-dasharray': '2 6' }, svg);
+    const t = el('text', { x: L - 18, y: py(m) + 4, 'text-anchor': 'end',
+      style: 'font:11px var(--tu-mono);letter-spacing:.14em;fill:var(--tu-text-3)' }, svg);
+    t.textContent = m + ' m';
+  }
+  el('rect', { x: L - 12, y: DATUM, width: W - R - L + 24, height: 14, fill: 'url(#h2)' }, svg);
+  el('line', { x1: L - 12, y1: DATUM, x2: W - R + 12, y2: DATUM, stroke: 'var(--tu-grid-major)',
+    'stroke-width': 1.4 }, svg);
+
+  const COL = { lift: 'var(--tu-amber)', free: 'var(--tu-line)', brake: 'var(--tu-red)' };
+  const drawn = [];
+  TU.zones.forEach(z => {
+    const pts = [];
+    for (let i = 0; i < TU.S.length; i++) {
+      if (TU.S[i] < z.s0 - .001 || TU.S[i] > z.s1 + .001) continue;
+      pts.push(px(TU.X[i]).toFixed(1) + ',' + py(TU.Z[i]).toFixed(1));
+    }
+    if (pts.length > 1) drawn.push(el('polyline', { points: pts.join(' '), fill: 'none',
+      stroke: COL[z.kind], 'stroke-width': 2.6, 'stroke-linejoin': 'round',
+      'stroke-linecap': 'round' }, svg));
+  });
+
+  // one dimension, because a drawing with no dimension is just a picture
+  const cx = px(134.7) + 74;
+  el('path', { d: `M ${cx} ${py(TU.meta.crest)} L ${cx} ${DATUM}`, fill: 'none',
+    stroke: 'var(--tu-line-dim)', 'stroke-width': 1 }, svg);
+  [py(TU.meta.crest), DATUM].forEach(y =>
+    el('path', { d: `M ${cx - 4} ${y} L ${cx + 4} ${y}`, stroke: 'var(--tu-line-dim)',
+      'stroke-width': 1 }, svg));
+  const dt = el('text', { x: cx - 8, y: (py(TU.meta.crest) + DATUM) / 2,
+    transform: `rotate(-90 ${cx - 8} ${(py(TU.meta.crest) + DATUM) / 2})`, 'text-anchor': 'middle',
+    style: 'font:11px var(--tu-mono);letter-spacing:.1em;fill:var(--tu-line)' }, svg);
+  dt.textContent = TU.meta.crest.toFixed(2) + ' m';
+
+  // zone key
+  let kx = L;
+  const seen = new Set();
+  TU.zones.forEach(z => {
+    if (seen.has(z.kind)) return; seen.add(z.kind);
+    el('rect', { x: kx, y: DATUM + 40, width: 18, height: 3, fill: COL[z.kind] }, svg);
+    const t = el('text', { x: kx + 26, y: DATUM + 46,
+      style: 'font:11px var(--tu-mono);letter-spacing:.16em;fill:var(--tu-text-3)' }, svg);
+    t.textContent = { lift: 'CHAIN', free: 'FREE RUNNING', brake: 'BRAKE' }[z.kind];
+    kx += 150;
+  });
+
+  if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    const io = new IntersectionObserver(es => es.forEach(e => {
+      if (!e.isIntersecting) return;
+      io.disconnect();
+      drawn.forEach((p, i) => {
+        const len = p.getTotalLength();
+        p.style.strokeDasharray = len; p.style.strokeDashoffset = len;
+        p.style.transition = `stroke-dashoffset 1500ms cubic-bezier(.4,0,.2,1) ${i * 70}ms`;
+        requestAnimationFrame(() => { p.style.strokeDashoffset = 0; });
+      });
+    }), { threshold: .2 });
+    io.observe(svg);
+  }
+})();
+
+/* ---- measured stats ---- */
+const M = TU.meta;
+document.getElementById('capfacts').textContent =
+  M.developedLength.toFixed(2) + ' m DEVELOPED · CREST ' + M.crest.toFixed(2) +
+  ' m · C² CONTINUOUS';
+const STATS = [
+  ['Developed length', M.developedLength.toFixed(2) + ' m', 1],
+  ['Segments', String(M.segments), 0],
+  ['Lift crest', M.crest.toFixed(2) + ' m', 1],
+  ['Top speed', M.topSpeedKph.toFixed(1) + ' km/h', 1],
+  ['Vertical G', '+' + M.minG.toFixed(2) + ' to +' + M.maxG.toFixed(2) + ' g', 1],
+  ['Peak lateral G', M.maxLateralG.toFixed(2) + ' g', 0],
+  ['Train length', M.trainLength.toFixed(0) + ' m', 0],
+  ['Loop radius', 'R' + M.loopRadius.toFixed(1) + ' m, ' + M.loopEase.toFixed(0) + ' m eased', 0],
+  ['Banked turn', 'R' + M.turnRadius.toFixed(1) + ' m @ ' + M.bankDeg.toFixed(2) + '°', 0],
+  ['Ride time', M.duration.toFixed(1) + ' s', 0],
+  ['Curvature continuity', 'verified to 1e-9', 1],
+];
+const host = document.getElementById('stats');
+STATS.forEach(([k, v, hi]) => {
+  const d = document.createElement('div');
+  d.innerHTML = '<div class="k"></div><div class="v' + (hi ? ' hi' : '') + '"></div>';
+  d.children[0].textContent = k.toUpperCase();
+  d.children[1].textContent = v;
+  host.appendChild(d);
+});
+</script>
+</body>
+</html>
