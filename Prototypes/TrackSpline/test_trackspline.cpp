@@ -3,6 +3,7 @@
 
 #include "TrackSpline.h"
 #include "TrackProfile.h"
+#include "TrackValidate.h"
 
 #include <cassert>
 #include <cstdio>
@@ -350,6 +351,139 @@ static void TestEvaluateClampsAndSpansSegments()
     assert(NearVec(Track.EvaluateAt(999.0).Position, FVec3{20.0, 0.0, 0.0}));
 }
 
+// --------------------------------------------------------------- validation
+
+static bool HasIssue(const std::vector<FTrackDiagnostic>& D, ETrackIssue Want, std::size_t Index)
+{
+    for (const FTrackDiagnostic& X : D)
+    {
+        if (X.Issue == Want && X.SegmentIndex == Index)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void TestValidationCatchesTheNaNThatGeometryCannot()
+{
+    // The case PHASE0_FINDINGS singled out — and it is worse than recorded
+    // there. A zero radius is a divide by zero, so the field holds INFINITY,
+    // not NaN. Then:
+    //
+    //   1. The lerp inside CurvatureAt computes (inf - inf) * 0 = NaN.
+    //   2. IsCurvatureContinuous compares with `fabs(x) > tol`, false for NaN,
+    //      so the joint PASSES.
+    //   3. Integrate guards on `Rate > 0.0`, also false for NaN, so it takes
+    //      the straight-line branch.
+    //
+    // The result is not visibly broken geometry. It is a clean, perfectly
+    // STRAIGHT segment where an arc was authored, with every check reporting
+    // success. That is precisely why validation cannot live in the geometry.
+    const FTrackSegment Bad = MakeArc(30.0, 0.0);
+    assert(std::isinf(Bad.YawCurvatureStart));
+    assert(!std::isnan(Bad.YawCurvatureStart));
+
+    FTrack Track;
+    Track.AddSegment(MakeStraight(20.0));
+    Track.AddSegment(Bad);
+    assert(Track.IsCurvatureContinuous()); // the false clean bill of health
+
+    // ...and the track really did come out straight, 50 m of it.
+    const FTrackFrame End = Track.EvaluateAt(Track.TotalLength());
+    assert(NearVec(End.Position, FVec3{50.0, 0.0, 0.0}, 1e-9));
+    assert(NearVec(End.Tangent, FVec3{1.0, 0.0, 0.0}, 1e-12));
+
+    // A literal NaN gets the same free pass from the geometry.
+    FTrackSegment Nan = MakeStraight(10.0);
+    Nan.YawCurvatureStart = Nan.YawCurvatureEnd = std::nan("");
+    FTrack WithNan;
+    WithNan.AddSegment(MakeStraight(20.0));
+    WithNan.AddSegment(Nan);
+    assert(WithNan.IsCurvatureContinuous());
+
+    // The editor boundary catches both, as errors, naming the field.
+    assert(HasIssue(ValidateTrack({MakeStraight(20.0), Bad}), ETrackIssue::NotFinite, 1));
+    assert(HasErrors(ValidateTrack({MakeStraight(20.0), Bad})));
+    assert(HasIssue(ValidateTrack({MakeStraight(20.0), Nan}), ETrackIssue::NotFinite, 1));
+    std::printf("  validation: zero radius caught — geometry silently made it STRAIGHT\n");
+}
+
+static void TestValidationRejectsAndWarnsWithoutRepairing()
+{
+    // Errors: unbuildable.
+    FTrackSegment Zero = MakeStraight(0.0);
+    assert(HasErrors(ValidateTrack({Zero})));
+    FTrackSegment Negative = MakeStraight(-5.0);
+    assert(HasErrors(ValidateTrack({Negative})));
+
+    // Warning, not error: a radius typed into a curvature field. 30 1/m is a
+    // 3.3 cm radius - buildable, absurd, and silent without this check.
+    FTrackSegment Tiny = MakeStraight(10.0);
+    Tiny.YawCurvatureStart = Tiny.YawCurvatureEnd = 30.0;
+    const std::vector<FTrackDiagnostic> T = ValidateTrack({Tiny});
+    assert(!HasErrors(T));
+    assert(HasIssue(T, ETrackIssue::TinyRadius, 0));
+
+    // Warning: degrees in a radians field. 45 rad is 7.2 revolutions.
+    const std::vector<FTrackDiagnostic> R = ValidateTrack({MakeStraight(10.0, 45.0)});
+    assert(!HasErrors(R));
+    assert(HasIssue(R, ETrackIssue::HugeRoll, 0));
+
+    // A legitimate 2*pi barrel roll sits exactly on the limit and must NOT warn.
+    assert(ValidateTrack({MakeStraight(60.0, 2.0 * Pi)}).empty());
+
+    // Nothing was repaired. This is the whole point: the findings measured that
+    // clamping MakeArc(L, 0) to a straight yields a plausible 1.00 G and a clean
+    // continuity pass, which is worse than an obvious NaN.
+    assert(Tiny.YawCurvatureStart == 30.0);
+    assert(std::isinf(MakeArc(30.0, 0.0).YawCurvatureStart));
+
+    // Curvature magnitude is checked on the yaw/pitch VECTOR, so a segment
+    // curving hard in pitch alone is caught too.
+    FTrackSegment PitchOnly = MakeStraight(10.0);
+    PitchOnly.PitchCurvatureStart = PitchOnly.PitchCurvatureEnd = 5.0;
+    assert(HasIssue(ValidateTrack({PitchOnly}), ETrackIssue::TinyRadius, 0));
+
+    std::printf("  validation: reports and never repairs; vector curvature, degrees-vs-radians\n");
+}
+
+static void TestValidationLocatesJointStepsAndStaysQuietWhenClean()
+{
+    // Straight bolted onto an arc: a real curvature step, reported against the
+    // joint rather than as a bare "not continuous".
+    const std::vector<FTrackSegment> Stepped = {MakeStraight(50.0), MakeArc(40.0, 30.0)};
+    const std::vector<FTrackDiagnostic> S = ValidateTrack(Stepped);
+    assert(!HasErrors(S));
+    assert(HasIssue(S, ETrackIssue::CurvatureStep, 0));
+
+    // Roll step: same value of curvature either side, but the track twists
+    // instantaneously. IsCurvatureContinuous checks roll VALUE so it agrees
+    // here, but the diagnostic says by how much and where.
+    const std::vector<FTrackSegment> Twist = {MakeStraight(10.0, 0.0), MakeStraight(10.0, 0.5)};
+    assert(HasIssue(ValidateTrack(Twist), ETrackIssue::RollStep, 0));
+
+    // The properly eased version is silent - no errors AND no warnings.
+    const double R = 30.0;
+    const std::vector<FTrackSegment> Clean = {MakeStraight(50.0),
+                                              MakeClothoid(20.0, 0.0, 1.0 / R),
+                                              MakeArc(40.0, R),
+                                              MakeClothoid(20.0, 1.0 / R, 0.0),
+                                              MakeStraight(50.0)};
+    assert(ValidateTrack(Clean).empty());
+
+    // A NaN segment must not spray joint noise that buries the real error.
+    const std::vector<FTrackSegment> WithNaN = {MakeStraight(20.0), MakeArc(30.0, 0.0),
+                                                MakeStraight(20.0)};
+    const std::vector<FTrackDiagnostic> N = ValidateTrack(WithNaN);
+    assert(HasErrors(N));
+    for (const FTrackDiagnostic& X : N)
+    {
+        assert(X.Issue != ETrackIssue::CurvatureStep);
+    }
+    std::printf("  validation: joint steps located; clean track is silent; NaN does not spam\n");
+}
+
 // -------------------------------------------------------------------- helix
 
 static void TestHelixIsActuallyAHelix()
@@ -535,6 +669,9 @@ static void TestCrossSectionSidednessAndWidth()
 
 int main()
 {
+    TestValidationCatchesTheNaNThatGeometryCannot();
+    TestValidationRejectsAndWarnsWithoutRepairing();
+    TestValidationLocatesJointStepsAndStaysQuietWhenClean();
     TestHelixIsActuallyAHelix();
     TestHelixHandednessAndDegenerateCases();
     TestHelixExitIsNotContinuousWithAPlainArc();
