@@ -1,11 +1,16 @@
 # --- Unreal Engine generated ---
 Binaries/
-Build/
 DerivedDataCache/
 Intermediate/
 Saved/
 *.VC.db
 *.VC.opendb
+# Regenerable map lighting data. Must stay ignored: it is LFS-tracked as a
+# *.uasset, so every rebuild would burn LFS quota permanently.
+*_BuiltData.uasset
+# NOTE: no bare `Build/` rule. Build/ holds packaging *inputs* (platform icons,
+# provisioning) that must be committed; real build output is already covered by
+# Intermediate/ and Binaries/.
 
 # --- Visual Studio / Rider / IDEs ---
 .vs/
@@ -27,3 +32,14 @@ Thumbs.db
 
 # --- Local-only ---
 *.log
+.claude/settings.local.json
+
+# --- Prototype build artifacts ---
+# Matches the extensionless binary clang++ emits with `-o test_blocksignal` as
+# well as the .exe Windows produces; the negation keeps the sources tracked.
+# Verify after editing: `git check-ignore -v Prototypes/TrackSpline/test_trackspline`
+Prototypes/**/test_*
+!Prototypes/**/test_*.cpp
+Prototypes/**/*.o
+Prototypes/**/*.obj
+Prototypes/**/*.pdb

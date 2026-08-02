@@ -9,6 +9,7 @@ TrackUnlimited: a free, open-source, Unreal Engine 5 roller coaster simulator bu
 ## Read first
 
 - `Docs/PROJECT_PLAN.md` — the full plan: vision, market context, all five product pillars, MVP/full scope, technical architecture, phased roadmap, solo-dev execution strategy, legal/licensing, risks, and immediate next steps. Read this in full before making any architectural decision — most "why isn't this built like X" questions are already answered there.
+- `Docs/PHASE0_FINDINGS.md` — what the prototypes actually proved, with numbers, and the known-limitations ledger. Read this before changing either prototype header. Several plausible-looking "fixes" have already been tested and shown to make things worse; that page says which, and why.
 - Project board (Trello): https://trello.com/b/Uzqm38o7/coaster-sim-nolimits-successor — the live, day-to-day source of truth for what's in progress/done. This repo's docs are the design reference; Trello is where task status actually lives and gets moved around. If you have Trello MCP access in this session, check it for current status before assuming a task list from the docs is up to date.
 
 ## Non-negotiable architectural constraints
@@ -26,12 +27,14 @@ These were deliberate decisions made after discussion, not defaults — do not "
 
 See `Docs/PROJECT_PLAN.md` Section 6 (Roadmap) and the Trello board's "Phase 0 — Prototype" list for full detail. Concrete next actions, in rough order:
 
-1. Evaluate Coaster Forge (Fab/Dualstate Games) and other existing Unreal spline-physics prior art hands-on — a time-boxed (~1-2 week) build-vs-adapt decision for the procedural track meshing layer. Do this before committing engineering time to meshing.
-2. Prototype the curvature-continuous spline math standalone, outside full engine integration (even a plain script) — cubic Hermite/B-spline segments with explicit first/second-derivative continuity, clothoid/Euler-spiral transitions, heartline-relative banking.
-3. Prototype the block-occupancy + buffer state machine as a plain C++ class with unit tests: `CLEAR → OCCUPIED → BUFFER(x) → CLEAR`. This is a from-scratch C++ rebuild of a design the developer already built and shipped once in Blueprint (see prior projects referenced in `Docs/PROJECT_PLAN.md` Section 8) — treat it as lower-risk than the rest of the architecture, not a cold start.
-4. Vertical slice: a single hand-authored spline, a cart that follows it with real physics, a basic camera. Prove the core ride feel before building any editor UI.
+1. Evaluate Coaster Forge (Fab/Dualstate Games) and other existing Unreal spline-physics prior art hands-on — a time-boxed (~1-2 week) build-vs-adapt decision for the procedural track meshing layer. Do this before committing engineering time to meshing. **Still open — this is the remaining gate on Phase 4.**
+2. ~~Prototype the curvature-continuous spline math standalone.~~ **DONE** — `Prototypes/TrackSpline/`. Note the representation is **curvature-profile-over-arc-length**, not the cubic Hermite/B-spline model the plan originally called for: a segment carries curvature varying linearly over arc length (straight `k=0`, arc `k=const`, clothoid `k` linear) and geometry comes from integrating a moving orthonormal frame. C² continuity is therefore a property of the data, not something fitted. This supersedes the earlier wording — **do not "restore" a Hermite/control-point formulation.**
+3. ~~Prototype the block-occupancy + buffer state machine as a plain C++ class with unit tests.~~ **DONE** — `Prototypes/BlockSignal/`.
+4. Vertical slice: a single hand-authored spline, a cart that follows it with real physics, a basic camera. Prove the core ride feel before building any editor UI. **Now unblocked** — items 2 and 3 are de-risked. Use `FFrame::Tangent` for direction; never finite-difference `EvaluateAt`, and treat it as O(track length) per call.
 
-Do not start Phase 1 (Track Editor MVP) work until the Phase 0 spline-math and block-state-machine prototypes are de-risked — see `Docs/PROJECT_PLAN.md` Section 10, "Immediate Next Steps."
+`Prototypes/BlockSignal/BlockSignal.h` and `Prototypes/TrackSpline/TrackSpline.h` are the **canonical designs to port** into UE5 C++ — not references to reimplement from scratch. `Docs/PHASE0_FINDINGS.md` has a measured port checklist.
+
+Do not start Phase 1 (Track Editor MVP) work until the Phase 0 spline-math and block-state-machine prototypes are de-risked — see `Docs/PROJECT_PLAN.md` Section 10, "Immediate Next Steps." (Both are now done; the vertical slice is the remaining Phase 0 engineering item.)
 
 ## Key vocabulary (used throughout the docs and should be used consistently in code/comments)
 
@@ -39,6 +42,12 @@ Do not start Phase 1 (Track Editor MVP) work until the Phase 0 spline-math and b
 - **Heartline** — the reference line (not the rail centerline) that banking and ride-camera calculations are computed around, so felt-G through banked turns is physically correct.
 - **Dispatch permissive** — the logic gate that allows a station/launch to release a train, based on downstream block clearance (and, for high-speed sections, braking-distance lookahead).
 - **VFD module** — the generated control-panel element for a powered segment (lift chain, tire-drive launch): target frequency/speed, actual motor feedback, torque/current draw, ramp rate.
+
+## Conventions in prototype code
+
+The prototypes are metres, radians, seconds, and a **right-handed** frame where `Tangent × Lateral = Up` and `+Lateral` is the rider's **left**. UE5 is centimetres and **left-handed** with `+Y` to the right.
+
+Convert units *and* flip handedness at the port boundary, never inside the math. The flip is not a single sign: UE's `Right` is `-M(Lateral)` where `M(x,y,z) = (x,-y,z)`. Getting this wrong mirrors the entire track and produces geometry that still looks self-consistent — `Docs/PHASE0_FINDINGS.md` has the measured residuals.
 
 ## When in doubt
 

@@ -2,7 +2,21 @@
 
 A free, open-source, Unreal Engine 5 roller coaster simulator — built as a successor to [NoLimits 2](https://www.nolimitscoaster.com/), aiming for its engineering-grade precision (curvature-continuous track, real physics, accurate G-forces) with a modern, approachable interface and a real block-signaling/ride-control system neither NoLimits 2 nor Planet Coaster has attempted.
 
-**Status:** Pre-Phase 0 — planning complete, prototyping not yet started.
+**Status:** Phase 0 — the two hardest cores are prototyped and passing; in-engine vertical slice next.
+
+## Prototypes
+
+The riskiest math got built first, standalone. Both are plain C++17 with no engine dependency, so they build and run in about a second **without an Unreal install** — the lowest-friction way into this codebase.
+
+- [`Prototypes/TrackSpline/`](Prototypes/TrackSpline/) — curvature-continuous track geometry. Segments are curvature profiles over arc length (straight, arc, clothoid), so C² continuity is a property of the data rather than something fitted. Heartline-relative banking and felt G.
+- [`Prototypes/BlockSignal/`](Prototypes/BlockSignal/) — the `CLEAR → OCCUPIED → BUFFER(x) → CLEAR` block state machine and dispatch permissive logic.
+
+```sh
+cd Prototypes/TrackSpline
+clang++ -std=c++17 -Wall -Wextra -o test_trackspline test_trackspline.cpp && ./test_trackspline
+```
+
+What they proved, what they disproved, and what is still unknown: [`Docs/PHASE0_FINDINGS.md`](Docs/PHASE0_FINDINGS.md).
 
 ## What makes this different
 
@@ -14,7 +28,11 @@ A free, open-source, Unreal Engine 5 roller coaster simulator — built as a suc
 ## Project links
 
 - Full project plan: [`Docs/PROJECT_PLAN.md`](Docs/PROJECT_PLAN.md) — vision, market context, technical architecture, roadmap, risks.
-- Project board: tracked in Trello (ask the maintainer for the link, or see your own board if this is your fork).
+- Phase 0 findings: [`Docs/PHASE0_FINDINGS.md`](Docs/PHASE0_FINDINGS.md) — verified results, known limitations, UE5 port checklist.
+- Changelog: [`CHANGELOG.md`](CHANGELOG.md).
+- Project board: [Trello](https://trello.com/b/Uzqm38o7/coaster-sim-nolimits-successor).
+
+Three places, three jobs: the repo docs are the **design reference**, Trello is **live task status**, and GitHub Issues is the **inbound channel** for bugs and proposals.
 
 ## License
 
