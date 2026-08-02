@@ -1,5 +1,8 @@
 #include "TUCoasterRide.h"
 
+#include "TrackSpline/TrackClose.h"
+#include "TrackSpline/TrackValidate.h"
+
 #include "Camera/CameraComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "DrawDebugHelpers.h"
@@ -13,26 +16,6 @@ namespace
 
 	constexpr double Pi = 3.14159265358979323846;
 	double Deg(double D) { return D * Pi / 180.0; }
-
-	// A vertical curve with no curvature step at either end: pitch curvature
-	// ramps 0 -> peak -> 0, so both joints stay continuous. This is the whole
-	// point of the representation, and it is why the layout below reports
-	// IsCurvatureContinuous() == true.
-	void EasedPitch(FTrack& T, double PitchDelta, double PeakCurvature)
-	{
-		const double K = PitchDelta >= 0.0 ? PeakCurvature : -PeakCurvature;
-		const double L = FMath::Abs(PitchDelta) / PeakCurvature;
-
-		FTrackSegment In;
-		In.Length = L;
-		In.PitchCurvatureEnd = K;
-		T.AddSegment(In);
-
-		FTrackSegment Out;
-		Out.Length = L;
-		Out.PitchCurvatureStart = K;
-		T.AddSegment(Out);
-	}
 }
 
 ATUCoasterRide::ATUCoasterRide()
@@ -57,80 +40,244 @@ ATUCoasterRide::ATUCoasterRide()
 
 	Camera = CreateDefaultSubobject<UCameraComponent>(TEXT("Camera"));
 	Camera->SetupAttachment(Root);
+
+	// Seeded so a freshly placed actor has a ride in it. Everything about that
+	// ride is now data in the Details panel rather than code, which is the whole
+	// point — bResetToReferenceLayout puts it back if an edit goes wrong.
+	Segments = ReferenceLayout();
 }
 
-void ATUCoasterRide::BuildTrack()
+TArray<FTUTrackSegment> ATUCoasterRide::ReferenceLayout()
 {
-	// Authored numerically, exactly as the project intends track to be authored
-	// — an ordered list of typed segment parameters, with no viewport dragging
-	// anywhere in sight. Tuned in the standalone harness first; these numbers
-	// give a 43.4 m lift, 101 km/h, +0.70..+4.25 vertical G, 0.36 peak lateral,
-	// and +1.25 G over the loop apex.
+	// The reference ride, as authored data rather than as code. Tuned in the
+	// standalone harness first; these numbers give a 43.4 m lift, 101 km/h,
+	// +0.70..+4.25 vertical G, 0.36 peak lateral and +1.25 G over the loop apex.
+	//
+	// This used to be a sequence of AddSegment calls, which meant the layout was
+	// only editable by recompiling. It is a list now because that is what the
+	// project said track authoring should be from the start.
 	const double Lift = Deg(25.0);
 	const double Drop = Deg(-34.0);
 	const double LoopRadius = 9.0;
 	const double LoopEase = 54.0;
 	const double TurnRadius = 32.0;
-	const double Bank = FMath::Atan((26.5 * 26.5) / (GravityMs2 * TurnRadius));
-
-	Track = FTrack();
+	const double BankDeg = FMath::RadiansToDegrees(
+		FMath::Atan((26.5 * 26.5) / (GravityMs2 * TurnRadius)));
 
 	// Solved, not eyeballed. At 55.0 m this layout ended 8.498 m BELOW its own
 	// station and ran the whole back half underground — the rail centreline
 	// bottomed out at -9.60 m, which is what "dropping through the floor after
 	// the loop" actually was. TrackClose.h's HeightTarget with the lift climb
-	// freed closes that to +0.0007 m at 75.11 m.
-	//
-	// It costs nothing in ride feel, and that is not luck: the chain hauls the
-	// train to the crest at 4 m/s whatever the crest's height, and the drop
-	// geometry below it never moved. Speed, both G peaks, lateral and the loop
-	// apex all come out bit-identical to the 55 m version. Only the height moved.
+	// freed closes that to +0.0007 m at 75.11 m, and costs nothing in ride feel
+	// because the chain reaches the crest at 4 m/s whatever height the crest is.
 	const double LiftClimb = 75.11;
 
-	Track.AddSegment(MakeStraight(20.0));            // station
-	EasedPitch(Track, Lift, 0.03);                   // into the climb
-	// One constant, used twice on purpose: the chain zone's extent is derived
-	// from where the climb ends, so a second literal here could drift out of
-	// step with the segment and strand the train short of the crest.
-	const double LiftTopS = Track.TotalLength() + LiftClimb;
-	Track.AddSegment(MakeStraight(LiftClimb));       // lift climb
-	EasedPitch(Track, Drop - Lift, 0.05);            // crest
-	Track.AddSegment(MakeStraight(12.0));            // drop
-	EasedPitch(Track, -Drop, 0.012);                 // pull-out
+	TArray<FTUTrackSegment> Out;
+
+	auto Straight = [&Out](double Length, ETUSegmentZone Zone = ETUSegmentZone::None,
+		float ZoneSpeed = 0.f) -> FTUTrackSegment&
+	{
+		FTUTrackSegment S;
+		S.Kind = ETUSegmentKind::Straight;
+		S.Length = static_cast<float>(Length);
+		S.Zone = Zone;
+		S.ZoneSpeed = ZoneSpeed;
+		return Out[Out.Add(S)];
+	};
+
+	// A vertical curve with no curvature step at either end: pitch curvature
+	// ramps 0 -> peak -> 0, so both joints stay continuous. Two Raw segments,
+	// because no Make* helper builds pitch curvature — the authored vocabulary
+	// is still yaw-only, which is exactly what ESegmentKind::Raw records.
+	auto EasedPitch = [&Out](double PitchDelta, double PeakCurvature,
+		ETUSegmentZone Zone = ETUSegmentZone::None, float ZoneSpeed = 0.f)
+	{
+		const double K = PitchDelta >= 0.0 ? PeakCurvature : -PeakCurvature;
+		const double L = FMath::Abs(PitchDelta) / PeakCurvature;
+
+		FTUTrackSegment In;
+		In.Kind = ETUSegmentKind::Raw;
+		In.Length = static_cast<float>(L);
+		In.PitchCurvatureEnd = static_cast<float>(K);
+		In.Zone = Zone;
+		In.ZoneSpeed = ZoneSpeed;
+		Out.Add(In);
+
+		FTUTrackSegment Tail;
+		Tail.Kind = ETUSegmentKind::Raw;
+		Tail.Length = static_cast<float>(L);
+		Tail.PitchCurvatureStart = static_cast<float>(K);
+		Tail.Zone = Zone;
+		Tail.ZoneSpeed = ZoneSpeed;
+		Out.Add(Tail);
+	};
+
+	// The chain has to run over the crest: the climb tops out before the track
+	// stops RISING, and releasing at the top of the straight strands the train.
+	// Zones are per segment now, so the chain covers the crest's first half —
+	// segment granularity rather than the old hand-picked "+24 m".
+	Straight(20.0, ETUSegmentZone::Lift, 4.f);            // station
+	EasedPitch(Lift, 0.03, ETUSegmentZone::Lift, 4.f);    // into the climb
+	Straight(LiftClimb, ETUSegmentZone::Lift, 4.f);       // lift climb
+	EasedPitch(Drop - Lift, 0.05, ETUSegmentZone::Lift, 4.f); // crest, chain still on
+	Straight(12.0);                                       // drop
+	EasedPitch(-Drop, 0.012);                             // pull-out
 
 	// Teardrop loop: curvature eases in and out rather than stepping, so the
 	// radius is large where the train is fastest. A circular loop at this speed
-	// would pull over 7 G at the bottom, which is why real loops are not circles.
+	// would pull over 9 G at the bottom, which is why real loops are not circles.
+	//
+	// Known defect, measured and left alone deliberately: being planar, its two
+	// legs pass 0.19 m from each other. See PHASE0_FINDINGS.md — every cheap fix
+	// was tried and costs more than the defect does.
 	{
-		FTrackSegment EaseIn;
-		EaseIn.Length = LoopEase;
-		EaseIn.PitchCurvatureEnd = 1.0 / LoopRadius;
-		Track.AddSegment(EaseIn);
+		FTUTrackSegment EaseIn;
+		EaseIn.Kind = ETUSegmentKind::Raw;
+		EaseIn.Length = static_cast<float>(LoopEase);
+		EaseIn.PitchCurvatureEnd = static_cast<float>(1.0 / LoopRadius);
+		Out.Add(EaseIn);
 
-		FTrackSegment Crown;
-		Crown.Length = 2.0 * Pi * LoopRadius - LoopEase;
-		Crown.PitchCurvatureStart = Crown.PitchCurvatureEnd = 1.0 / LoopRadius;
-		Track.AddSegment(Crown);
+		FTUTrackSegment Crown;
+		Crown.Kind = ETUSegmentKind::Raw;
+		Crown.Length = static_cast<float>(2.0 * Pi * LoopRadius - LoopEase);
+		Crown.PitchCurvatureStart = static_cast<float>(1.0 / LoopRadius);
+		Crown.PitchCurvatureEnd = static_cast<float>(1.0 / LoopRadius);
+		Out.Add(Crown);
 
-		FTrackSegment EaseOut;
-		EaseOut.Length = LoopEase;
-		EaseOut.PitchCurvatureStart = 1.0 / LoopRadius;
-		Track.AddSegment(EaseOut);
+		FTUTrackSegment EaseOut;
+		EaseOut.Kind = ETUSegmentKind::Raw;
+		EaseOut.Length = static_cast<float>(LoopEase);
+		EaseOut.PitchCurvatureStart = static_cast<float>(1.0 / LoopRadius);
+		Out.Add(EaseOut);
 	}
 
 	// Banked turn, clothoid in and out so neither curvature nor roll steps.
-	Track.AddSegment(MakeClothoid(26.0, 0.0, 1.0 / TurnRadius, 0.0, Bank));
-	Track.AddSegment(MakeArc(55.0, TurnRadius, Bank));
-	Track.AddSegment(MakeClothoid(26.0, 1.0 / TurnRadius, 0.0, Bank, 0.0));
+	// Path-relative, matching what this layout has always been: it follows an
+	// inversion, so the frame arrives carrying whatever twist the loop left it,
+	// and re-reading these numbers as bank-from-horizon would change the ride.
+	{
+		FTUTrackSegment In;
+		In.Kind = ETUSegmentKind::Clothoid;
+		In.Length = 26.f;
+		In.CurvatureStart = 0.f;
+		In.CurvatureEnd = static_cast<float>(1.0 / TurnRadius);
+		In.RollEndDegrees = static_cast<float>(BankDeg);
+		Out.Add(In);
 
-	BrakeStartS = Track.TotalLength();
-	Track.AddSegment(MakeStraight(70.0));            // brake run
+		FTUTrackSegment Hold;
+		Hold.Kind = ETUSegmentKind::Arc;
+		Hold.Length = 55.f;
+		Hold.Radius = static_cast<float>(TurnRadius);
+		Hold.RollStartDegrees = Hold.RollEndDegrees = static_cast<float>(BankDeg);
+		Out.Add(Hold);
+
+		FTUTrackSegment OutEase;
+		OutEase.Kind = ETUSegmentKind::Clothoid;
+		OutEase.Length = 26.f;
+		OutEase.CurvatureStart = static_cast<float>(1.0 / TurnRadius);
+		OutEase.CurvatureEnd = 0.f;
+		OutEase.RollStartDegrees = static_cast<float>(BankDeg);
+		Out.Add(OutEase);
+	}
+
+	Straight(70.0, ETUSegmentZone::Brake, 0.f);           // brake run
+	return Out;
+}
+
+void ATUCoasterRide::RebuildFromSegments()
+{
+	FTrackDocument Doc;
+	Doc.HeartlineHeight = 1.1;
+	Doc.Segments.reserve(static_cast<std::size_t>(Segments.Num()));
+	for (const FTUTrackSegment& S : Segments)
+	{
+		Doc.Segments.push_back(ToAuthored(S));
+	}
+
+	// Validate the AUTHORED list before building anything from it — the whole
+	// reason TrackValidate exists is that the geometry cannot tell you a radius
+	// was typed into a curvature field, it can only produce the consequences.
+	for (const FTrackDiagnostic& D : ValidateTrack(BuildSegments(Doc)))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Track segment %d: %s"),
+			static_cast<int32>(D.SegmentIndex), UTF8_TO_TCHAR(D.Message.c_str()));
+	}
+
+	Track = ::BuildTrack(Doc);
+	if (Track.NumSegments() == 0)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("TrackUnlimited: no usable segments; nothing to ride."));
+		return;
+	}
 
 	Train = MakeUnique<FTrain>(Track);
-	// The chain has to run over the crest: the climb tops out before the track
-	// stops rising, and releasing at the top of the straight strands the train.
-	Train->AddZone(MakeLift(0.0, LiftTopS + 24.0, 4.0, 6.0));
-	Train->AddZone(MakeBrake(BrakeStartS, Track.TotalLength(), 0.0, 6.0));
+
+	// Zones come from contiguous runs of segments carrying the same kind, so a
+	// lift is however many segments in a row say "Lift" and moving one is an
+	// edit rather than a recompile. Arc lengths are accumulated over the
+	// segments the track actually ACCEPTED, so a rejected degenerate segment
+	// cannot silently shift every zone boundary downstream of it.
+	{
+		ETUSegmentZone Open = ETUSegmentZone::None;
+		double OpenS = 0.0;
+		float OpenSpeed = 0.f;
+		double AccS = 0.0;
+
+		auto Close = [this, &Open, &OpenS, &OpenSpeed](double EndS)
+		{
+			if (Open == ETUSegmentZone::None || !(EndS > OpenS))
+			{
+				return;
+			}
+			// ponytail: grip fixed at 6 m/s^2 of tractive authority for every
+			// zone. It is the one number a real VFD panel would expose per
+			// drive; give it a field when something needs a weak chain or a
+			// hard launch, not before.
+			const double Grip = 6.0;
+			switch (Open)
+			{
+			case ETUSegmentZone::Lift:
+				Train->AddZone(MakeLift(OpenS, EndS, OpenSpeed, Grip));
+				break;
+			case ETUSegmentZone::Launch:
+				Train->AddZone(MakeLaunch(OpenS, EndS, OpenSpeed, Grip));
+				break;
+			case ETUSegmentZone::Brake:
+				Train->AddZone(MakeBrake(OpenS, EndS, OpenSpeed, Grip));
+				break;
+			default:
+				break;
+			}
+		};
+
+		for (int32 i = 0; i < Segments.Num(); ++i)
+		{
+			const double SegLength =
+				BuildSegment(Doc.Segments[static_cast<std::size_t>(i)]).Length;
+			if (!(SegLength > 0.0))
+			{
+				continue; // AddSegment refused it, so it occupies no arc length
+			}
+			if (Segments[i].Zone != Open)
+			{
+				Close(AccS);
+				Open = Segments[i].Zone;
+				OpenS = AccS;
+				OpenSpeed = Segments[i].ZoneSpeed;
+			}
+			AccS += SegLength;
+		}
+		Close(AccS);
+		BrakeStartS = AccS;
+		for (int32 i = Segments.Num() - 1; i >= 0; --i)
+		{
+			if (Segments[i].Zone != ETUSegmentZone::Brake)
+			{
+				break;
+			}
+			BrakeStartS -= BuildSegment(Doc.Segments[static_cast<std::size_t>(i)]).Length;
+		}
+	}
 	Train->Place(0.0, 0.0);
 
 	// Where the ride's lowest structural point sits relative to the heartline
@@ -176,19 +323,46 @@ void ATUCoasterRide::BuildTrack()
 		GroundOffsetM = -Lowest;
 	}
 
+	// Everything an author needs to know about the edit they just made, without
+	// riding it. Each of these was a defect that took riding the track to find:
+	// a discontinuity, an underground back half, and a loop passing through
+	// itself. None of them are visible in a G trace.
+	const FClosureGap Gap = MeasureClosure(Track, HeightTarget(Track));
+	const FClearanceReport Clear = AnalyseSelfClearance(Track, Profile, 1.0, 12.0);
 	UE_LOG(LogTemp, Log,
-		TEXT("TrackUnlimited: %d segments, %.1f m, curvature-continuous=%s, ")
-		TEXT("sits %.2f m above the heartline origin so the structure clears grade"),
+		TEXT("TrackUnlimited: %d segments, %.1f m, C2=%s | ends %+.2f m vs station | ")
+		TEXT("closest approach %.2f m%s | sits %.2f m above the heartline origin"),
 		static_cast<int32>(Track.NumSegments()), Track.TotalLength(),
-		Track.IsCurvatureContinuous() ? TEXT("yes") : TEXT("NO"), GroundOffsetM);
+		Track.IsCurvatureContinuous() ? TEXT("yes") : TEXT("NO"), Gap.HeightError,
+		Clear.ClosestApproach,
+		Clear.bStructureOverlaps ? TEXT(" (TRACK PASSES THROUGH ITSELF)") : TEXT(""),
+		GroundOffsetM);
 }
+
+#if WITH_EDITOR
+void ATUCoasterRide::PostEditChangeProperty(FPropertyChangedEvent& Event)
+{
+	Super::PostEditChangeProperty(Event);
+
+	if (bResetToReferenceLayout)
+	{
+		bResetToReferenceLayout = false;
+		Segments = ReferenceLayout();
+	}
+
+	// Rebuild on every edit so a typed number gets an answer immediately: total
+	// length, continuity, where it ends up, and whether it hits itself. The
+	// viewport stays a read-only preview — this is feedback, not manipulation.
+	RebuildFromSegments();
+}
+#endif
 
 FVector ATUCoasterRide::ToWorld(const FVec3& V) const
 {
 	// Mirror Y: the prototype frame is right-handed, Unreal is left-handed.
 	// Lift by GroundOffsetM: the heartline origin is RIDER height, not track
 	// height, so z = 0 in track space is about 1.7 m above the bottom of the
-	// spine. See BuildTrack for why this is computed rather than typed.
+	// spine. See RebuildFromSegments for why this is computed rather than typed.
 	return GetActorLocation() + FVector(V.X, -V.Y, V.Z + GroundOffsetM) * MetresToUU;
 }
 
@@ -210,7 +384,7 @@ FQuat ATUCoasterRide::ToWorldRotation(const FTrackFrame& Frame) const
 void ATUCoasterRide::BeginPlay()
 {
 	Super::BeginPlay();
-	BuildTrack();
+	RebuildFromSegments();
 
 	if (bDrawTrack)
 	{

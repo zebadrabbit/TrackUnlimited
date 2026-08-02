@@ -14,6 +14,7 @@
 
 #include "TrainPhysics/TrainPhysics.h"
 #include "TrackSpline/TrackProfile.h"
+#include "TUTrackSegment.h"
 
 #include "TUCoasterRide.generated.h"
 
@@ -30,6 +31,28 @@ public:
 
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaSeconds) override;
+
+#if WITH_EDITOR
+	/** Rebuild and re-check the moment a number changes, so editing has feedback. */
+	virtual void PostEditChangeProperty(FPropertyChangedEvent& Event) override;
+#endif
+
+	/**
+	 * The track, as an ordered list of typed segment parameters. This IS the
+	 * editing surface — the viewport is a read-only preview and always will be.
+	 *
+	 * Metres and degrees. Seeded in the constructor with the reference layout,
+	 * so there is something to ride and something to take apart.
+	 */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Track")
+	TArray<FTUTrackSegment> Segments;
+
+	/** Rebuild the reference layout, discarding edits. */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Track")
+	bool bResetToReferenceLayout = false;
+
+	/** The reference ride: station, eased 25 degree lift, drop, teardrop loop, banked turn, brakes. */
+	static TArray<FTUTrackSegment> ReferenceLayout();
 
 	/** Ride from the seat rather than watching from outside. */
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited")
@@ -48,7 +71,7 @@ public:
 	float RestartDelaySeconds = 3.f;
 
 private:
-	void BuildTrack();
+	void RebuildFromSegments();
 	void DrawTrack() const;
 
 	/** Prototype metres/right-handed -> Unreal centimetres/left-handed. */
@@ -73,12 +96,12 @@ private:
 	// track style against these rather than against numbers baked into a mesh.
 	FTrackProfile Profile;
 
-	// Landmarks along the track, in metres, filled in by BuildTrack.
+	// Landmarks along the track, in metres, filled in by RebuildFromSegments.
 	double BrakeStartS = 0.0;
 
 	// How far the ride's lowest structural point sits BELOW the heartline
 	// origin, in metres. Applied by ToWorld so that an actor at z = 0 puts the
-	// track on the ground instead of half through it. Computed in BuildTrack,
+	// track on the ground instead of half through it. Computed on rebuild,
 	// because it depends on the whole layout.
 	double GroundOffsetM = 0.0;
 	float StoppedFor = 0.f;

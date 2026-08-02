@@ -285,15 +285,23 @@ inline bool KindFromName(const std::string& S, ESegmentKind& Out)
 // later by whoever knows what the key means. Enough for a schema with no
 // nesting inside a segment, and it makes key ORDER irrelevant, which a
 // hand-edited file will eventually depend on.
-struct FField
+//
+// NOT called FField, and not because the prefix is ugly. UE declares a global
+// `FField` in UObject/Field.h, so inside the engine build that name wins the
+// lookup here and every use silently resolves to the wrong type. Standalone
+// clang never sees it, so it compiles clean right up until the port. This is
+// the second time — `FFrame` collided with the Blueprint VM's and became
+// `FTrackFrame`. These headers are engine-free but they are COMPILED INTO the
+// engine, so a name only needs to be unique against all of UE.
+struct FTrackIOField
 {
     std::string Key;
     std::string Value;
 };
 
-inline const std::string* Find(const std::vector<FField>& Fields, const char* Key)
+inline const std::string* Find(const std::vector<FTrackIOField>& Fields, const char* Key)
 {
-    for (const FField& F : Fields)
+    for (const FTrackIOField& F : Fields)
     {
         if (F.Key == Key)
         {
@@ -427,7 +435,7 @@ struct FCursor
     // A flat object: {"k": scalar, ...}. Rejects nesting rather than skipping
     // it, so a file this parser cannot fully represent is refused, not
     // half-read.
-    bool ReadFlatObject(std::vector<FField>& Out)
+    bool ReadFlatObject(std::vector<FTrackIOField>& Out)
     {
         if (!Expect('{'))
         {
@@ -440,7 +448,7 @@ struct FCursor
         }
         for (;;)
         {
-            FField F;
+            FTrackIOField F;
             if (!ReadString(F.Key) || !Expect(':'))
             {
                 return false;
@@ -467,7 +475,7 @@ struct FCursor
 // zero-on-failure become a plausible-looking value. A "length": "abc" that
 // silently reads as 0 is exactly the class of bug PHASE0_FINDINGS records for
 // MakeArc(L, 0): visibly broken beats plausibly wrong.
-inline bool ReadNumber(const std::vector<FField>& Fields, const char* Key, double& Out,
+inline bool ReadNumber(const std::vector<FTrackIOField>& Fields, const char* Key, double& Out,
                        bool bRequired, std::string& OutError)
 {
     const std::string* Text = Find(Fields, Key);
@@ -643,7 +651,7 @@ inline bool ParseTrackJson(const std::string& Text, FTrackDocument& Out, std::st
         return false;
     }
 
-    std::vector<std::vector<FField>> SegmentFields;
+    std::vector<std::vector<FTrackIOField>> SegmentFields;
     bool bSawSegments = false;
 
     for (;;)
@@ -671,7 +679,7 @@ inline bool ParseTrackJson(const std::string& Text, FTrackDocument& Out, std::st
             {
                 for (;;)
                 {
-                    std::vector<FField> Fields;
+                    std::vector<FTrackIOField> Fields;
                     if (!C.ReadFlatObject(Fields))
                     {
                         OutError = C.Error;
@@ -762,7 +770,7 @@ inline bool ParseTrackJson(const std::string& Text, FTrackDocument& Out, std::st
 
     for (std::size_t i = 0; i < SegmentFields.size(); ++i)
     {
-        const std::vector<FField>& F = SegmentFields[i];
+        const std::vector<FTrackIOField>& F = SegmentFields[i];
         const std::string* KindText = Find(F, "kind");
         if (KindText == nullptr)
         {
