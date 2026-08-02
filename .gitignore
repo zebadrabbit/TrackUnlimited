@@ -1,0 +1,29 @@
+# --- Unreal Engine generated ---
+Binaries/
+Build/
+DerivedDataCache/
+Intermediate/
+Saved/
+*.VC.db
+*.VC.opendb
+
+# --- Visual Studio / Rider / IDEs ---
+.vs/
+.vsconfig
+*.sln
+*.suo
+*.opensdf
+*.sdf
+.idea/
+.vscode/
+
+# --- Packaging ---
+Builds/
+Packaged/
+
+# --- OS cruft ---
+.DS_Store
+Thumbs.db
+
+# --- Local-only ---
+*.log
