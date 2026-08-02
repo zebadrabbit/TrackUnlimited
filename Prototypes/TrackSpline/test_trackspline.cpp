@@ -566,11 +566,13 @@ static FTrackDocument SampleDocument()
 {
     FTrackDocument Doc;
     Doc.HeartlineHeight = 1.1;
+    // Angles are DEGREES on the authoring side — see TrackIO.h. Curvature is
+    // still 1/m, because it is not an angle.
     Doc.Segments = {
         AuthorStraight(40.0),
-        AuthorClothoid(20.0, 0.0, 1.0 / 30.0, 0.0, 0.4),
-        AuthorArc(50.0, 30.0, 0.4),
-        AuthorHelix(20.0, 15.0 * Pi / 180.0, 1.5, 0.25),
+        AuthorClothoid(20.0, 0.0, 1.0 / 30.0, 0.0, 25.0),
+        AuthorArc(50.0, 30.0, 25.0),
+        AuthorHelix(20.0, 15.0, 1.5, 12.0),
     };
     // A hill. No Make* helper builds pitch curvature, so this is exactly the
     // case ESegmentKind::Raw exists for.
@@ -579,7 +581,7 @@ static FTrackDocument SampleDocument()
     Hill.PitchCurvatureStart = Hill.PitchCurvatureEnd = -1.0 / 45.0;
     Doc.Segments.push_back(AuthorRaw(Hill));
     // And a world-referenced bank, so the mode survives the file too.
-    FAuthoredSegment Banked = AuthorArc(30.0, -40.0, 0.3);
+    FAuthoredSegment Banked = AuthorArc(30.0, -40.0, 18.0);
     Banked.RollMode = ERollMode::WorldBank;
     Doc.Segments.push_back(Banked);
     return Doc;
@@ -706,15 +708,15 @@ static void TestDefaultsAreOmittedSoNewFieldsCostNothing()
     // Absent optional fields load as their defaults rather than as an error.
     FTrackDocument Back;
     assert(ParseTrackJson(Text, Back, Err));
-    assert(Back.Segments[1].RollStart == 0.0);
+    assert(Back.Segments[1].RollStartDegrees == 0.0);
     assert(Back.Segments[1].RollMode == ERollMode::PathRelative);
 
     // A constant roll is one field; a ramping roll is two. The common case
     // should not cost two lines of noise.
-    Doc.Segments[1].RollStart = Doc.Segments[1].RollEnd = 0.5;
+    Doc.Segments[1].RollStartDegrees = Doc.Segments[1].RollEndDegrees = 30.0;
     assert(WriteTrackJson(Doc, Text, Err));
-    assert(Text.find("\"roll\":") != std::string::npos);
-    assert(Text.find("rollStart") == std::string::npos);
+    assert(Text.find("\"rollDeg\":") != std::string::npos);
+    assert(Text.find("rollStartDeg") == std::string::npos);
 }
 
 static void TestUnknownFieldsLoadButUnknownGeometryDoesNot()
@@ -794,17 +796,25 @@ static void TestAuthoredParametersSurviveWhereDerivedOnesWouldNot()
     // — and not the length/curvature/torsion triple the integrator runs on,
     // which is correct, equivalent, and un-editable.
     FTrackDocument Doc;
-    Doc.Segments = {AuthorHelix(20.0, 15.0 * Pi / 180.0, 1.5, 0.25)};
+    Doc.Segments = {AuthorHelix(20.0, 15.0, 1.5, 12.0)};
     std::string Text, Err;
     assert(WriteTrackJson(Doc, Text, Err));
     assert(Text.find("\"radius\": 20") != std::string::npos);
     assert(Text.find("\"turns\": 1.5") != std::string::npos);
     assert(Text.find("torsion") == std::string::npos); // derived, so never stored
 
+    // Degrees, and readable ones. Stored in radians this line would read
+    // "climbAngleDeg": 0.26179938779914941 and tell a human nothing. Angles
+    // live in degrees all the way to the struct, so the conversion runs one
+    // direction only and the round trip below is exact rather than close.
+    assert(Text.find("\"climbAngleDeg\": 15") != std::string::npos);
+    assert(Text.find("\"rollDeg\": 12") != std::string::npos);
+
     FTrackDocument Back;
     assert(ParseTrackJson(Text, Back, Err));
     assert(Back.Segments[0].Radius == 20.0);
     assert(Back.Segments[0].Turns == 1.5);
+    assert(Back.Segments[0].ClimbAngleDegrees == 15.0);
 
     // Rebuilt through the same MakeHelix, so the derived form is bit-identical
     // rather than merely close.

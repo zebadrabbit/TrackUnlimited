@@ -31,7 +31,17 @@
 // working in git; a format that rewrites 600 floats when you touch one field is
 // not diffable in any useful sense.
 //
-// Units: metres, radians. Same frame conventions as TrackSpline.h.
+// Units: metres, and **degrees** for angles — the one place in this codebase
+// that is not radians, and deliberately so. Nobody types 0.26179938779914941;
+// they type 15. Angles are degrees in FAuthoredSegment and degrees in the file,
+// and BuildSegment converts to radians on the way into the geometry, which is
+// radians throughout as usual. Field and key names carry the unit so a hand
+// edit cannot get it wrong.
+//
+// The conversion runs ONE direction only. That is what keeps the round trip
+// exact: degrees -> radians -> degrees would lose an ulp, so it never happens.
+// This is the same "convert at the boundary, never inside the math" rule
+// CLAUDE.md already states for the UE port's units and handedness.
 
 #pragma once
 
@@ -75,19 +85,29 @@ struct FAuthoredSegment
 {
     ESegmentKind Kind = ESegmentKind::Straight;
 
-    double Length = 0.0;         // straight, arc, clothoid. Helix derives it.
-    double Radius = 0.0;         // arc, helix. +ve left, -ve right.
-    double CurvatureStart = 0.0; // clothoid
-    double CurvatureEnd = 0.0;   // clothoid
-    double ClimbAngle = 0.0;     // helix, radians, +ve ascending
-    double Turns = 0.0;          // helix, revolutions
+    double Length = 0.0;            // straight, arc, clothoid. Helix derives it.
+    double Radius = 0.0;            // arc, helix. +ve left, -ve right.
+    // Clothoid endpoints, 1/m. NOT angles, so they stay 1/m — and not radii
+    // either, deliberately. An easement out of a straight has an endpoint with
+    // NO radius, and curvature 0 says that as an ordinary value where radius
+    // would need infinity or a sentinel. It is the same reason the geometry
+    // stores curvature at all (TrackSpline.h). The cost is that a transition
+    // into R=30 reads as 0.033333333333333333 in the file rather than 30; the
+    // editor should show radius with a "straight" option and convert.
+    double CurvatureStart = 0.0;
+    double CurvatureEnd = 0.0;
+    double ClimbAngleDegrees = 0.0; // helix, +ve ascending
+    double Turns = 0.0;             // helix, revolutions
 
-    double RollStart = 0.0; // every kind
-    double RollEnd = 0.0;
+    double RollStartDegrees = 0.0; // every kind
+    double RollEndDegrees = 0.0;
     ERollMode RollMode = ERollMode::PathRelative;
 
-    FTrackSegment RawSegment; // Kind == Raw only
+    FTrackSegment RawSegment; // Kind == Raw only. Its own fields stay radians.
 };
+
+constexpr double AuthoredDegreesToRadians = 3.14159265358979323846 / 180.0;
+constexpr double RadiansToAuthoredDegrees = 180.0 / 3.14159265358979323846;
 
 // The authored row turned into the thing the integrator runs. One direction
 // only, deliberately: there is no FromSegment, because deriving "radius 20,
@@ -108,7 +128,7 @@ inline FTrackSegment BuildSegment(const FAuthoredSegment& A)
         Seg = MakeClothoid(A.Length, A.CurvatureStart, A.CurvatureEnd);
         break;
     case ESegmentKind::Helix:
-        Seg = MakeHelix(A.Radius, A.ClimbAngle, A.Turns);
+        Seg = MakeHelix(A.Radius, A.ClimbAngleDegrees * AuthoredDegreesToRadians, A.Turns);
         break;
     case ESegmentKind::Raw:
         Seg = A.RawSegment;
@@ -116,65 +136,70 @@ inline FTrackSegment BuildSegment(const FAuthoredSegment& A)
     }
     // Roll is applied here rather than through the Make* roll arguments so that
     // every kind carries it identically and Raw cannot disagree with the rest.
-    Seg.RollStart = A.RollStart;
-    Seg.RollEnd = A.RollEnd;
+    // This is also the only place degrees become radians.
+    Seg.RollStart = A.RollStartDegrees * AuthoredDegreesToRadians;
+    Seg.RollEnd = A.RollEndDegrees * AuthoredDegreesToRadians;
     Seg.RollMode = A.RollMode;
     return Seg;
 }
 
-// Convenience constructors mirroring the Make* helpers, so authoring an
-// FAuthoredSegment reads the same as authoring an FTrackSegment.
-inline FAuthoredSegment AuthorStraight(double Length, double Roll = 0.0)
+// Convenience constructors mirroring the Make* helpers. Note the roll and climb
+// arguments are DEGREES here where the Make* equivalents take radians — these
+// are the authoring side of the boundary. The names say so.
+inline FAuthoredSegment AuthorStraight(double Length, double RollDegrees = 0.0)
 {
     FAuthoredSegment A;
     A.Kind = ESegmentKind::Straight;
     A.Length = Length;
-    A.RollStart = A.RollEnd = Roll;
+    A.RollStartDegrees = A.RollEndDegrees = RollDegrees;
     return A;
 }
 
-inline FAuthoredSegment AuthorArc(double Length, double Radius, double Roll = 0.0)
+inline FAuthoredSegment AuthorArc(double Length, double Radius, double RollDegrees = 0.0)
 {
     FAuthoredSegment A;
     A.Kind = ESegmentKind::Arc;
     A.Length = Length;
     A.Radius = Radius;
-    A.RollStart = A.RollEnd = Roll;
+    A.RollStartDegrees = A.RollEndDegrees = RollDegrees;
     return A;
 }
 
 inline FAuthoredSegment AuthorClothoid(double Length, double CurvatureStart, double CurvatureEnd,
-                                       double RollStart = 0.0, double RollEnd = 0.0)
+                                       double RollStartDegrees = 0.0, double RollEndDegrees = 0.0)
 {
     FAuthoredSegment A;
     A.Kind = ESegmentKind::Clothoid;
     A.Length = Length;
     A.CurvatureStart = CurvatureStart;
     A.CurvatureEnd = CurvatureEnd;
-    A.RollStart = RollStart;
-    A.RollEnd = RollEnd;
+    A.RollStartDegrees = RollStartDegrees;
+    A.RollEndDegrees = RollEndDegrees;
     return A;
 }
 
-inline FAuthoredSegment AuthorHelix(double Radius, double ClimbAngle, double Turns,
-                                    double Roll = 0.0)
+inline FAuthoredSegment AuthorHelix(double Radius, double ClimbAngleDegrees, double Turns,
+                                    double RollDegrees = 0.0)
 {
     FAuthoredSegment A;
     A.Kind = ESegmentKind::Helix;
     A.Radius = Radius;
-    A.ClimbAngle = ClimbAngle;
+    A.ClimbAngleDegrees = ClimbAngleDegrees;
     A.Turns = Turns;
-    A.RollStart = A.RollEnd = Roll;
+    A.RollStartDegrees = A.RollEndDegrees = RollDegrees;
     return A;
 }
 
+// The one place the conversion runs backwards, because the caller already holds
+// radians. Confined to Raw, which is import and hand-tuned geometry — never a
+// value a human typed, so there is no authored form to preserve exactly.
 inline FAuthoredSegment AuthorRaw(const FTrackSegment& Seg)
 {
     FAuthoredSegment A;
     A.Kind = ESegmentKind::Raw;
     A.RawSegment = Seg;
-    A.RollStart = Seg.RollStart;
-    A.RollEnd = Seg.RollEnd;
+    A.RollStartDegrees = Seg.RollStart * RadiansToAuthoredDegrees;
+    A.RollEndDegrees = Seg.RollEnd * RadiansToAuthoredDegrees;
     A.RollMode = Seg.RollMode;
     return A;
 }
@@ -530,12 +555,12 @@ inline bool WriteTrackJson(const FTrackDocument& Doc, std::string& Out, std::str
             Add("curvatureEnd", A.CurvatureEnd);
             break;
         case ESegmentKind::Helix:
-            if (!Check(A.Radius, "radius", i) || !Check(A.ClimbAngle, "climbAngle", i)
+            if (!Check(A.Radius, "radius", i) || !Check(A.ClimbAngleDegrees, "climbAngleDeg", i)
                 || !Check(A.Turns, "turns", i)) { return false; }
             // No length: it is 2*pi*R*turns/cos(climb), and a derived value in
             // a file is a value that can disagree with its own source.
             Add("radius", A.Radius);
-            Add("climbAngle", A.ClimbAngle);
+            Add("climbAngleDeg", A.ClimbAngleDegrees);
             Add("turns", A.Turns);
             break;
         case ESegmentKind::Raw:
@@ -567,23 +592,24 @@ inline bool WriteTrackJson(const FTrackDocument& Doc, std::string& Out, std::str
         }
         }
 
-        if (!Check(A.RollStart, "rollStart", i) || !Check(A.RollEnd, "rollEnd", i))
+        if (!Check(A.RollStartDegrees, "rollStartDeg", i)
+            || !Check(A.RollEndDegrees, "rollEndDeg", i))
         {
             return false;
         }
         // One field when the roll is constant, two when it ramps. The common
         // case is constant, and it should not cost two lines of noise.
-        if (A.RollStart == A.RollEnd)
+        if (A.RollStartDegrees == A.RollEndDegrees)
         {
-            if (A.RollStart != 0.0)
+            if (A.RollStartDegrees != 0.0)
             {
-                Add("roll", A.RollStart);
+                Add("rollDeg", A.RollStartDegrees);
             }
         }
         else
         {
-            Add("rollStart", A.RollStart);
-            Add("rollEnd", A.RollEnd);
+            Add("rollStartDeg", A.RollStartDegrees);
+            Add("rollEndDeg", A.RollEndDegrees);
         }
         if (A.RollMode == ERollMode::WorldBank)
         {
@@ -779,7 +805,7 @@ inline bool ParseTrackJson(const std::string& Text, FTrackDocument& Out, std::st
             break;
         case ESegmentKind::Helix:
             bOk = ReadNumber(F, "radius", A.Radius, true, FieldError)
-                  && ReadNumber(F, "climbAngle", A.ClimbAngle, true, FieldError)
+                  && ReadNumber(F, "climbAngleDeg", A.ClimbAngleDegrees, true, FieldError)
                   && ReadNumber(F, "turns", A.Turns, true, FieldError);
             break;
         case ESegmentKind::Raw:
@@ -793,10 +819,10 @@ inline bool ParseTrackJson(const std::string& Text, FTrackDocument& Out, std::st
         }
 
         double Roll = 0.0;
-        bOk = bOk && ReadNumber(F, "roll", Roll, false, FieldError);
-        A.RollStart = A.RollEnd = Roll;
-        bOk = bOk && ReadNumber(F, "rollStart", A.RollStart, false, FieldError)
-              && ReadNumber(F, "rollEnd", A.RollEnd, false, FieldError);
+        bOk = bOk && ReadNumber(F, "rollDeg", Roll, false, FieldError);
+        A.RollStartDegrees = A.RollEndDegrees = Roll;
+        bOk = bOk && ReadNumber(F, "rollStartDeg", A.RollStartDegrees, false, FieldError)
+              && ReadNumber(F, "rollEndDeg", A.RollEndDegrees, false, FieldError);
 
         if (!bOk)
         {
