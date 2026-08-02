@@ -1,7 +1,11 @@
 // Live NL2 telemetry recorder and comparison tool.
 // Build:  clang++ -std=c++17 -Wall -Wextra -o record.exe record.cpp -lws2_32
 // Run:    .\record.exe [--port 15151] [--host 127.0.0.1] [--seconds 90]
-//                      [--track ../../NL2/trackdata.csv] [--out telemetry.csv]
+//                      [--track <spline.csv>] [--out telemetry.csv]
+//
+// --track is OPTIONAL and only adds the live on-screen comparison. The
+// telemetry is recorded either way, and the calibration and comparison tools
+// take the track separately.
 //
 // Keep the .exe on the output name. `-o record` emits an EXTENSIONLESS binary:
 // Git Bash will happily run it, but PowerShell and Explorer do not recognise it
@@ -233,34 +237,41 @@ static bool BuildIndex(const std::string& CsvPath, FTrackIndex& Out, std::string
 // Raw log plus, where the track is available, our own model's answer at the
 // same place. State flags are included because "why is this all zeros" is
 // answered by them and by nothing else.
-static bool WriteLog(const std::string& Path, const std::vector<FNL2Telemetry>& Log,
-                     const FTrackIndex& Index, bool bHaveTrack)
+static const char* const LogHeader =
+    "frame\tplay\tonride\tspeed\tposX\tposY\tposZ\tgx\tgy\tgz"
+    "\tarcS\tmiss\ttrackPitchDeg\tourLateral\tourVertical\n";
+
+// One row, flushed immediately.
+//
+// The log used to be assembled in memory and written in a single pass AFTER
+// the recording loop finished — which meant Ctrl-C, the very thing the banner
+// tells you to press to stop early, killed the process before it ever reached
+// the write and threw the entire session away. Three recordings were lost to
+// that before it was noticed, and the tool's own instructions caused every one
+// of them.
+//
+// Flushing per row costs nothing at ~100 Hz on a couple of hundred bytes, and
+// it means the file on disk is always a complete record of everything captured
+// so far. Stop the recording however you like, including by closing the window.
+static void WriteRow(std::ofstream& Out, const FNL2Telemetry& T, const FTrackIndex& Index,
+                     bool bHaveTrack)
 {
-    std::ofstream Out(Path.c_str());
-    if (!Out)
+    double S = -1.0, Miss = -1.0, PitchDeg = 0.0, OurLat = 0.0, OurVert = 0.0;
+    if (bHaveTrack && Index.Nearest(T.Position, S, Miss))
     {
-        return false;
+        const FTrackFrame F = Index.Track.EvaluateAt(S);
+        const FGForces G = FeltG(F, static_cast<double>(T.Speed));
+        PitchDeg = std::asin(std::max(-1.0, std::min(1.0, F.Tangent.Z))) * 180.0 / Pi;
+        OurLat = G.Lateral;
+        OurVert = G.Vertical;
     }
-    Out << "frame\tplay\tonride\tspeed\tposX\tposY\tposZ\tgx\tgy\tgz"
-           "\tarcS\tmiss\ttrackPitchDeg\tourLateral\tourVertical\n";
-    for (const FNL2Telemetry& T : Log)
-    {
-        double S = -1.0, Miss = -1.0, PitchDeg = 0.0, OurLat = 0.0, OurVert = 0.0;
-        if (bHaveTrack && Index.Nearest(T.Position, S, Miss))
-        {
-            const FTrackFrame F = Index.Track.EvaluateAt(S);
-            const FGForces G = FeltG(F, static_cast<double>(T.Speed));
-            PitchDeg = std::asin(std::max(-1.0, std::min(1.0, F.Tangent.Z))) * 180.0 / Pi;
-            OurLat = G.Lateral;
-            OurVert = G.Vertical;
-        }
-        Out << T.Frame << '\t' << (T.InPlayMode() ? 1 : 0) << '\t' << (T.Onride() ? 1 : 0) << '\t'
-            << T.Speed << '\t' << T.Position.X << '\t' << T.Position.Y << '\t' << T.Position.Z
-            << '\t' << T.GX << '\t' << T.GY << '\t' << T.GZ << '\t' << S << '\t' << Miss << '\t'
-            << PitchDeg << '\t' << OurLat << '\t' << OurVert << '\n';
-    }
-    return Out.good();
+    Out << T.Frame << '\t' << (T.InPlayMode() ? 1 : 0) << '\t' << (T.Onride() ? 1 : 0) << '\t'
+        << T.Speed << '\t' << T.Position.X << '\t' << T.Position.Y << '\t' << T.Position.Z
+        << '\t' << T.GX << '\t' << T.GY << '\t' << T.GZ << '\t' << S << '\t' << Miss << '\t'
+        << PitchDeg << '\t' << OurLat << '\t' << OurVert << '\n';
+    Out.flush();
 }
+
 
 // ---------------------------------------------------------------------- main
 
@@ -279,7 +290,10 @@ int main(int argc, char** argv)
     std::string Host = "127.0.0.1";
     int Port = 15151;
     double Seconds = 90.0;
-    std::string TrackPath = "../../NL2/trackdata.csv";
+    // No default. The old one pointed at a specific file that would eventually
+    // be replaced, and a stale path produces a "not loaded" line that reads like
+    // the tool is broken when it is simply looking in the wrong place.
+    std::string TrackPath;
     std::string OutPath = "telemetry.csv";
 
     for (int i = 1; i + 1 < argc; i += 2)
@@ -304,8 +318,15 @@ int main(int argc, char** argv)
     }
     else
     {
-        std::printf("track: not loaded (%s)\n  — recording telemetry only, no comparison\n",
-                    Error.c_str());
+        // Worded carefully: this is NOT a failure, and the first version read
+        // like one. The recording is unaffected — a track only adds the live
+        // side-by-side comparison, and the calibration and comparison tools
+        // take the track separately anyway. Someone who reads this as "it did
+        // not work" abandons a perfectly good session.
+        std::printf("track: none loaded — %s\n", Error.c_str());
+        std::printf("  This does NOT affect the recording. telemetry.csv is written either\n"
+                    "  way; a track only adds the live on-screen comparison. Pass\n"
+                    "  --track <file> if you want that too.\n");
     }
 
     // Announced BEFORE the attempt, not after it succeeds. connect() blocks, and
@@ -333,7 +354,20 @@ int main(int argc, char** argv)
         return 1;
     }
     std::printf("NL2 version %u.%u.%u.%u\n", Msg.Data[0], Msg.Data[1], Msg.Data[2], Msg.Data[3]);
-    std::printf("\nRide the coaster now. Recording for %.0f s — Ctrl-C to stop early.\n"
+    // Opened BEFORE the loop and written to row by row, so stopping early keeps
+    // everything captured up to that moment.
+    std::ofstream Live(OutPath.c_str());
+    if (!Live)
+    {
+        std::printf("cannot write %s — is it open in another program?\n", OutPath.c_str());
+        return 1;
+    }
+    Live << LogHeader;
+    Live.flush();
+
+    std::printf("\nRide the coaster now. Recording for %.0f s.\n"
+                "Ctrl-C stops early and KEEPS everything recorded so far — the file is\n"
+                "written as it goes, not at the end.\n"
                 "Sit still on level track for a moment first: that is what identifies\n"
                 "which G axis carries gravity.\n\n",
                 Seconds);
@@ -384,6 +418,7 @@ int main(int argc, char** argv)
         }
         LastFrame = T.Frame;
         Log.push_back(T);
+        WriteRow(Live, T, Index, bHaveTrack);
         PlayModeSamples += T.InPlayMode() ? 1 : 0;
 
         if (Log.size() % 100 == 0)
@@ -404,10 +439,19 @@ int main(int argc, char** argv)
     // that produced nothing useful is exactly the run whose raw bytes you want
     // to look at, so bailing out without writing the file discards the evidence
     // at the one moment it matters.
-    const bool bWroteLog = WriteLog(OutPath, Log, Index, bHaveTrack);
+    // Already on disk, row by row, since before the first sample arrived. This
+    // only closes it and confirms.
+    Live.flush();
+    const bool bWroteLog = Live.good();
+    Live.close();
     if (bWroteLog)
     {
         std::printf("wrote %s (%zu rows)\n", OutPath.c_str(), Log.size());
+    }
+    else
+    {
+        std::printf("PROBLEM writing %s — the rows up to the failure are still there.\n",
+                    OutPath.c_str());
     }
 
     // A recording of a paused game or a menu screen is all zeros, and every
