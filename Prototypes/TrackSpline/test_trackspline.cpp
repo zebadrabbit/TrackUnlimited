@@ -826,6 +826,122 @@ static void TestAuthoredParametersSurviveWhereDerivedOnesWouldNot()
     assert(Rebuilt.YawCurvatureStart == Original.YawCurvatureStart);
 }
 
+// ----------------------------------------------------------- self-clearance
+
+static void TestTrackPassingThroughItselfIsVisibleToNothingElse()
+{
+    // A planar vertical loop — pure pitch curvature, no lateral component — is
+    // exactly the shape the vertical slice shipped, and its two legs occupy the
+    // same space. Every segment is individually fine, every joint is
+    // continuous, every G reading is plausible, and the rider goes through
+    // solid steel. It took riding it to notice.
+    const double R = 9.0, Ease = 54.0;
+    FTrack Loop;
+    Loop.AddSegment(MakeStraight(30.0));
+    {
+        FTrackSegment A;
+        A.Length = Ease;
+        A.PitchCurvatureEnd = 1.0 / R;
+        Loop.AddSegment(A);
+        FTrackSegment B;
+        B.Length = 2.0 * Pi * R - Ease;
+        B.PitchCurvatureStart = B.PitchCurvatureEnd = 1.0 / R;
+        Loop.AddSegment(B);
+        FTrackSegment C;
+        C.Length = Ease;
+        C.PitchCurvatureStart = 1.0 / R;
+        Loop.AddSegment(C);
+    }
+    Loop.AddSegment(MakeStraight(30.0));
+
+    // Everything that existed before says this track is fine.
+    assert(Loop.IsCurvatureContinuous());
+    const FTrackProfile Profile;
+
+    const FClearanceReport Bad = AnalyseSelfClearance(Loop, Profile);
+    assert(Bad.bStructureOverlaps);
+    assert(Bad.ClosestApproach < TrackWidth(Profile));
+    // The two places are far apart along the track and on top of each other in
+    // space — which is the entire signature of the fault.
+    assert(Bad.AndS - Bad.AtS > 12.0);
+
+    // Torsion turns the planar loop into a shallow horizontal-axis helix that
+    // side-steps as it goes round, and the legs separate. ChainCurvature is what
+    // keeps the joints continuous while it does — without it the curvature
+    // vector restarts its rotation at every segment.
+    FTrack Stepped;
+    Stepped.AddSegment(MakeStraight(30.0));
+    {
+        const double Tor = 0.003;
+        FTrackSegment A;
+        A.Length = Ease;
+        A.PitchCurvatureEnd = 1.0 / R;
+        A.Torsion = Tor;
+        Stepped.AddSegment(A);
+        FTrackSegment B;
+        B.Length = 2.0 * Pi * R - Ease;
+        B.Torsion = Tor;
+        ChainCurvature(A, B);
+        B.YawCurvatureEnd = B.YawCurvatureStart;
+        B.PitchCurvatureEnd = B.PitchCurvatureStart;
+        Stepped.AddSegment(B);
+        FTrackSegment C;
+        C.Length = Ease;
+        C.Torsion = Tor;
+        ChainCurvature(B, C);
+        Stepped.AddSegment(C);
+    }
+    Stepped.AddSegment(MakeStraight(30.0));
+
+    assert(Stepped.IsCurvatureContinuous()); // ChainCurvature earning its keep
+    const FClearanceReport Good = AnalyseSelfClearance(Stepped, Profile);
+    assert(!Good.bStructureOverlaps);
+    assert(Good.ClosestApproach > Bad.ClosestApproach * 5.0);
+
+    std::printf("  clearance: planar loop passes %.3f m from itself (rails are %.3f m wide); "
+                "torsion 0.003 opens it to %.3f m\n",
+                Bad.ClosestApproach, TrackWidth(Profile), Good.ClosestApproach);
+}
+
+static void TestChainCurvatureIsWhatMakesTorsionComposable()
+{
+    // Torsion's phase is measured from each segment's own start, so a segment
+    // exits with its curvature vector rotated and the next one begins rotating
+    // again from zero. Three torsioned segments in a row therefore step at every
+    // joint — and the geometry still looks plausible, which is why the check
+    // matters more than the eye.
+    const double Tor = 0.004;
+    FTrackSegment A = MakeArc(40.0, 25.0);
+    A.Torsion = Tor;
+    FTrackSegment Naive = MakeArc(40.0, 25.0);
+    Naive.Torsion = Tor;
+
+    FTrack Stepped;
+    Stepped.AddSegment(A);
+    Stepped.AddSegment(Naive);
+    assert(!Stepped.IsCurvatureContinuous()); // the trap, caught
+
+    FTrackSegment Chained = Naive;
+    ChainCurvature(A, Chained);
+    // Holding the magnitude across the joint: end matches start, and the
+    // segment's own torsion carries the rotation on from there.
+    Chained.YawCurvatureEnd = Chained.YawCurvatureStart;
+    Chained.PitchCurvatureEnd = Chained.PitchCurvatureStart;
+
+    FTrack Smooth;
+    Smooth.AddSegment(A);
+    Smooth.AddSegment(Chained);
+    assert(Smooth.IsCurvatureContinuous());
+
+    // And the curvature MAGNITUDE is unchanged by the hand-off — only its
+    // direction moved. A chain that quietly rescaled the curvature would pass
+    // the continuity check and change the ride.
+    double Y0 = 0.0, P0 = 0.0, Y1 = 0.0, P1 = 0.0;
+    CurvatureAt(A, 0.0, Y0, P0);
+    CurvatureAt(Chained, 0.0, Y1, P1);
+    assert(Near(std::sqrt(Y0 * Y0 + P0 * P0), std::sqrt(Y1 * Y1 + P1 * P1), 1e-12));
+}
+
 // ------------------------------------------------------------ circuit closure
 
 // A four-corner circuit: straight, 90-degree eased corner, four times over.
@@ -1513,6 +1629,8 @@ int main()
     TestUnknownFieldsLoadButUnknownGeometryDoesNot();
     TestMalformedFilesAreRejectedNotAbsorbed();
     TestAuthoredParametersSurviveWhereDerivedOnesWouldNot();
+    TestTrackPassingThroughItselfIsVisibleToNothingElse();
+    TestChainCurvatureIsWhatMakesTorsionComposable();
     TestSymmetricCircuitAlreadyCloses();
     TestClosesTheGapTheFindingsMeasured();
     TestHeightGapIsCalledOutSeparately();

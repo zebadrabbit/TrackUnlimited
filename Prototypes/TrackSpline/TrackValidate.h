@@ -25,6 +25,7 @@
 
 #pragma once
 
+#include "TrackProfile.h"
 #include "TrackSpline.h"
 
 #include <cmath>
@@ -458,6 +459,93 @@ inline FResolvedRollReport AnalyseResolvedRollRate(const FTrack& Track, double S
 // reports as one very large rate over one step rather than as an infinity. That
 // is the right shape for a warning and the wrong shape for a precise number —
 // ValidateTrack is what locates steps exactly.
+
+// ------------------------------------------------------------ self-clearance
+
+// Does the track pass through itself?
+//
+// The third member of the family this file keeps finding. Felt G cannot see
+// roll rate. The authored segment list cannot see the roll the geometry
+// contributes. And NOTHING in either can see that two parts of the track occupy
+// the same space — every segment is individually perfect, every joint is
+// continuous, every G reading is plausible, and the rider is passing through
+// solid steel.
+//
+// Found the hard way: the vertical slice's loop is built from pure pitch
+// curvature, which makes it exactly planar, so its ascending and descending legs
+// close to 0.189 m of each other. The rails alone are 1.215 m wide. It took
+// riding it to notice.
+//
+// Compared rail centre to rail centre, so the threshold to judge against is
+// TrackWidth() at minimum — and a good deal more once a rider, a support
+// structure and a maintenance walkway are in the way.
+struct FClearanceReport
+{
+    double ClosestApproach = 1e9; // metres, rail centre to rail centre
+    double AtS = 0.0;             // one of the two places
+    double AndS = 0.0;            // the other
+    bool bStructureOverlaps = false; // closer than the track is wide: definitely wrong
+};
+
+// IgnoreWithinM skips pairs of samples close together ALONG the track, which are
+// trivially near each other in space and are not what this is looking for. It
+// has to exceed the tightest turn's diameter or a hairpin reports itself.
+inline FClearanceReport AnalyseSelfClearance(const FTrack& Track, const FTrackProfile& Profile,
+                                             double StepM = 0.5, double IgnoreWithinM = 12.0)
+{
+    FClearanceReport R;
+    const double Total = Track.TotalLength();
+    if (!(Total > 0.0) || !(StepM > 0.0))
+    {
+        R.ClosestApproach = 0.0;
+        return R;
+    }
+
+    std::vector<FVec3> Rail;
+    std::vector<double> Arc;
+    FTrackFrame Walk = Track.EvaluateAt(0.0);
+    double S = 0.0;
+    for (;;)
+    {
+        Rail.push_back(CrossSectionAt(Walk, Track.GetHeartlineHeight(), Profile).RailCentre);
+        Arc.push_back(S);
+        if (S >= Total)
+        {
+            break;
+        }
+        const double Next = S + StepM < Total ? S + StepM : Total;
+        Walk = Track.AdvanceFrom(Walk, S, Next);
+        S = Next;
+    }
+
+    // ponytail: O(n^2) over samples — 1,100 samples on a 550 m track at 0.5 m is
+    // about 600k distance tests, which is milliseconds and runs offline. A
+    // uniform spatial grid is the upgrade when a 5 km layout or a live editor
+    // check makes this show up in a profile. Measure before building it.
+    for (std::size_t i = 0; i < Rail.size(); ++i)
+    {
+        for (std::size_t j = i + 1; j < Rail.size(); ++j)
+        {
+            if (Arc[j] - Arc[i] < IgnoreWithinM)
+            {
+                continue;
+            }
+            const double D = Length(Rail[j] - Rail[i]);
+            if (D < R.ClosestApproach)
+            {
+                R.ClosestApproach = D;
+                R.AtS = Arc[i];
+                R.AndS = Arc[j];
+            }
+        }
+    }
+    if (R.ClosestApproach > 1e8)
+    {
+        R.ClosestApproach = 0.0; // nothing was far enough apart along the track to compare
+    }
+    R.bStructureOverlaps = R.ClosestApproach < TrackWidth(Profile);
+    return R;
+}
 
 // Is this list safe to build an FTrack from? Warnings do not block.
 inline bool HasErrors(const std::vector<FTrackDiagnostic>& Diagnostics)

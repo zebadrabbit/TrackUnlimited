@@ -156,6 +156,23 @@ inline void CurvatureAt(const FTrackSegment& Seg, double U, double& OutYaw, doub
     OutPitch = Yaw * S + Pitch * C;
 }
 
+// Hand the curvature vector from one segment to the next, so a RUN of torsioned
+// segments chains continuously instead of stepping at every joint.
+//
+// This is needed because torsion's phase is measured from each segment's own
+// start: a segment exits with its curvature vector rotated by Torsion*Length,
+// and the next one begins its rotation again from zero. Author three torsioned
+// segments in a row without this and every joint steps — the geometry looks
+// plausible and `IsCurvatureContinuous` correctly says no.
+//
+// Sets B's START only. What B's END should be is the author's intent and not
+// something to guess: equal to the start for constant magnitude, or zero to ramp
+// out. See the side-stepping loop in TUCoasterRide.cpp for both in one run.
+inline void ChainCurvature(const FTrackSegment& A, FTrackSegment& B)
+{
+    CurvatureAt(A, A.Length, B.YawCurvatureStart, B.PitchCurvatureStart);
+}
+
 inline FTrackSegment MakeStraight(double InLength, double Roll = 0.0)
 {
     FTrackSegment Seg;
