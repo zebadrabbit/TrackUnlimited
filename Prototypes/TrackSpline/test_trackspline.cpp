@@ -3,6 +3,7 @@
 
 #include "TrackSpline.h"
 #include "TrackClose.h"
+#include "TrackHistory.h"
 #include "TrackIO.h"
 #include "TrackProfile.h"
 #include "TrackValidate.h"
@@ -826,6 +827,165 @@ static void TestAuthoredParametersSurviveWhereDerivedOnesWouldNot()
     assert(Rebuilt.YawCurvatureStart == Original.YawCurvatureStart);
 }
 
+// ---------------------------------------------------------------- undo/redo
+
+static void TestUndoRedoRestoresGeometryNotJustFields()
+{
+    FTrackDocument Doc;
+    Doc.Segments = {AuthorStraight(40.0), AuthorArc(50.0, 30.0, 25.0),
+                    AuthorHelix(20.0, 15.0, 1.5)};
+    FTrackHistory History(Doc);
+    assert(!History.IsDirty());
+    assert(!History.CanUndo());
+    assert(!History.CanRedo());
+
+    FTrackDocument Edited = Doc;
+    Edited.Segments[1].Radius = 45.0;
+    assert(History.Commit(Edited, "change radius"));
+    assert(History.IsDirty());
+    assert(History.CanUndo());
+    assert(History.UndoLabel() == "change radius");
+
+    FTrackDocument Again = Edited;
+    Again.Segments[0].Length = 60.0;
+    assert(History.Commit(Again, "change length"));
+
+    // Undo twice and the track must be the ORIGINAL track, walked — not merely
+    // a struct with matching fields.
+    History.Undo();
+    History.Undo();
+    const FTrack Restored = BuildTrack(History.Current());
+    const FTrack Original = BuildTrack(Doc);
+    assert(Near(Restored.TotalLength(), Original.TotalLength(), 1e-12));
+    for (double S = 0.0; S <= Original.TotalLength(); S += 5.0)
+    {
+        assert(NearVec(Restored.EvaluateAt(S).Position, Original.EvaluateAt(S).Position, 1e-12));
+    }
+    assert(!History.CanUndo());
+
+    History.Redo();
+    History.Redo();
+    assert(History.Current().Segments[0].Length == 60.0);
+    assert(History.Current().Segments[1].Radius == 45.0);
+    assert(!History.CanRedo());
+}
+
+static void TestCommittingNothingIsNotAnUndoStep()
+{
+    // An editor that commits on every field callback would otherwise fill the
+    // stack with steps that undo nothing, and Ctrl+Z five times moves nothing.
+    FTrackDocument Doc;
+    Doc.Segments = {AuthorStraight(40.0), AuthorArc(50.0, 30.0)};
+    FTrackHistory History(Doc);
+    assert(!History.Commit(Doc, "no change"));
+    assert(History.Depth() == 1);
+    assert(!History.CanUndo());
+
+    // A field the segment's KIND does not use is not part of the document's
+    // meaning, so changing it is genuinely no change. This falls out of using
+    // the save format as identity rather than a field-by-field comparison.
+    FTrackDocument Meaningless = Doc;
+    Meaningless.Segments[1].ClimbAngleDegrees = 40.0; // an arc has no climb angle
+    assert(!History.Commit(Meaningless, "meaningless"));
+    assert(History.Depth() == 1);
+
+    // And a field it does use is.
+    FTrackDocument Real = Doc;
+    Real.Segments[1].Radius = 31.0;
+    assert(History.Commit(Real, "real"));
+    assert(History.Depth() == 2);
+}
+
+static void TestTypingIsOneUndoStepNotFive()
+{
+    FTrackDocument Doc;
+    Doc.Segments = {AuthorArc(50.0, 3.0)};
+    FTrackHistory History(Doc);
+
+    // "30.5" arriving one keystroke at a time, all under one merge key.
+    for (const double R : {30.0, 30.5, 305.0, 30.5})
+    {
+        FTrackDocument D = History.Current();
+        D.Segments[0].Radius = R;
+        History.Commit(D, "change radius", "seg0.radius");
+    }
+    assert(History.Depth() == 2);      // one initial state, one edit
+    assert(History.Current().Segments[0].Radius == 30.5);
+    History.Undo();
+    assert(History.Current().Segments[0].Radius == 3.0); // straight back to before typing
+
+    // A different key does not merge — leaving the field and editing another
+    // must produce its own step.
+    History.Redo();
+    FTrackDocument Other = History.Current();
+    Other.Segments[0].Length = 55.0;
+    assert(History.Commit(Other, "change length", "seg0.length"));
+    assert(History.Depth() == 3);
+}
+
+static void TestRedoBranchIsDiscardedAndSavedStateTracksIt()
+{
+    FTrackDocument Doc;
+    Doc.Segments = {AuthorStraight(40.0)};
+    FTrackHistory History(Doc);
+
+    FTrackDocument A = Doc; A.Segments[0].Length = 50.0;
+    History.Commit(A, "A");
+    FTrackDocument B = A; B.Segments[0].Length = 60.0;
+    History.Commit(B, "B");
+    History.MarkSaved();
+    assert(!History.IsDirty());
+
+    // Undoing away from the saved state makes it dirty; coming back makes it
+    // clean again, because the document really is byte-for-byte what is on disk.
+    History.Undo();
+    assert(History.IsDirty());
+    History.Redo();
+    assert(!History.IsDirty());
+
+    // Undo, then commit something else: the saved state was on the branch just
+    // discarded, so it is unreachable and the document stays dirty forever.
+    History.Undo();
+    FTrackDocument C = History.Current(); C.Segments[0].Length = 70.0;
+    assert(History.Commit(C, "C"));
+    assert(!History.CanRedo());          // B is gone
+    assert(History.IsDirty());
+    History.Undo();
+    assert(History.IsDirty());           // and undoing does not resurrect it
+}
+
+static void TestDepthCapDropsOldestAndNeverClaimsCleanFalsely()
+{
+    FTrackDocument Doc;
+    Doc.Segments = {AuthorStraight(10.0)};
+    FTrackHistory History(Doc, 4);
+    History.MarkSaved();
+
+    for (int i = 1; i <= 10; ++i)
+    {
+        FTrackDocument D = History.Current();
+        D.Segments[0].Length = 10.0 + i;
+        assert(History.Commit(D, "grow"));
+    }
+    assert(History.Depth() == 4);
+    assert(History.Current().Segments[0].Length == 20.0);
+
+    // Undo as far as the stack now goes, and the oldest surviving state is the
+    // one three edits back — not the original.
+    while (History.CanUndo()) { History.Undo(); }
+    assert(History.Current().Segments[0].Length == 17.0);
+
+    // The saved state fell off the bottom. Claiming "clean" here would tell
+    // someone their work is safe when the evidence for that was discarded, so
+    // it stays dirty at every reachable position.
+    assert(History.IsDirty());
+    while (History.CanRedo())
+    {
+        History.Redo();
+        assert(History.IsDirty());
+    }
+}
+
 // ----------------------------------------------------------- self-clearance
 
 static void TestTrackPassingThroughItselfIsVisibleToNothingElse()
@@ -1629,6 +1789,11 @@ int main()
     TestUnknownFieldsLoadButUnknownGeometryDoesNot();
     TestMalformedFilesAreRejectedNotAbsorbed();
     TestAuthoredParametersSurviveWhereDerivedOnesWouldNot();
+    TestUndoRedoRestoresGeometryNotJustFields();
+    TestCommittingNothingIsNotAnUndoStep();
+    TestTypingIsOneUndoStepNotFive();
+    TestRedoBranchIsDiscardedAndSavedStateTracksIt();
+    TestDepthCapDropsOldestAndNeverClaimsCleanFalsely();
     TestTrackPassingThroughItselfIsVisibleToNothingElse();
     TestChainCurvatureIsWhatMakesTorsionComposable();
     TestSymmetricCircuitAlreadyCloses();
