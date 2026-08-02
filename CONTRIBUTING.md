@@ -16,14 +16,16 @@ Read [`Docs/PROJECT_PLAN.md`](Docs/PROJECT_PLAN.md) first. It covers the vision,
 
 ## Working on the prototypes (no Unreal install needed)
 
-This is the easiest way to contribute, and it covers the two hardest parts of the project. Both prototypes are standalone C++17 with no engine dependency — a compiler is the only requirement.
+This is the easiest way to contribute, and it covers the three hardest parts of the project. All three prototypes are standalone C++17 with no engine dependency — a compiler is the only requirement.
 
 ```sh
 cd Prototypes/BlockSignal
 clang++ -std=c++17 -Wall -Wextra -o test_blocksignal test_blocksignal.cpp && ./test_blocksignal
 ```
 
-Same shape for `Prototypes/TrackSpline`. Run from inside the prototype's own directory — the test includes its header by bare name. Tests are plain `assert`s with no framework; add to the existing file and call your function from `main`.
+Same shape for `Prototypes/TrackSpline` and `Prototypes/TrainPhysics`. Run from inside the prototype's own directory — the tests include their headers by relative path. Tests are plain `assert`s with no framework; add to the existing file and call your function from `main`.
+
+`BlockSignal` and `TrackSpline` finish in well under a second. `TrainPhysics` takes about 6, because it simulates tens of thousands of ticks and each one evaluates the track — pass `-O2` if you are iterating on it.
 
 Read [`Docs/PHASE0_FINDINGS.md`](Docs/PHASE0_FINDINGS.md) before changing either header. It records what is already verified (with numbers) and, more importantly, which limitations are deliberate — several obvious-looking "fixes" have already been tested and found to make things worse.
 

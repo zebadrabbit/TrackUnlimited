@@ -2,13 +2,14 @@
 
 A free, open-source, Unreal Engine 5 roller coaster simulator — built as a successor to [NoLimits 2](https://www.nolimitscoaster.com/), aiming for its engineering-grade precision (curvature-continuous track, real physics, accurate G-forces) with a modern, approachable interface and a real block-signaling/ride-control system neither NoLimits 2 nor Planet Coaster has attempted.
 
-**Status:** Phase 0 — the two hardest cores are prototyped and passing; in-engine vertical slice next.
+**Status:** Phase 0 — the three hardest cores are prototyped and passing; in-engine vertical slice next.
 
 ## Prototypes
 
-The riskiest math got built first, standalone. Both are plain C++17 with no engine dependency, so they build and run in about a second **without an Unreal install** — the lowest-friction way into this codebase.
+The riskiest math got built first, standalone. All three are plain C++17 with no engine dependency, so they build and run **without an Unreal install** — the lowest-friction way into this codebase.
 
 - [`Prototypes/TrackSpline/`](Prototypes/TrackSpline/) — curvature-continuous track geometry. Segments are curvature profiles over arc length (straight, arc, clothoid), so C² continuity is a property of the data rather than something fitted. Heartline-relative banking and felt G.
+- [`Prototypes/TrainPhysics/`](Prototypes/TrainPhysics/) — 1D train motion along that track. Gravity is applied as an exact energy exchange rather than an integrated force, so a frictionless circuit conserves energy at any timestep. Rolling resistance that follows the normal load, air drag, and one zone type covering lift, launch, brake and station.
 - [`Prototypes/BlockSignal/`](Prototypes/BlockSignal/) — the `CLEAR → OCCUPIED → BUFFER(x) → CLEAR` block state machine and dispatch permissive logic.
 
 ```sh

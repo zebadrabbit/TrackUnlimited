@@ -102,7 +102,7 @@ One more concrete case worth flagging: the developer's prior spline-train protot
 
 Before writing production code: spend a short, time-boxed period (a week or two) evaluating Coaster Forge and the other existing Unreal spline-physics prior art hands-on, to decide build-vs-adapt for the procedural meshing layer. In parallel, prototype two things in isolation, outside full engine integration, since both are mathematical/logical cores the rest of the project depends on: the curvature-continuous spline math (even as a standalone script), and the block-occupancy-plus-buffer state machine as a plain C++ class with unit tests, ported directly from the design already proven in the Blueprint prototypes. Only after those are de-risked should Phase 0 (in-engine prototype) begin in earnest.
 
-**Status (2026-08-01):** both prototype gates are passed — `Prototypes/TrackSpline/` and `Prototypes/BlockSignal/`, results in `Docs/PHASE0_FINDINGS.md`. The in-engine vertical slice is unblocked. The Coaster Forge build-vs-adapt evaluation remains open and still gates the procedural meshing layer.
+**Status (2026-08-02):** both prototype gates are passed — `Prototypes/TrackSpline/` and `Prototypes/BlockSignal/`, results in `Docs/PHASE0_FINDINGS.md`. A third prototype, `Prototypes/TrainPhysics/`, was added beyond the original plan: the energy-based motion model of Section 5, built standalone for the same reason as the other two, because the vertical slice needs it and de-risking it outside the engine is cheaper than inside. The in-engine vertical slice is now unblocked. The Coaster Forge build-vs-adapt evaluation remains open and still gates the procedural meshing layer.
 
 ---
 

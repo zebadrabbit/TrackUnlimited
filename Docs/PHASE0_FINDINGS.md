@@ -1,16 +1,17 @@
 # Phase 0 Findings
 
-Phase 0 is a de-risking phase, so its real deliverable is *knowledge*, not code. This page is where that knowledge lives: what the two standalone prototypes proved, what they disproved, and what is still unknown. The prototypes themselves are small; the reason to trust them is on this page.
+Phase 0 is a de-risking phase, so its real deliverable is *knowledge*, not code. This page is where that knowledge lives: what the three standalone prototypes proved, what they disproved, and what is still unknown. The prototypes themselves are small; the reason to trust them is on this page.
 
-Last updated: 2026-08-01.
+Last updated: 2026-08-02.
 
 ## The prototypes
 
-Both are plain C++17 with no engine dependency, so they build and run in about a second without an Unreal install. That is deliberate — this is the lowest-friction way to work on the two hardest parts of the project, and it keeps the math honest by preventing it from quietly depending on engine behaviour.
+All three are plain C++17 with no engine dependency, so they build and run without an Unreal install. That is deliberate — this is the lowest-friction way to work on the three hardest parts of the project, and it keeps the math honest by preventing it from quietly depending on engine behaviour.
 
 | Prototype | Proves | Files |
 |---|---|---|
 | Track spline | Curvature-continuous track geometry, clothoid transitions, heartline-relative banking, felt-G | [`Prototypes/TrackSpline/`](../Prototypes/TrackSpline/) |
+| Train physics | Energy-conserving 1D motion along the track, load-dependent resistance, powered/braked zones, fore-aft G | [`Prototypes/TrainPhysics/`](../Prototypes/TrainPhysics/) |
 | Block signalling | `CLEAR → OCCUPIED → BUFFER(x) → CLEAR` occupancy plus dispatch permissive with lookahead | [`Prototypes/BlockSignal/`](../Prototypes/BlockSignal/) |
 
 ```sh
@@ -56,6 +57,16 @@ Verified by independent reimplementation against closed-form references, not by 
 - The path frame is **exactly parallel-transported** (rotation-minimising), max 1.5e-08 rad/m. This is what makes roll a clean independent parameter.
 - Omitting tangential acceleration is **exactly harmless** for the two reported axes — `dv/dt` acts along `T`, and `T·L = T·U = 0` exactly, even through a full inversion. The lateral and vertical numbers are complete for an accelerating or braking train.
 
+**Train physics**
+
+- **Gravity really is exact.** A frictionless loop returns to its launch speed with an error of 5e-14 m/s, and that figure is flat across a 333× range of timestep — 1/15 s reads the same as 1/5000 s. The per-step height deltas telescope exactly, which is also why `EvaluateAt`'s documented ~1e-9 m non-smoothness never reaches the speed.
+- Constant-acceleration motion is reproduced **exactly**, not approximately: carrying the acceleration term in the position update makes the energy form algebraically identical to `v1 = v0 + a·dt` on straight track, so a zone lands on its target speed to 1e-9 rather than hunting around it.
+- **The normal load is roll-invariant, and measurably so.** A banked turn and the same turn unbanked cost bit-identical speed (difference 0.000e+00) — banking rotates the rider around the heartline, it does not change how hard the wheels press on the rail. Both cost 1.6515× a straight of equal length, against `sqrt(1+r²)` = 1.688 at entry.
+- `NormalG = sqrt(lateral² + vertical²)` matches an independent world-space computation of the wheel normal load to 1.2e-13.
+- The fore-aft convention is correct including the braking sign: a freely rolling train reads **exactly 0 G** on any slope, and holding chain speed up a 30° grade reads +0.5000 G — `sin(30°)`, falling out of the model rather than being asserted.
+- Closed forms reproduced: drag-only decay `v = v0·e^(-k·x)`, friction stopping distance `v0²/(2·Crr·g)`, loop apex speed `sqrt(v0² - 4gR)`, and release-from-rest reaching `sqrt(2g·Δz)` at 2°, 11.5° and 30° grades.
+- **22 of 22 mutants killed.** The first pass left 13 of 16 alive — every survivor clustered in the zone controller and the normal-load shape, because all the zone tests ran on level track where the competing formulations coincide.
+
 **Signalling**
 
 - All tests pass clean under `-Wall -Wextra`. Class invariants held across **1,200,000 randomly fuzzed API calls** over 20,000 controllers: zero violations of the buffer invariants, of drain-to-CLEAR, or of `CanDispatch` against an independent reimplementation.
@@ -88,6 +99,15 @@ Deliberate, measured, and written down. A bounded limitation that is recorded is
 - **At an exact joint, the ending segment supplies roll and curvature** — and that is not reliable in floating point. With authored lengths that do not sum exactly, roughly a quarter of joint queries return the following segment's values instead. It only bites on curvature-discontinuous data. Sample either side of a joint rather than on it.
 - **`MaxStep` is a hardcoded 0.01 in metres.** Nothing breaks today, but a port that hands it centimetre lengths gets 100× the steps, with no error and no symptom except being unusably slow. The suite passes at `MaxStep` up to 0.5, so there is ~50× of headroom if performance ever matters.
 
+**Train physics**
+
+- **The train is a point at the heartline; it has no length.** This is the one omission most likely to be *felt*. A real train is 10–15 m long, and its speed over a crest is governed by the whole train's centre of mass, not by the lead car's position — which is exactly why a car at the back gets thrown over an airtime hill harder than the front. Point-mass coaster sims are known to feel wrong for this reason. Defensible for Phase 0 (it does not change the shape of the model — it becomes an average over sample points along the train), but it should not survive Phase 2's "feels right to an NL2 veteran" bar.
+- **A train that runs out of energy stops dead rather than rolling back.** Reversal needs a signed velocity through the whole model and the block system has to hear about it. A valley stall is a design error to surface, not a state to simulate — but a real editor will eventually want to show the roll-back.
+- **A zone shorter than one step's travel is skipped entirely.** At 40 m/s and 1/60 s that is any zone under 0.67 m. Fine for lift hills and brake runs; a trap for a short trim brake.
+- **The energy exchange is exact; the *path* integration is not.** Position carries the acceleration term, which makes it exact under constant acceleration, but gravity varies along a curve, so on curved track there is a residual O(dt²) position error. Energy stays exact regardless, because it is computed from the heights actually visited.
+- **`RollingResistance` and `DragK` are tuning knobs, not measurements.** `DragK = 0.00045` is `0.5·ρ·Cd·A/m` evaluated for a loaded 7-car steel train (~8000 kg, CdA ≈ 5.5 m²), and `RollingResistance = 0.006` is a plausible steel-on-steel figure. Both need calibrating against a reference ride before any G trace is quoted as accurate. The physical world needs tuning a minimal model cannot see.
+- **The physics and the signalling do not talk to each other yet.** `FTrain` knows nothing about `FBlockController`, so nothing yet trips block occupancy from a train's position, and nothing gates a station release on a dispatch permissive. That wiring is the Phase 3 job, and it is where the two prototypes finally meet.
+
 **Block signalling**
 
 - **One train per block, by definition.** There is no state for "two inside", so after a signalling violation the first train's exit runs `BUFFER → CLEAR` while the second is still inside, the second train's exit gets a 0 s overlap instead of the configured one, and further violations go unreported for the rest of that occupancy. The damage is bounded and self-healing — one injected violation followed by 20 clean laps gives 3 disagreements, all within 3 steps, and none afterwards. This is correct scoping: a violation is an E-stop condition in real ride control, not a recoverable state.
@@ -103,13 +123,14 @@ Measured, not guessed. Both headers are the canonical design to **port**, not re
 3. **Build the `FQuat` from the three basis vectors**, not from `FRotator` angles. The frame is already exactly orthonormal; going through Euler angles reintroduces error and gimbal cases the integrator specifically avoids.
 4. **`std::vector` → `TArray`**, `std::size_t` → `int32`. Keep block indices unsigned or validate once at a single entry point: the current unsigned arithmetic is fail-*safe* (a negative lookahead wraps to `SIZE_MAX` and lands on the deny guard), and `int32` loses that property.
 5. **Keep these as plain C++ structs**, not `UObject`s. Nothing here needs reflection, and `UPROPERTY` on the hot path costs for nothing.
+6. **`FTrain` holds a `const FTrack&`.** That is fine in a standalone prototype where both live on the stack, and a hazard in UE where the track will likely be owned by a GC'd object. Decide the ownership model at port time — a weak pointer, or the track living inside the same component — rather than letting a dangling reference happen.
 
 ## Still unknown
 
 Phase 0 did not touch these, and no claim on this page covers them.
 
-- **Tangential physics.** The energy model — gravity, rolling friction, air drag, powered segments — is entirely unbuilt. Felt G here is the geometric part only.
-- **Distance-to-arc-length inversion** for advancing a train by `v·dt` along the track each tick.
+- **Train length.** See the limitation above — the single most likely source of "this doesn't feel right" once there is something to ride.
+- **Calibration against a real ride.** The model is verified against closed forms, which says it is self-consistent, not that it matches a real coaster. Nothing has been compared to a measured speed or G trace.
 - **Distance-based block overlap.** Only the time-based overlap exists; the distance form needs train position and braking distance from the physics model.
 - **Lateral-G sign versus NoLimits 2.** The prototype reports +0.76 for a flat left turn (rider thrown right), consistent with its own vertical convention. NL2's documentation reads as the opposite. This rests on a documentation reading only — nobody checked a running copy. Settle it empirically before G traces, editor graphs and comfort thresholds get built on it; it is one negation now and expensive later.
 - **Procedural meshing.** The Coaster Forge build-vs-adapt evaluation is still the open Phase 0 item, and it gates Phase 4.
