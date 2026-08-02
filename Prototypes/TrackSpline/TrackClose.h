@@ -51,7 +51,15 @@ struct FClosureTarget
     FVec3 Tangent{1.0, 0.0, 0.0};
     double Roll = 0.0; // radians, path-relative — matches FTrackFrame::Roll
 
-    bool bMatchPosition = true;
+    // Per axis, because "closed" is not one question. A circuit wants all three.
+    // A point-to-point layout — which is most of what exists right now — wants
+    // only Z: the brake run has to arrive at platform HEIGHT, and it has no
+    // business ending up back at the station's footprint. Asking for XY there
+    // would be asking the wrong thing and getting a truthful "impossible".
+    bool bMatchX = true;
+    bool bMatchY = true;
+    bool bMatchZ = true;
+
     bool bMatchHeading = false;
     bool bMatchRoll = false;
 };
@@ -64,6 +72,11 @@ struct FClosureGap
 
     double HeadingError = 0.0; // radians between the two tangents
     double RollError = 0.0;    // radians
+
+    // PositionError over only the axes the target asked about. This is what
+    // convergence is judged on — a height-only target must not be held to an
+    // X gap it was never asked to close.
+    double ActiveError = 0.0;
 
     // Height gets its own field because it is the one that does not announce
     // itself. A track that ends 8.5 m low still LOOKS closed from above, and
@@ -87,6 +100,12 @@ inline FClosureGap MeasureClosure(const FTrack& Track, const FClosureTarget& Tar
     G.HeadingError = std::atan2(Length(Axis), Dot(End.Tangent, Target.Tangent));
 
     G.RollError = End.Roll - Target.Roll;
+
+    double Active = 0.0;
+    if (Target.bMatchX) { Active += G.Position.X * G.Position.X; }
+    if (Target.bMatchY) { Active += G.Position.Y * G.Position.Y; }
+    if (Target.bMatchZ) { Active += G.Position.Z * G.Position.Z; }
+    G.ActiveError = std::sqrt(Active);
     return G;
 }
 
@@ -100,6 +119,17 @@ inline FClosureTarget CircuitTarget(const FTrack& Track)
     T.Position = Start.Position;
     T.Tangent = Start.Tangent;
     T.Roll = Start.Roll;
+    return T;
+}
+
+// For a point-to-point layout: come back to platform HEIGHT and nothing else.
+// A station-to-brake-run ride is not supposed to end where it started in plan,
+// so a full circuit target would report an impossibility that is not a fault.
+inline FClosureTarget HeightTarget(const FTrack& Track)
+{
+    FClosureTarget T = CircuitTarget(Track);
+    T.bMatchX = false;
+    T.bMatchY = false;
     return T;
 }
 
@@ -319,7 +349,9 @@ inline FClosureResult SolveClosure(FTrackDocument& Doc, const FClosureTarget& Ta
 
     // Rows: position (3), optionally heading (3, rank 2) and roll (1).
     int Rows = 0;
-    if (Target.bMatchPosition) { Rows += 3; }
+    if (Target.bMatchX) { ++Rows; }
+    if (Target.bMatchY) { ++Rows; }
+    if (Target.bMatchZ) { ++Rows; }
     if (Target.bMatchHeading) { Rows += 3; }
     if (Target.bMatchRoll) { Rows += 1; }
 
@@ -398,12 +430,9 @@ inline FClosureResult SolveClosure(FTrackDocument& Doc, const FClosureTarget& Ta
         const FTrackFrame End = Built.EvaluateAt(Built.TotalLength());
         const FClosureGap G = MeasureClosure(Built, Target);
         Out.clear();
-        if (Target.bMatchPosition)
-        {
-            Out.push_back(G.Position.X);
-            Out.push_back(G.Position.Y);
-            Out.push_back(G.Position.Z);
-        }
+        if (Target.bMatchX) { Out.push_back(G.Position.X); }
+        if (Target.bMatchY) { Out.push_back(G.Position.Y); }
+        if (Target.bMatchZ) { Out.push_back(G.Position.Z); }
         if (Target.bMatchHeading)
         {
             // The tangent DIFFERENCE, not the angle between them. The angle is
@@ -434,7 +463,7 @@ inline FClosureResult SolveClosure(FTrackDocument& Doc, const FClosureTarget& Ta
     double Best = Norm(Res);
     std::vector<double> BestP = P;
 
-    if (R.Before.PositionError <= Options.PositionTolerance
+    if (R.Before.ActiveError <= Options.PositionTolerance
         && (!Target.bMatchHeading || R.Before.HeadingError <= 1e-6))
     {
         R.bConverged = true;
@@ -536,7 +565,7 @@ inline FClosureResult SolveClosure(FTrackDocument& Doc, const FClosureTarget& Ta
             R.After = TrialGap;
             Lambda = std::fmax(Lambda / 3.0, 1e-9);
 
-            if (TrialGap.PositionError <= Options.PositionTolerance
+            if (TrialGap.ActiveError <= Options.PositionTolerance
                 && (!Target.bMatchHeading || TrialGap.HeadingError <= 1e-6))
             {
                 R.bConverged = true;

@@ -1006,6 +1006,71 @@ static void TestSolverRefusesRatherThanBreakingTheTrack()
     assert(!None.Message.empty());
 }
 
+// Station, eased climb, crest, descent, pull-out, level brake run. The vertical
+// slice in miniature — and the shape of every point-to-point layout that exists
+// in this repo right now.
+static void AppendEasedPitch(FTrackDocument& D, double PitchDelta, double PeakCurvature)
+{
+    const double K = PitchDelta >= 0.0 ? PeakCurvature : -PeakCurvature;
+    const double L = std::fabs(PitchDelta) / PeakCurvature;
+    FTrackSegment In;
+    In.Length = L;
+    In.PitchCurvatureEnd = K;
+    D.Segments.push_back(AuthorRaw(In));
+    FTrackSegment Out;
+    Out.Length = L;
+    Out.PitchCurvatureStart = K;
+    D.Segments.push_back(AuthorRaw(Out));
+}
+
+static void TestPointToPointClosesOnHeightAlone()
+{
+    // "Closed" is not one question, and the vertical slice is why. A
+    // station-to-brake-run ride is NOT supposed to end back at the station's
+    // footprint — it is supposed to end at the station's HEIGHT. Held to a full
+    // circuit target it reports a large, truthful, useless impossibility, and
+    // the one number that actually matters is buried inside it.
+    FTrackDocument Doc;
+    Doc.Segments.push_back(AuthorStraight(20.0)); // 0: station, level
+    AppendEasedPitch(Doc, 25.0 * Pi / 180.0, 0.03);
+    Doc.Segments.push_back(AuthorStraight(20.0)); // 3: the climb — too short
+    AppendEasedPitch(Doc, -50.0 * Pi / 180.0, 0.05);
+    Doc.Segments.push_back(AuthorStraight(60.0)); // 6: the descent
+    AppendEasedPitch(Doc, 25.0 * Pi / 180.0, 0.012);
+    Doc.Segments.push_back(AuthorStraight(40.0)); // 9: brake run, back to level
+
+    const FTrack Track = BuildTrack(Doc);
+    const FClosureGap Circuit = MeasureClosure(Track, CircuitTarget(Track));
+    const FClosureGap Height = MeasureClosure(Track, HeightTarget(Track));
+
+    // Same track and the same measured gap vector — a different question, so a
+    // different verdict. 265 m of "failure" that is not a fault, against 26 m
+    // that is.
+    assert(Circuit.PositionError > 200.0);
+    assert(Circuit.PositionError == Height.PositionError); // the measurement did not change
+    assert(Near(Height.ActiveError, std::fabs(Height.HeightError), 1e-12));
+    assert(Height.ActiveError < 30.0);
+
+    // Lengthening the climb is what fixes it, which is exactly the fix the real
+    // vertical slice needed: its lift went 55 m -> 75.11 m and stopped ending
+    // 8.5 m underground.
+    FTrackDocument Solved = Doc;
+    const FClosureResult R = SolveClosure(Solved, HeightTarget(Track), {FreeLength(3, 1.0, 400.0)});
+    assert(R.bConverged);
+    assert(R.bApplied);
+    assert(std::fabs(R.After.HeightError) <= 1e-3);
+    assert(Solved.Segments[3].Length > Doc.Segments[3].Length); // the climb grew
+
+    // And it converged while X is still enormous, because X was never asked
+    // about. Judging this on PositionError would call a solved track a failure.
+    assert(R.After.PositionError > 200.0);
+
+    std::printf("  closure: point-to-point %.2f m low -> %.1e m on height alone "
+                "(climb %.1f -> %.1f m), %.0f m of X left alone as intended\n",
+                R.Before.HeightError, R.After.HeightError, Doc.Segments[3].Length,
+                Solved.Segments[3].Length, R.After.Position.X);
+}
+
 static void TestHorizontalStraightsCannotReachTheHeightAxis()
 {
     // A limitation worth knowing before reaching for the solver, because the
@@ -1452,6 +1517,7 @@ int main()
     TestClosesTheGapTheFindingsMeasured();
     TestHeightGapIsCalledOutSeparately();
     TestSolverRefusesRatherThanBreakingTheTrack();
+    TestPointToPointClosesOnHeightAlone();
     TestHorizontalStraightsCannotReachTheHeightAxis();
     TestHelixIsActuallyAHelix();
     TestHelixHandednessAndDegenerateCases();

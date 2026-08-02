@@ -64,8 +64,8 @@ void ATUCoasterRide::BuildTrack()
 	// Authored numerically, exactly as the project intends track to be authored
 	// — an ordered list of typed segment parameters, with no viewport dragging
 	// anywhere in sight. Tuned in the standalone harness first; these numbers
-	// give a 34.9 m lift, 101 km/h, +0.70..+4.25 vertical G, 0.36 peak lateral,
-	// and +1.05 G over the loop apex.
+	// give a 43.4 m lift, 101 km/h, +0.70..+4.25 vertical G, 0.36 peak lateral,
+	// and +1.25 G over the loop apex.
 	const double Lift = Deg(25.0);
 	const double Drop = Deg(-34.0);
 	const double LoopRadius = 9.0;
@@ -75,10 +75,25 @@ void ATUCoasterRide::BuildTrack()
 
 	Track = FTrack();
 
+	// Solved, not eyeballed. At 55.0 m this layout ended 8.498 m BELOW its own
+	// station and ran the whole back half underground — the rail centreline
+	// bottomed out at -9.60 m, which is what "dropping through the floor after
+	// the loop" actually was. TrackClose.h's HeightTarget with the lift climb
+	// freed closes that to +0.0007 m at 75.11 m.
+	//
+	// It costs nothing in ride feel, and that is not luck: the chain hauls the
+	// train to the crest at 4 m/s whatever the crest's height, and the drop
+	// geometry below it never moved. Speed, both G peaks, lateral and the loop
+	// apex all come out bit-identical to the 55 m version. Only the height moved.
+	const double LiftClimb = 75.11;
+
 	Track.AddSegment(MakeStraight(20.0));            // station
 	EasedPitch(Track, Lift, 0.03);                   // into the climb
-	const double LiftTopS = Track.TotalLength() + 55.0;
-	Track.AddSegment(MakeStraight(55.0));            // lift climb
+	// One constant, used twice on purpose: the chain zone's extent is derived
+	// from where the climb ends, so a second literal here could drift out of
+	// step with the segment and strand the train short of the crest.
+	const double LiftTopS = Track.TotalLength() + LiftClimb;
+	Track.AddSegment(MakeStraight(LiftClimb));       // lift climb
 	EasedPitch(Track, Drop - Lift, 0.05);            // crest
 	Track.AddSegment(MakeStraight(12.0));            // drop
 	EasedPitch(Track, -Drop, 0.012);                 // pull-out
