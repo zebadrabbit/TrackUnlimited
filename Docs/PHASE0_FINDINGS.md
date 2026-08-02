@@ -6,20 +6,32 @@ Last updated: 2026-08-02.
 
 ## The prototypes
 
-All three are plain C++17 with no engine dependency, so they build and run without an Unreal install. That is deliberate — this is the lowest-friction way to work on the three hardest parts of the project, and it keeps the math honest by preventing it from quietly depending on engine behaviour.
+All four are plain C++17 with no engine dependency, so they build and run without an Unreal install. That is deliberate — this is the lowest-friction way to work on the hardest parts of the project, and it keeps the math honest by preventing it from quietly depending on engine behaviour.
 
 | Prototype | Proves | Files |
 |---|---|---|
 | Track spline | Curvature-continuous track geometry, clothoid transitions, heartline-relative banking, felt-G | [`Prototypes/TrackSpline/`](../Prototypes/TrackSpline/) |
 | Train physics | Energy-conserving 1D motion along the track, load-dependent resistance, powered/braked zones, fore-aft G | [`Prototypes/TrainPhysics/`](../Prototypes/TrainPhysics/) |
 | Block signalling | `CLEAR → OCCUPIED → BUFFER(x) → CLEAR` occupancy plus dispatch permissive with lookahead | [`Prototypes/BlockSignal/`](../Prototypes/BlockSignal/) |
+| NL2 CSV | Reading and writing NoLimits 2's sampled-frame spline export, so real layouts can be driven through the model and our tracks opened in NL2 | [`Prototypes/NL2Csv/`](../Prototypes/NL2Csv/) |
+| NL2 telemetry | The NL2 telemetry wire protocol, and a recorder that correlates a live ride against an imported track — the route to NL2's own G and speed numbers | [`Prototypes/NL2Telemetry/`](../Prototypes/NL2Telemetry/) |
 
 ```sh
 cd Prototypes/TrackSpline
-clang++ -std=c++17 -Wall -Wextra -o test_trackspline test_trackspline.cpp && ./test_trackspline
+clang++ -std=c++17 -Wall -Wextra -o test_trackspline.exe test_trackspline.cpp && ./test_trackspline.exe
 ```
 
-Same shape for `BlockSignal`. Run from inside the prototype's own directory — the test includes its header by bare name.
+Same shape for the other four. Run from inside the prototype's own directory — the test includes its header by bare name.
+
+Keep the `.exe` on the output name. `-o test_trackspline` emits an **extensionless** binary: Git Bash runs it fine, but PowerShell and Explorer do not recognise it as executable and pop the "how do you want to open this file?" dialog instead. The `.gitignore` covers both spellings.
+
+`NL2Telemetry` additionally needs a socket library and is the only prototype that requires NoLimits 2 to be running:
+
+```sh
+cd Prototypes/NL2Telemetry
+clang++ -std=c++17 -Wall -Wextra -o record.exe record.cpp -lws2_32
+./record.exe --seconds 90
+```
 
 The design rationale for the spline representation is in the header comment at the top of [`TrackSpline.h`](../Prototypes/TrackSpline/TrackSpline.h), deliberately kept next to the code so it cannot drift from it. This page does not repeat it.
 
@@ -73,6 +85,60 @@ Verified by independent reimplementation against closed-form references, not by 
 - Driven correctly it is sound end to end: a simulated 10-minute run (6 blocks, 3 trains, 3 s overlap, 1/60 s tick, every move gated on `CanDispatch`) produced **453 moves with zero violations**, with an independent audit confirming no two trains were ever co-resident.
 - Buffer countdown drift is a non-issue: 2.4M ticks accumulate -2.7e-07 s. The visible effect is at most one extra tick, and a buffer can only expire on a tick boundary anyway.
 
+**NL2 CSV import/export**
+
+NoLimits 2 publishes a [tab-separated spline export](https://nolimitscoaster.com/nolimits2/help/pages/fileformats.html) — position plus front/left/up unit vectors, one row per sample. That is an `FTrackFrame` sequence, so it reads with a `strtod` loop, and it is the cheapest route to the two calibration unknowns at the bottom of this page. The writer exists so the reader is testable with no NL2 install, and so our tracks can be opened in NL2 for comparison.
+
+- **The axis map is a rotation, not a handedness flip.** NL2 is right-handed with +Y up; `(x, y, z) → (x, -z, y)` has determinant +1, so cross products survive untouched and `Front × Left = Up` lands on `Tangent × Lateral = Up` with no sign correction. This is *not* the UE5 port's `-M(Lateral)` rule — that one exists because UE is left-handed. Applying it here would mirror the whole track into geometry that still looks self-consistent.
+- **Round-trip fidelity on a 529.8 m / 25-segment layout** (30° lift to +41.7 m, crest, drop, pull-out, R=8 loop, two 45°-banked turns, brake run) sampled at 0.25 m: total length off by **4.1e-06 m**, worst position error **2.6 mm**, worst felt-G error **7.5e-03 G**, rms felt-G error **6.8e-04 G**.
+- **Single elements reconstruct far tighter**, because they have no curvature-slope kink to round off: a straight to **6.0e-13 m**, a 45°-banked R=25 arc to **2.7e-07 m** and **6.3e-08 G**, an R=8 loop to **1.0e-06 m** with apex at **+16.000002 m** and **1.9e-11 m** closure.
+- **The physics agrees on both tracks.** A train driven over the original and over the reconstruction diverges by at most **1.7e-03 m/s** across a full 2,446-tick circuit, finishing at 23.8055 vs 23.8056 m/s. That is the check the fixture actually exists for.
+- **Roll unwraps through the branch cut**: a full 2π barrel roll recovers to **2.7e-10 rad** rather than snapping sign mid-inversion.
+- **Error converges with sample spacing** — 1.0 m → 0.1 m takes worst position from 4.2e-02 m to 4.2e-04 m and rms G from 1.4e-02 to 1.8e-04, both roughly second order. Convergence is the assert that separates discretisation from a bug: a sign or frame error would not shrink with spacing.
+- **Verified against a real NL2 export**, not only against our own writer. A 466-sample circuit exported at NL2's default 0.5 m node spacing parsed with worst basis-vector length error **6.5e-07**, worst orthogonality **1.1e-06**, and worst `|Front × Left − Up|` **1.6e-06** — so **the handedness reading is confirmed on real data**, not just assumed from the docs. It reconstructed to 232.933 m in 466 segments, curvature-continuous, closing on itself to **12 mm** over the full circuit.
+- **NL2 opens a circuit export wherever its spline starts, not at the station.** The first real export began **22.2° into a drop**, which `FTrack` cannot represent — its start frame is pinned level, so the whole track would tilt against gravity. On a closed circuit this costs nothing to fix: rotate the sample list to begin at a level sample (that export had 31 of them, one at exactly 0.000°). Only the arc-length origin moves. An *open* track with a pitched start is still refused, because there is nowhere to rotate to.
+- **Two bugs were found by measurement, not by inspection**, and both are worth knowing about because the naive form of each looks right:
+  - Recovering the turn angle with `acos(Dot(T0, T1))` is ill-conditioned at the small angles between consecutive samples — `dθ/d(cos) = -1/sin θ` amplifies the last digits of the file's rounded decimal text by `1/θ`. On an R=25 arc at 0.2 m spacing it left a 4.9e-07 1/m curvature error and 3.0e-05 m of endpoint drift. `atan2(|T0 × T1|, T0 · T1)` costs the same, is well conditioned at both ends, and needs no clamp: **110× better**, down to 2.7e-07 m.
+  - A writer that accumulates `S += Spacing` drifts, and the drift lands on the last row: a final clamped step of ~1e-12 m emits a row that rounds to the same text as its predecessor, which a reader can only see as two coincident samples. Walking by row index over uniform fractions of the total has neither problem.
+
+**NL2 telemetry**
+
+The CSV spline export is a **Professional-licence** feature (NL2 Editor → `Professional` tab → `Export Track Spline`, default 0.5 m node spacing). The [telemetry interface](https://nolimitscoaster.com/nolimits2/help/pages/telemetry.html) is **not** — it ships in the standard edition (`Main Menu → Setup → Others`, or `--telemetry`, default port 15151) — so it is the route to NL2's own numbers that works regardless of licence tier.
+
+- **Protocol verified against a running copy.** Framing is `'N'` + type(2) + requestId(4) + dataSize(2) + payload + `'L'`, all multi-byte fields big-endian; telemetry is a 76-byte payload. The version handshake round-trips against NL2 **2.6.8.1**, which is what proves the framing before any recording is trusted.
+- **The G-force reference frame is undocumented.** The spec gives offsets and units but never says whether G is world or car-local, nor whether it is the force on the rider or the acceleration of the car. So `FNL2Telemetry` leaves those three floats **raw and unmapped** — mapping them as world axes would bake in the very assumption being tested — and `IdentifyGravityAxis` decides it from data instead: a train under 1 m/s feels exactly one g and nothing else, so whichever component parks near ±1 *is* vertical, and its sign says which sense NL2 reports. Position **is** mapped, with the same `FromNL2` the CSV reader uses; if those two ever drift apart nothing correlates.
+- **Correlation is on world position, not arc length.** S origins differ between the two sides (the importer rotates a circuit to start level) and the reconstruction is yaw-rotated and translated besides. NL2 world position is the only thing both genuinely share.
+- **The tool refuses to conclude from noise.** An early run recorded a stationary game and cheerfully reported "lateral sign AGREES" by comparing our −0.0189 against NL2's +0.0000. A sign comparison now requires both readings above 0.15 g *and* a position match within 2 m, and a recording with no motion is rejected outright. A confident verdict drawn from zeros is worse than no verdict.
+- **Bound by the wall clock, not a poll count.** Replies return in well under a millisecond on loopback, so an early poll-budget version burned through "90 seconds" in about half of one and recorded a single sample.
+
+## Validation against NoLimits 2
+
+A 90-second recording of a full lap on a real NL2 circuit (233 m, unbanked, 12.4 m/s top speed), 5,666 samples, correlated against the same track imported from its CSV export. This is the first time anything in this project has been compared to an independent simulator rather than to a closed form.
+
+**The lateral-G sign question is settled, and the documentation reading was wrong.**
+
+- NL2 reports G in the **car's local frame**, decided from data rather than docs: on the lift the gravity axis reads **0.909** against a car-local prediction of cos(pitch) = 0.914 and a world-frame prediction of 1.000.
+- It reports the force felt **by the rider**, same sense as our `FeltG`: the gravity axis sits at **+0.9972** at rest over 1,465 samples, next-largest component 0.0028.
+- Sign agreement is **627 / 627 samples (100%)** wherever NL2's lateral exceeds 0.3 g. The prototype's convention was right and the documentation reading that suggested otherwise was wrong. **No negation is needed anywhere.**
+
+**Magnitude agreement is far better than the sign check required.** Over 4,298 moving samples, NL2 minus ours:
+
+| axis | mean difference | rms | worst |
+|---|---|---|---|
+| vertical | −0.0008 g | 0.0089 g | +0.105 g |
+| lateral | +0.0019 g | 0.0299 g | +0.271 g |
+
+At the peak lateral event — a 6.35 m radius unbanked turn at 12.35 m/s — NL2 reads **+2.3521 g** and the model reads **+2.3979 g**, a 1.9% difference. The geometry model, the heartline banking model and `FeltG` all agree with a mature commercial simulator to a few hundredths of a g across a whole lap.
+
+**Calibration against NoLimits 2** — first real measurement of the two tuning knobs, fitted over the 1,700 coasting samples between chain release (S = 47.0 m) and the brake run (S = 225.4 m):
+
+| | `RollingResistance` | `DragK` | rms speed error |
+|---|---|---|---|
+| shipped defaults | 0.006 | 0.00045 | **0.998 m/s** |
+| fitted to this ride | 0.0046 | 0.00144 | **0.564 m/s** |
+
+The defaults run this ride consistently *fast* — 11.0 m/s against NL2's 10.6 at mid-circuit, and 11.0 against 9.4 by the end, i.e. the error grows with distance travelled, which is what too little total resistance looks like. See "Still unknown" for why these fitted numbers are **not** being adopted as defaults.
+
 **Test suites are discriminating.** This was checked by mutation rather than assumed: deliberately broken variants of the headers were generated and run against the suites. The first pass found four surviving mutants in the spline suite — including one that put the loop apex at z = **-16** instead of +16 while leaving *every* G reading numerically identical, because the frame flipped in step with the curvature. An entirely inverted track would have reported perfectly self-consistent G. Six asserts closed that gap, and all six previously-surviving mutants are now killed.
 
 ## What was disproved
@@ -114,6 +180,27 @@ Deliberate, measured, and written down. A bounded limitation that is recorded is
 - **Block topology is a hard-coded ring** (`index + 1 mod N`). Verified correct for a circuit. On a shuttle or a transfer spur the last block's permissive consults the first, and the failure direction is fail-*open*. A `bool bIsCircuit` when a non-ring layout first exists; a successor graph only once transfer tracks do. Phase 3.
 - **Dispatch mode (automatic vs manual) is not implemented.** Deliberate — it sits above this class and does not change its shape, since the permissive logic is identical in both modes by design.
 
+**NL2 CSV**
+
+- **It is a fixture path, not an authoring path**, and must not become one. An imported track is thousands of derived micro-segments; the original vocabulary (which parts were straight, arc, clothoid) is gone and cannot be recovered from samples. Nobody edits that numerically, so this does not soften constraint #1 in `CLAUDE.md`.
+- **The felt-G error is not uniform — it lives at curvature-slope kinks.** Per-interval curvature is averaged onto samples with a (1,2,1)/4 kernel, which rounds off a corner in the curvature profile. The worst point in the test layout is the entry to the R=8 loop, where the ramp's slope drops to zero across one joint; there the error converges only *first* order in spacing while everything else is second order. At 0.25 m under 1% of sampled points exceed 0.005 G. The exactly-conservative alternative (`End[i] = 2·Interval[i] - Start[i]`) is continuous too but has gain -1 per step, so noise becomes a sawtooth that never decays — smoothing is the right trade on sampled data.
+- **A pitched start is rejected, a banked start is not.** `FTrack` pins its own start to `T=+X, L=+Y, U=+Z`, so a reconstruction is the original translated and yawed — harmless, since neither touches gravity — but only while the first tangent is horizontal. A pitched start would be rotated flat, tilting the entire track relative to gravity with no visible symptom, and nothing downstream could recover it. Roll does not move the tangent, so a banked start is fine and the opening roll is measured against world up rather than assumed zero.
+- **A reconstruction is dense.** The 529.8 m layout at 0.25 m becomes 2,120 segments, and `AdvanceFrom` → `Locate` is an O(N) linear scan per call. Immaterial at 60 Hz — the full-circuit physics test runs in well under a second — but it is the case that would first justify the cached arc-length sample table `TrackSpline.h` already names. Sample at 0.25–1 m unless something needs finer.
+- **`.nl2park` and `.nl2elem` are not read.** `.nl2park` is binary and undocumented. `.nl2elem` is XML carrying NL2's own vertex + roll-point representation, which would have to be fitted onto the curvature model anyway. CSV is already sampled frames, so it is strictly less work for strictly more coverage.
+- **Which line NL2 exports is unverified.** See "Still unknown" below.
+
+## Vertical slice
+
+`Source/TrackUnlimited/TUCoasterRide.cpp` is the first code to take the prototypes into the engine. `TrackUnlimited.Build.cs` puts `Prototypes/` on the public include path and includes the headers **directly** rather than copying them, so the standalone assert suites test exactly the code that ships. The class is a thin shell: it converts units and handedness at the boundary and does nothing else of consequence.
+
+- **Builds clean** against UE 5.8.1 (MSVC 14.50) with **zero warnings**. The engine-free headers drop into a UE module without name collisions — worth noting given how many short identifiers they define (`FTrack`, `Dot`, `Cross`, `Length`). `FTrackFrame` is deliberately not called `FFrame`, which *would* have collided with the Blueprint VM's type.
+- **The handedness flip is verified in the shipped conversion, not just in principle.** Across 2,000 frames of the slice's own 543.7 m layout, the UE basis built by `ToWorldRotation` has worst `|Fwd × Right − Up|` of **1.15e-12**, orthogonality 2.9e-15, and `||Fwd| − 1|` of 5.9e-13 — the same order as the 1.6e-13 measured for the correct rule below, and nowhere near the 2.000000 that the wrong one produces.
+- **The hand-authored layout reproduces its design figures exactly**: 16 segments, 543.7 m, curvature-continuous, 34.9 m lift, 100.9 km/h, vertical G +0.70 to +4.25, peak lateral +0.36, and +1.05 G over the loop apex while inverted. Authored numerically as an ordered list of typed segment parameters, with no viewport dragging anywhere — the authoring model the project actually intends.
+- **It runs.** Placed in a level and played in-editor, `BuildTrack` logs `16 segments, 543.7 m, curvature-continuous=yes` — identical to what the standalone harness produces from the same code. That closes the loop the whole prototype strategy was built around: the same header, tested in a second without an editor, produces the same geometry inside the engine. The heartline and rail centreline both draw, the ride camera sits on the heartline, and the camera visibly climbs the lift. No errors or warnings from the module, the pawn, or possession.
+- **The on-screen telemetry does not appear**, though `bShowTelemetry` defaults true and `Tick` is demonstrably running (the camera moves). Cause not yet established — `AddOnScreenDebugMessage` with `TimeToDisplay = 0.f` is the obvious suspect but was not confirmed, and no screen-message cvar was found suppressing it. Cosmetic, but it *is* the readout the slice exists to provide, so it needs settling before the slice can be called done.
+- **Not yet proven: ride feel.** Geometry and numbers are verified; whether it *feels* right to an NL2 veteran is a judgement no log line can make, and nobody has sat through a lap yet with an opinion. The point-mass train (no length) is the known limitation most likely to show up here.
+- **The level is not saved.** The pawn currently sits in a `/Temp/Untitled_1` map; `Content/` still has no committed level. Saving one, and setting it as the editor startup map, is loose-ends work.
+
 ## UE5 port checklist
 
 Measured, not guessed. Both headers are the canonical design to **port**, not references to reimplement.
@@ -130,7 +217,8 @@ Measured, not guessed. Both headers are the canonical design to **port**, not re
 Phase 0 did not touch these, and no claim on this page covers them.
 
 - **Train length.** See the limitation above — the single most likely source of "this doesn't feel right" once there is something to ride.
-- **Calibration against a real ride.** The model is verified against closed forms, which says it is self-consistent, not that it matches a real coaster. Nothing has been compared to a measured speed or G trace.
 - **Distance-based block overlap.** Only the time-based overlap exists; the distance form needs train position and braking distance from the physics model.
-- **Lateral-G sign versus NoLimits 2.** The prototype reports +0.76 for a flat left turn (rider thrown right), consistent with its own vertical convention. NL2's documentation reads as the opposite. This rests on a documentation reading only — nobody checked a running copy. Settle it empirically before G traces, editor graphs and comfort thresholds get built on it; it is one negation now and expensive later.
+- **Calibration is now measured once, not solved.** See "Calibration against NoLimits 2" above: the shipped `RollingResistance` / `DragK` run this ride about 1.0 m/s fast, and a fit halves that. But it is **one train on one 233 m layout**, the fitted `DragK` lands 3.2× above its physically derived value, and there is residual structure in the fit — so the numbers are a data point, not a new default. Repeat on a second, longer, faster ride before changing anything shipped.
+- **Whether train length explains the residual.** The fit needed far more drag than physics suggests, which is what modelling a 10–15 m train as a point at the heartline would look like: the real train's speed over a crest is governed by the whole train's centre of mass. This is the first *evidence* for the train-length limitation rather than an argument from first principles, but it is not yet separated from the other candidates (NL2's own resistance model, chain-release behaviour).
+- **Which line NL2's CSV export follows** — the heartline or the rail centreline. Telemetry and the CSV are separated by a near-constant **1.365 m** (min 1.315, p90 1.384), so they are definitely *different* reference lines about a heartline-height apart. That does not say which is which, and this track is unbanked (max 1.9°) so its G data cannot distinguish them — the two only diverge through bank. Settle it on a banked ride before quoting a G number from an imported NL2 track.
 - **Procedural meshing.** The Coaster Forge build-vs-adapt evaluation is still the open Phase 0 item, and it gates Phase 4.

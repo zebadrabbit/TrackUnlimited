@@ -36,6 +36,8 @@ Added beyond the original plan: `Prototypes/TrainPhysics/` — the Section 5 ene
 
 `Prototypes/BlockSignal/BlockSignal.h`, `Prototypes/TrackSpline/TrackSpline.h` and `Prototypes/TrainPhysics/TrainPhysics.h` are the **canonical designs to port** into UE5 C++ — not references to reimplement from scratch. `Docs/PHASE0_FINDINGS.md` has a measured port checklist.
 
+Also added: `Prototypes/NL2Csv/` — reads and writes NoLimits 2's documented tab-separated spline export, so real NL2 layouts can be driven through the model and our tracks opened in NL2 to compare G and speed traces. This is a **validation and test-fixture path, not an authoring path**, and it does not soften constraint #1 above: an imported track is thousands of derived micro-segments with the original segment vocabulary unrecoverable, so it is not something anyone edits. Do not let it grow into a back door around parametric authoring, and do not commit NL2 park files or exports of real rides (`Prototypes/NL2Csv/Tracks/` is gitignored for that reason).
+
 Do not start Phase 1 (Track Editor MVP) work until the Phase 0 spline-math and block-state-machine prototypes are de-risked — see `Docs/PROJECT_PLAN.md` Section 10, "Immediate Next Steps." (Both are now done; the vertical slice is the remaining Phase 0 engineering item.)
 
 ## Key vocabulary (used throughout the docs and should be used consistently in code/comments)

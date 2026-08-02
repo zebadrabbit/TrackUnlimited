@@ -43,3 +43,17 @@ Prototypes/**/test_*
 Prototypes/**/*.o
 Prototypes/**/*.obj
 Prototypes/**/*.pdb
+# The telemetry recorder is a tool rather than a test_*, so the rule above
+# misses it; its recordings are machine-specific captures, not source.
+Prototypes/NL2Telemetry/record
+Prototypes/NL2Telemetry/record.exe
+Prototypes/**/telemetry*.csv
+
+# --- NL2 track imports and park files (scratch) ---
+# Working directories for NoLimits 2 content: .nl2park files and the CSV spline
+# exports fed to Prototypes/NL2Csv. Kept out of the repo because third-party
+# park content is not ours to redistribute, and recreations of real rides would
+# breach the no-real-ride-designs rule in CLAUDE.md. Commit an original,
+# self-authored test track if one is ever actually needed as a fixture.
+Prototypes/NL2Csv/Tracks/
+NL2/
