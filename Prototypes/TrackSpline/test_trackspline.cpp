@@ -2,6 +2,7 @@
 // Build & run:  clang++ -std=c++17 -Wall -Wextra -o test_trackspline test_trackspline.cpp && ./test_trackspline
 
 #include "TrackSpline.h"
+#include "TrackClose.h"
 #include "TrackIO.h"
 #include "TrackProfile.h"
 #include "TrackValidate.h"
@@ -825,6 +826,240 @@ static void TestAuthoredParametersSurviveWhereDerivedOnesWouldNot()
     assert(Rebuilt.YawCurvatureStart == Original.YawCurvatureStart);
 }
 
+// ------------------------------------------------------------ circuit closure
+
+// A four-corner circuit: straight, 90-degree eased corner, four times over.
+// Every corner turns EXACTLY 90 degrees whatever its radius and easement,
+// because the arc length is computed for the turn the easements leave — so
+// heading always closes and only position can gap. That is the asymmetry
+// PHASE0_FINDINGS measured, and the whole shape of the problem.
+//
+// Straight 0 runs along +X and straight 1 along +Y, which is what makes them a
+// pair that can span a planar gap. Two PARALLEL straights cannot, however
+// convenient it would be.
+static FTrackDocument BuildCircuit(double EasementA, double RadiusA, double Easement,
+                                   double Radius)
+{
+    auto Corner = [](double Ease, double R, std::vector<FAuthoredSegment>& Out) {
+        const double EaseTurn = 0.5 * Ease / R; // integral of a linear ramp
+        const double ArcTurn = Pi * 0.5 - 2.0 * EaseTurn;
+        Out.push_back(AuthorClothoid(Ease, 0.0, 1.0 / R));
+        Out.push_back(AuthorArc(ArcTurn * R, R));
+        Out.push_back(AuthorClothoid(Ease, 1.0 / R, 0.0));
+    };
+
+    FTrackDocument Doc;
+    Doc.Segments.push_back(AuthorStraight(80.0)); // 0: +X
+    Corner(EasementA, RadiusA, Doc.Segments);     // 1,2,3 — the odd one out
+    Doc.Segments.push_back(AuthorStraight(60.0)); // 4: +Y
+    Corner(Easement, Radius, Doc.Segments);
+    Doc.Segments.push_back(AuthorStraight(80.0)); // 8: -X
+    Corner(Easement, Radius, Doc.Segments);
+    Doc.Segments.push_back(AuthorStraight(60.0)); // 12: -Y
+    Corner(Easement, Radius, Doc.Segments);
+    return Doc;
+}
+
+static void TestSymmetricCircuitAlreadyCloses()
+{
+    // The baseline the findings recorded: a symmetric oval closes at 0.0000 m
+    // with no solving at all. If this ever stops being true, the integrator
+    // broke, not the solver.
+    const FTrackDocument Doc = BuildCircuit(20.0, 30.0, 20.0, 30.0);
+    const FTrack Track = BuildTrack(Doc);
+    const FClosureGap Gap = MeasureClosure(Track, CircuitTarget(Track));
+    assert(Gap.PositionError < 1e-6);
+    assert(Gap.HeadingError < 1e-9);
+
+    // And the solver leaves an already-closed track completely alone, rather
+    // than nudging the author's round numbers to chase floating-point noise.
+    FTrackDocument Copy = Doc;
+    const FClosureResult R =
+        SolveClosure(Copy, CircuitTarget(Track), {FreeLength(0), FreeLength(4)});
+    assert(R.bConverged);
+    assert(!R.bApplied);
+    assert(Copy.Segments[0].Length == Doc.Segments[0].Length);
+}
+
+static void TestClosesTheGapTheFindingsMeasured()
+{
+    // One corner eased over 8 m where the other three use 20 m. Heading closes
+    // exactly — the author typed four 90-degree corners — and position does
+    // not, because nobody typed where the track ends up. That asymmetry is the
+    // whole shape of this problem, and it is why a control-point model gets
+    // closure free and this one has to solve for it.
+    FTrackDocument Doc = BuildCircuit(8.0, 30.0, 20.0, 30.0);
+    const FTrack Before = BuildTrack(Doc);
+    const FClosureTarget Target = CircuitTarget(Before);
+    const FClosureGap Gap0 = MeasureClosure(Before, Target);
+    assert(Gap0.PositionError > 0.5);
+    assert(Gap0.HeadingError < 1e-9); // heading was never in question
+
+    // Straight 0 runs along +X and straight 4 along +Y, so between them they
+    // span the plane the gap lives in. Changing a straight's length translates
+    // everything downstream without rotating it, which makes this exactly
+    // linear — Gauss-Newton should need one real step, not a search.
+    const FClosureResult R = SolveClosure(Doc, Target, {FreeLength(0), FreeLength(4)});
+    assert(R.bConverged);
+    assert(R.bApplied);
+    assert(R.After.PositionError <= 1e-3);
+    assert(R.After.PositionError < Gap0.PositionError);
+
+    // Still authored values afterwards, not baked geometry. The straights
+    // moved; every arc kept the radius the author typed, and every segment kept
+    // its kind. A solver that wrote curvature directly would leave a segment
+    // whose radius field and curvature field disagree.
+    assert(Doc.Segments[0].Kind == ESegmentKind::Straight);
+    assert(Doc.Segments[2].Radius == 30.0);
+    assert(Doc.Segments[6].Radius == 30.0);
+    assert(Doc.Segments[2].Kind == ESegmentKind::Arc);
+
+    std::printf("  closure: %.3f m gap closed to %.2e m in %d iterations, %d walks\n",
+                Gap0.PositionError, R.After.PositionError, R.Iterations, R.Evaluations);
+
+    // A much bigger one: one corner at R=45 against three at R=30.
+    FTrackDocument Wide = BuildCircuit(20.0, 45.0, 20.0, 30.0);
+    const FClosureTarget WideTarget = CircuitTarget(BuildTrack(Wide));
+    const FClosureGap Gap1 = MeasureClosure(BuildTrack(Wide), WideTarget);
+    assert(Gap1.PositionError > 5.0);
+    const FClosureResult R1 = SolveClosure(Wide, WideTarget, {FreeLength(0), FreeLength(4)});
+    assert(R1.bConverged);
+    assert(R1.After.PositionError <= 1e-3);
+    std::printf("  closure: %.2f m gap closed to %.2e m in %d iterations\n",
+                Gap1.PositionError, R1.After.PositionError, R1.Iterations);
+}
+
+static void TestHeightGapIsCalledOutSeparately()
+{
+    // The failure mode the vertical slice actually shipped: a track that looks
+    // closed from above and ends 8.5 m below its station, so the cart falls
+    // through where the platform should be. Plan view shows nothing.
+    FTrackDocument Doc;
+    Doc.Segments.push_back(AuthorStraight(40.0));
+    FTrackSegment Down;
+    Down.Length = 60.0;
+    Down.PitchCurvatureStart = Down.PitchCurvatureEnd = -0.004;
+    Doc.Segments.push_back(AuthorRaw(Down));
+    Doc.Segments.push_back(AuthorStraight(40.0));
+
+    const FTrack Track = BuildTrack(Doc);
+    const FClosureGap Gap = MeasureClosure(Track, CircuitTarget(Track));
+    assert(Gap.HeightError < -1.0);            // it ends low
+    assert(std::fabs(Gap.HeightError) > 1.0);
+    // And the height is a named field, not something to be dug out of a
+    // magnitude that mixes it with a much larger horizontal distance.
+    assert(Gap.PositionError > std::fabs(Gap.HeightError));
+    std::printf("  closure: ends %.2f m low with a %.1f m position gap — height is its own "
+                "number for a reason\n",
+                Gap.HeightError, Gap.PositionError);
+}
+
+static void TestSolverRefusesRatherThanBreakingTheTrack()
+{
+    // A radius may not cross zero on its way to a solution. +ve is a left turn
+    // and -ve is a right turn, so crossing would silently reverse the turn —
+    // and it would pass through the infinite curvature PHASE0_FINDINGS records
+    // as producing a clean, straight segment that passes every check.
+    FTrackDocument Doc = BuildCircuit(8.0, 30.0, 20.0, 30.0);
+    const FClosureTarget Target = CircuitTarget(BuildTrack(Doc));
+    const FClosureResult R = SolveClosure(Doc, Target, {FreeRadius(2), FreeRadius(6)});
+    for (const FAuthoredSegment& A : Doc.Segments)
+    {
+        if (A.Kind == ESegmentKind::Arc)
+        {
+            assert(A.Radius > 0.0);             // sign never flipped
+            assert(std::fabs(A.Radius) >= 5.0); // magnitude floored
+            assert(std::isfinite(A.Radius));
+        }
+    }
+    (void)R;
+
+    // Two PARALLEL straights cannot span a planar gap however much the solver
+    // wants them to: straight 0 and straight 8 both run along the X axis, so
+    // between them they move the endpoint along one line. The solver reports
+    // that rather than grinding to a plausible-looking wrong answer.
+    FTrackDocument Parallel = BuildCircuit(8.0, 30.0, 20.0, 30.0);
+    const FTrackDocument Untouched = Parallel;
+    const FClosureResult Flat = SolveClosure(Parallel, Target, {FreeLength(0), FreeLength(8)});
+    assert(!Flat.bConverged);
+    assert(!Flat.bApplied);
+    assert(!Flat.Message.empty());
+    // Unchanged, not half-fixed. The author's own numbers are worth more than
+    // an improvement they did not ask for and that still does not close.
+    assert(Parallel.Segments[0].Length == Untouched.Segments[0].Length);
+
+    // Opting in keeps the partial improvement instead.
+    FClosureOptions Keep;
+    Keep.bApplyOnFailure = true;
+    FTrackDocument Partial = BuildCircuit(8.0, 30.0, 20.0, 30.0);
+    const FClosureResult Kept = SolveClosure(Partial, Target, {FreeLength(0)}, Keep);
+    assert(Kept.bApplied);
+    assert(Kept.After.PositionError < Kept.Before.PositionError);
+
+    // Bad input is rejected with a reason, not treated as an unsolvable track.
+    FTrackDocument Doc2 = BuildCircuit(20.0, 30.0, 20.0, 30.0);
+    const FClosureResult Bad = SolveClosure(Doc2, Target, {FreeLength(999)});
+    assert(!Bad.bConverged);
+    assert(Bad.Message.find("999") != std::string::npos);
+    const FClosureResult None = SolveClosure(Doc2, Target, {});
+    assert(!None.bConverged);
+    assert(!None.Message.empty());
+}
+
+static void TestHorizontalStraightsCannotReachTheHeightAxis()
+{
+    // A limitation worth knowing before reaching for the solver, because the
+    // symptom is "the solver doesn't work" rather than "the solver is being
+    // asked for something those freedoms cannot do".
+    //
+    // A straight carries the heading it was handed, so changing its length
+    // translates everything downstream along that heading and nothing else. A
+    // straight that is HORIZONTAL therefore cannot move the endpoint's height,
+    // no matter how many of them are freed or how far they move.
+    //
+    // Note the qualifier. A straight sitting after an unbalanced hill is itself
+    // pitched, and that one moves height perfectly well. It is the direction
+    // that matters, not the segment kind.
+    FTrackDocument Doc = BuildCircuit(20.0, 30.0, 20.0, 30.0);
+    // A balanced hill: pitch up, then the mirror back down. Net pitch change is
+    // zero, so every straight after it stays horizontal — and the track still
+    // ends higher than it started, which is the whole point.
+    FTrackSegment Up, Down;
+    Up.Length = Down.Length = 30.0;
+    Up.PitchCurvatureStart = Up.PitchCurvatureEnd = 0.01;
+    Down.PitchCurvatureStart = Down.PitchCurvatureEnd = -0.01;
+    Doc.Segments.insert(Doc.Segments.begin() + 1, AuthorRaw(Down));
+    Doc.Segments.insert(Doc.Segments.begin() + 1, AuthorRaw(Up));
+
+    const FClosureTarget Target = CircuitTarget(BuildTrack(Doc));
+    const FClosureGap Gap0 = MeasureClosure(BuildTrack(Doc), Target);
+    assert(Gap0.HeightError > 1.0);
+
+    // Straight 0 runs +X and straight 6 runs +Y — both horizontal, and between
+    // them they span the plane but not the axis that is actually wrong.
+    FTrackDocument Straights = Doc;
+    const FClosureResult NoHope = SolveClosure(Straights, Target, {FreeLength(0), FreeLength(6)});
+    assert(!NoHope.bConverged);
+    assert(!NoHope.bApplied);
+    // Not "barely moved" — the height is untouched exactly, because those
+    // parameters have identically zero gradient on that row of the residual.
+    assert(Near(NoHope.After.HeightError, Gap0.HeightError, 1e-9));
+
+    // Free something vertical and the axis becomes reachable.
+    FTrackDocument WithHill = Doc;
+    FClosureOptions Keep;
+    Keep.bApplyOnFailure = true;
+    const FClosureResult Better =
+        SolveClosure(WithHill, Target,
+                     {FreeLength(0), FreeLength(6), FreeField(1, EClosureField::Length, 1.0, 120.0)},
+                     Keep);
+    assert(std::fabs(Better.After.HeightError) < std::fabs(Gap0.HeightError));
+
+    std::printf("  closure: %.2f m of height is untouchable by horizontal straights "
+                "(%.2f m after solving), reachable via the hill (%.3f m)\n",
+                Gap0.HeightError, NoHope.After.HeightError, Better.After.HeightError);
+}
+
 // ------------------------------------------------------ world-referenced roll
 
 // Build climb 45 / turn left 90 / descend 45 in one roll mode. Curvature steps
@@ -1213,6 +1448,11 @@ int main()
     TestUnknownFieldsLoadButUnknownGeometryDoesNot();
     TestMalformedFilesAreRejectedNotAbsorbed();
     TestAuthoredParametersSurviveWhereDerivedOnesWouldNot();
+    TestSymmetricCircuitAlreadyCloses();
+    TestClosesTheGapTheFindingsMeasured();
+    TestHeightGapIsCalledOutSeparately();
+    TestSolverRefusesRatherThanBreakingTheTrack();
+    TestHorizontalStraightsCannotReachTheHeightAxis();
     TestHelixIsActuallyAHelix();
     TestHelixHandednessAndDegenerateCases();
     TestHelixExitIsNotContinuousWithAPlainArc();
