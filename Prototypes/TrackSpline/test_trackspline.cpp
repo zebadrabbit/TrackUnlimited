@@ -2,11 +2,14 @@
 // Build & run:  clang++ -std=c++17 -Wall -Wextra -o test_trackspline test_trackspline.cpp && ./test_trackspline
 
 #include "TrackSpline.h"
+#include "TrackIO.h"
 #include "TrackProfile.h"
 #include "TrackValidate.h"
 
 #include <cassert>
 #include <cstdio>
+#include <string>
+#include <vector>
 
 static const double Pi = 3.14159265358979323846;
 
@@ -556,6 +559,262 @@ static void TestRollRateIsVisibleWhereFeltGIsNot()
     assert(!HasIssue(ValidateTrack(Smooth), ETrackIssue::RollRateStep, 0));
 }
 
+// ------------------------------------------------------------------ track I/O
+
+// A layout using every authored kind, so a round trip has to carry all of them.
+static FTrackDocument SampleDocument()
+{
+    FTrackDocument Doc;
+    Doc.HeartlineHeight = 1.1;
+    Doc.Segments = {
+        AuthorStraight(40.0),
+        AuthorClothoid(20.0, 0.0, 1.0 / 30.0, 0.0, 0.4),
+        AuthorArc(50.0, 30.0, 0.4),
+        AuthorHelix(20.0, 15.0 * Pi / 180.0, 1.5, 0.25),
+    };
+    // A hill. No Make* helper builds pitch curvature, so this is exactly the
+    // case ESegmentKind::Raw exists for.
+    FTrackSegment Hill;
+    Hill.Length = 35.0;
+    Hill.PitchCurvatureStart = Hill.PitchCurvatureEnd = -1.0 / 45.0;
+    Doc.Segments.push_back(AuthorRaw(Hill));
+    // And a world-referenced bank, so the mode survives the file too.
+    FAuthoredSegment Banked = AuthorArc(30.0, -40.0, 0.3);
+    Banked.RollMode = ERollMode::WorldBank;
+    Doc.Segments.push_back(Banked);
+    return Doc;
+}
+
+static std::vector<std::string> SplitLines(const std::string& S)
+{
+    std::vector<std::string> Out;
+    std::string Line;
+    for (const char Ch : S)
+    {
+        if (Ch == '\n')
+        {
+            Out.push_back(Line);
+            Line.clear();
+        }
+        else
+        {
+            Line.push_back(Ch);
+        }
+    }
+    if (!Line.empty())
+    {
+        Out.push_back(Line);
+    }
+    return Out;
+}
+
+static void TestTrackRoundTripsThroughJson()
+{
+    const FTrackDocument Doc = SampleDocument();
+    std::string Text, Err;
+    assert(WriteTrackJson(Doc, Text, Err));
+    assert(Err.empty());
+
+    FTrackDocument Back;
+    assert(ParseTrackJson(Text, Back, Err));
+    assert(Err.empty());
+    assert(Back.Segments.size() == Doc.Segments.size());
+    assert(Back.HeartlineHeight == Doc.HeartlineHeight);
+
+    // Compared as GEOMETRY, not as fields. Fields matching proves the struct
+    // survived; walking the track proves the ride did. The vertical loop test
+    // records why that distinction earns its keep — a mutant once put the apex
+    // at z=-16 with every G reading identical.
+    const FTrack A = BuildTrack(Doc);
+    const FTrack B = BuildTrack(Back);
+    assert(Near(A.TotalLength(), B.TotalLength(), 1e-12));
+
+    double Worst = 0.0;
+    for (double S = 0.0; S <= A.TotalLength(); S += 1.0)
+    {
+        const FTrackFrame FA = A.EvaluateAt(S);
+        const FTrackFrame FB = B.EvaluateAt(S);
+        Worst = std::fmax(Worst, Length(FA.Position - FB.Position));
+        assert(Near(FA.Roll, FB.Roll, 1e-12));
+        assert(NearVec(FA.Up, FB.Up, 1e-12));
+    }
+    // Exact, not merely close. Every stored number is the shortest decimal that
+    // reads back bit-identical, and the derived values are recomputed by the
+    // same code on both sides rather than being stored and trusted.
+    assert(Worst == 0.0);
+
+    // Re-writing what was read gives byte-identical text. Without this, opening
+    // and saving a file would churn the diff even with no edit.
+    std::string Again;
+    assert(WriteTrackJson(Back, Again, Err));
+    assert(Again == Text);
+
+    std::printf("  track I/O: %zu segments round-trip exactly; re-save is byte-identical\n",
+                Doc.Segments.size());
+}
+
+static void TestOneEditIsOneLineOfDiff()
+{
+    // The claim the whole authored model rests on. A helix stored as its
+    // authored parameters puts a radius change in ONE number. Stored as the
+    // ~300-segment approximation it would need, the same edit rewrites ~600
+    // fitted curvature endpoints — and only if regeneration were
+    // bit-deterministic across compilers, which is not a promise worth making.
+    FTrackDocument Doc = SampleDocument();
+    std::string Before, After, Err;
+    assert(WriteTrackJson(Doc, Before, Err));
+
+    for (FAuthoredSegment& A : Doc.Segments)
+    {
+        if (A.Kind == ESegmentKind::Helix)
+        {
+            A.Radius += 2.0;
+        }
+    }
+    assert(WriteTrackJson(Doc, After, Err));
+
+    const std::vector<std::string> L1 = SplitLines(Before);
+    const std::vector<std::string> L2 = SplitLines(After);
+    assert(L1.size() == L2.size());
+    int Changed = 0;
+    for (std::size_t i = 0; i < L1.size(); ++i)
+    {
+        Changed += (L1[i] != L2[i]) ? 1 : 0;
+    }
+    assert(Changed == 1);
+
+    // And the geometry really did move, so this is not one line because nothing
+    // happened.
+    assert(!Near(BuildTrack(Doc).TotalLength(),
+                 BuildTrack(SampleDocument()).TotalLength(), 1.0));
+    std::printf("  track I/O: a helix radius change is %d line of diff\n", Changed);
+}
+
+static void TestDefaultsAreOmittedSoNewFieldsCostNothing()
+{
+    // Both Torsion and RollMode were added to a model that already had stored
+    // tracks. Neither should have touched a single existing line, and the
+    // property that made that true is that a field sitting at its default is
+    // not written at all.
+    FTrackDocument Doc;
+    Doc.Segments = {AuthorStraight(40.0), AuthorArc(50.0, 30.0)};
+    std::string Text, Err;
+    assert(WriteTrackJson(Doc, Text, Err));
+    assert(Text.find("roll") == std::string::npos);     // no roll, no rollMode
+    assert(Text.find("torsion") == std::string::npos);  // not a helix, not written
+
+    // Absent optional fields load as their defaults rather than as an error.
+    FTrackDocument Back;
+    assert(ParseTrackJson(Text, Back, Err));
+    assert(Back.Segments[1].RollStart == 0.0);
+    assert(Back.Segments[1].RollMode == ERollMode::PathRelative);
+
+    // A constant roll is one field; a ramping roll is two. The common case
+    // should not cost two lines of noise.
+    Doc.Segments[1].RollStart = Doc.Segments[1].RollEnd = 0.5;
+    assert(WriteTrackJson(Doc, Text, Err));
+    assert(Text.find("\"roll\":") != std::string::npos);
+    assert(Text.find("rollStart") == std::string::npos);
+}
+
+static void TestUnknownFieldsLoadButUnknownGeometryDoesNot()
+{
+    // Forward compatibility, and its exact limit. A key we do not recognise is
+    // ignorable — a later version adding metadata should not break this build.
+    const std::string Extra =
+        "{\"format\": \"trackunlimited.track\", \"version\": 1, \"name\": \"whatever\",\n"
+        " \"segments\": [{\"kind\": \"straight\", \"length\": 20, \"colour\": 7}]}";
+    FTrackDocument Doc;
+    std::string Err;
+    assert(ParseTrackJson(Extra, Doc, Err));
+    assert(Doc.Segments.size() == 1);
+    assert(Doc.Segments[0].Length == 20.0);
+
+    // A SEGMENT KIND we do not recognise is not ignorable. Skipping it would
+    // drop geometry out of the middle of a track and leave a file that loads,
+    // looks fine, and is a different ride. Refuse instead.
+    const std::string Future =
+        "{\"segments\": [{\"kind\": \"straight\", \"length\": 20},\n"
+        "               {\"kind\": \"parabola\", \"length\": 30}]}";
+    assert(!ParseTrackJson(Future, Doc, Err));
+    assert(Err.find("parabola") != std::string::npos);
+
+    // Same reasoning one level up: a file from a future format version is
+    // refused rather than partially understood.
+    const std::string Newer = "{\"version\": 99, \"segments\": []}";
+    assert(!ParseTrackJson(Newer, Doc, Err));
+    assert(Err.find("99") != std::string::npos);
+}
+
+static void TestMalformedFilesAreRejectedNotAbsorbed()
+{
+    // A trust boundary: this is a file off disk that a human may have hand
+    // edited. Every case here must produce an error string, not a default that
+    // reads as a plausible track.
+    const char* Bad[] = {
+        "",                                                          // empty
+        "not json at all",                                           // no object
+        "{\"segments\": [{\"kind\": \"arc\", \"length\": 20}]}",     // arc with no radius
+        "{\"segments\": [{\"kind\": \"straight\", \"length\": abc}]}",   // garbage number
+        "{\"segments\": [{\"kind\": \"straight\", \"length\": 1e999}]}", // overflows to inf
+        "{\"segments\": [{\"length\": 20}]}",                        // no kind
+        "{\"heartlineHeight\": 1.1}",                                // no segments array
+        "{\"segments\": [{\"kind\": \"straight\", \"length\": 20}",   // truncated
+        "{\"segments\": [{\"kind\": \"straight\", \"length\": 20, \"nested\": {\"a\": 1}}]}",
+        "{\"segments\": [{\"kind\": \"straight\", \"length\": 20, \"rollMode\": \"sideways\"}]}",
+        "{\"segments\": [{\"kind\": \"straight\", \"length\": \"unterminated}]}",
+    };
+    for (const char* Text : Bad)
+    {
+        FTrackDocument Doc;
+        std::string Err;
+        const bool bOk = ParseTrackJson(Text, Doc, Err);
+        assert(!bOk);
+        assert(!Err.empty()); // and it says what was wrong, not just that it failed
+    }
+
+    // The writer is the other half of the boundary: it must refuse to emit a
+    // non-finite value rather than write "nan", which no reader could take back
+    // in. This is what MakeArc(radius = 0) produces.
+    FTrackDocument Doc;
+    Doc.Segments = {AuthorRaw(MakeArc(50.0, 0.0))};
+    std::string Text, Err;
+    assert(!WriteTrackJson(Doc, Text, Err));
+    assert(!Err.empty());
+
+    std::printf("  track I/O: %zu malformed inputs rejected with a reason; "
+                "non-finite refused on write\n",
+                sizeof(Bad) / sizeof(Bad[0]));
+}
+
+static void TestAuthoredParametersSurviveWhereDerivedOnesWouldNot()
+{
+    // The point of storing what was typed. After a save/load cycle the helix is
+    // still "radius 20, 15 degrees, 1.5 turns" — three numbers a human can edit
+    // — and not the length/curvature/torsion triple the integrator runs on,
+    // which is correct, equivalent, and un-editable.
+    FTrackDocument Doc;
+    Doc.Segments = {AuthorHelix(20.0, 15.0 * Pi / 180.0, 1.5, 0.25)};
+    std::string Text, Err;
+    assert(WriteTrackJson(Doc, Text, Err));
+    assert(Text.find("\"radius\": 20") != std::string::npos);
+    assert(Text.find("\"turns\": 1.5") != std::string::npos);
+    assert(Text.find("torsion") == std::string::npos); // derived, so never stored
+
+    FTrackDocument Back;
+    assert(ParseTrackJson(Text, Back, Err));
+    assert(Back.Segments[0].Radius == 20.0);
+    assert(Back.Segments[0].Turns == 1.5);
+
+    // Rebuilt through the same MakeHelix, so the derived form is bit-identical
+    // rather than merely close.
+    const FTrackSegment Rebuilt = BuildSegment(Back.Segments[0]);
+    const FTrackSegment Original = BuildSegment(Doc.Segments[0]);
+    assert(Rebuilt.Length == Original.Length);
+    assert(Rebuilt.Torsion == Original.Torsion);
+    assert(Rebuilt.YawCurvatureStart == Original.YawCurvatureStart);
+}
+
 // ------------------------------------------------------ world-referenced roll
 
 // Build climb 45 / turn left 90 / descend 45 in one roll mode. Curvature steps
@@ -938,6 +1197,12 @@ int main()
     TestWorldBankThroughVerticalDegradesVisibly();
     TestResolvedRollRateSeesWhatTheAuthoredRateCannot();
     TestMixedRollModesAreReportedNotGuessed();
+    TestTrackRoundTripsThroughJson();
+    TestOneEditIsOneLineOfDiff();
+    TestDefaultsAreOmittedSoNewFieldsCostNothing();
+    TestUnknownFieldsLoadButUnknownGeometryDoesNot();
+    TestMalformedFilesAreRejectedNotAbsorbed();
+    TestAuthoredParametersSurviveWhereDerivedOnesWouldNot();
     TestHelixIsActuallyAHelix();
     TestHelixHandednessAndDegenerateCases();
     TestHelixExitIsNotContinuousWithAPlainArc();
