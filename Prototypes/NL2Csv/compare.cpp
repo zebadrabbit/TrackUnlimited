@@ -166,15 +166,24 @@ int main(int argc, char** argv)
     }
 
     std::printf("%s\n", argv[1]);
-    std::printf("  %zu samples -> %zu segments, %.1f m, %.1f m of drop, C2=%s\n",
+    // Height RANGE, not "drop". On a launched coast-down rig the height at the
+    // far end is a brake incline, and calling it a drop is what led me to read
+    // a completed experiment as a broken one.
+    std::printf("  %zu samples -> %zu segments, %.1f m, %.1f m of height range, C2=%s\n",
                 Parsed.Samples.size(), Track.NumSegments(), Total, Highest - Lowest,
                 Track.IsCurvatureContinuous(1e-6) ? "yes" : "no");
     std::printf("  ");
     ReportFlatRun(Track);
 
-    // A drop of h gives at most sqrt(2gh) at the bottom, before any losses.
-    std::printf("  ideal speed from that drop: %.1f km/h\n\n",
-                std::sqrt(2.0 * GravityMs2 * (Highest - Lowest)) * 3.6);
+    // Conditional and hedged, for the same reason. Only worth saying at all if
+    // there is enough height for it to plausibly be a gravity layout.
+    if (Highest - Lowest > 5.0)
+    {
+        std::printf("  IF that height is a drop rather than a brake incline, it is worth\n"
+                    "  %.1f km/h at the bottom\n",
+                    std::sqrt(2.0 * GravityMs2 * (Highest - Lowest)) * 3.6);
+    }
+    std::printf("\n");
 
     if (argc < 3)
     {
