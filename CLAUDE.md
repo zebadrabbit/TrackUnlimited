@@ -23,14 +23,33 @@ These were deliberate decisions made after discussion, not defaults — do not "
 5. **No real manufacturer trademarks or exact ride designs** (Vekoma, Intamin, B&M, RMC, etc.) without explicit permission. Use original/generic naming and designs.
 6. **MIT license** on everything committed here (see `LICENSE`).
 
-## Current phase: Phase 0 — Prototype
+## Current phase: Phase 2 — Physics & Ride Feel
 
-See `Docs/PROJECT_PLAN.md` Section 6 (Roadmap) and the Trello board's "Phase 0 — Prototype" list for full detail. Concrete next actions, in rough order:
+**Phase 0 and Phase 1 are complete** (2026-08-02). Two cards remain open in the Phase 1 list and both are deliberate deferrals rather than unfinished work: the loop side-step (the authored vocabulary cannot express a rideable one — five fixes measured and rejected, see `PHASE0_FINDINGS.md`) and ride-profile trace legibility (an aesthetics pass that wants designing, not accreting).
+
+What exists now, all of it engine-free and assert-tested under `Prototypes/`, with a thin UE actor over the top:
+
+- **Track geometry** — curvature profile over arc length; straight, arc, clothoid, helix (via constant torsion). `TrackSpline.h`
+- **Authored data model and diffable JSON** — stores what was typed, never what was derived. `TrackIO.h`
+- **Validation** — report, never repair. `TrackValidate.h`
+- **Circuit closure solver** — damped Gauss-Newton over authored parameters. `TrackClose.h`
+- **Undo/redo** — snapshots, with the save format as identity. `TrackHistory.h`
+- **Train physics and the ride profile** — the whole ride measured at edit time. `TrainPhysics/`
+- **Block signalling** — `BlockSignal/`
+- **NL2 CSV and telemetry** — validation fixtures, not authoring paths. `NL2Csv/`, `NL2Telemetry/`
+
+The editor surface is Unreal's Details panel over `TArray<FTUTrackSegment>`, with a live viewport preview and ride-profile traces. That is not a placeholder for a Slate UI — see the numeric-entry card for why.
+
+**Phase 2's bar is "feels right to an NL2 veteran", and the findings already name the thing most likely to fail it: the train is a point at the heartline and has no length.** A real train is 10–15 m, and its speed over a crest is governed by the whole train's centre of mass — which is exactly why the back car gets thrown over an airtime hill harder than the front. That single omission is also why the fitted `DragK` lands 3.2× above its physically derived value. Start there.
+
+## Phase 0 — Prototype (complete)
+
+Kept because the *reasoning* is still binding, not because the work is outstanding. Every item below is done; the notes attached to them are decisions that still hold.
 
 1. ~~Evaluate Coaster Forge (Fab/Dualstate Games) — a build-vs-adapt decision for the procedural track meshing layer.~~ **DECIDED: build.** Coaster Forge is a commercial product and cannot be redistributed under MIT, so "adapt" was never available — constraint 3 below already said as much. Buying it would have bought reference reading, not a shortcut. The one pattern the plan wanted from it, zone-based speed control, was arrived at independently and verified against NoLimits 2 (`FTrackZone` in `Prototypes/TrainPhysics/`). Phase 4 meshing is written from scratch against `Prototypes/TrackSpline/TrackProfile.h`. **This closes the last Phase 0 gate.**
 2. ~~Prototype the curvature-continuous spline math standalone.~~ **DONE** — `Prototypes/TrackSpline/`. Note the representation is **curvature-profile-over-arc-length**, not the cubic Hermite/B-spline model the plan originally called for: a segment carries curvature varying linearly over arc length (straight `k=0`, arc `k=const`, clothoid `k` linear) and geometry comes from integrating a moving orthonormal frame. C² continuity is therefore a property of the data, not something fitted. This supersedes the earlier wording — **do not "restore" a Hermite/control-point formulation.**
 3. ~~Prototype the block-occupancy + buffer state machine as a plain C++ class with unit tests.~~ **DONE** — `Prototypes/BlockSignal/`.
-4. Vertical slice: a single hand-authored spline, a cart that follows it with real physics, a basic camera. Prove the core ride feel before building any editor UI. **Now unblocked** — items 2 and 3 are de-risked, and the motion model exists too (see below). Use `FFrame::Tangent` for direction; never finite-difference `EvaluateAt`, and treat it as O(track length) per call.
+4. ~~Vertical slice: a single hand-authored spline, a cart that follows it with real physics, a basic camera.~~ **DONE** — `Source/TrackUnlimited/`. Use `FTrackFrame::Tangent` for direction; never finite-difference `EvaluateAt`, and treat it as O(track length) per call. That warning applies to anything differentiating the geometry, including the closure solver, which is why its finite-difference step is deliberately coarse.
 
 Added beyond the original plan: `Prototypes/TrainPhysics/` — the Section 5 energy-based motion model, built standalone because the vertical slice needs it. Gravity is an exact energy exchange, not an integrated force; powered sections are tractive accelerations that pass through the same energy accounting. **Do not "simplify" a zone back into a post-hoc clamp on speed** — that formulation manufactures energy on a gradient, which is measured and recorded in `Docs/PHASE0_FINDINGS.md`.
 
@@ -38,7 +57,7 @@ Added beyond the original plan: `Prototypes/TrainPhysics/` — the Section 5 ene
 
 Also added: `Prototypes/NL2Csv/` — reads and writes NoLimits 2's documented tab-separated spline export, so real NL2 layouts can be driven through the model and our tracks opened in NL2 to compare G and speed traces. This is a **validation and test-fixture path, not an authoring path**, and it does not soften constraint #1 above: an imported track is thousands of derived micro-segments with the original segment vocabulary unrecoverable, so it is not something anyone edits. Do not let it grow into a back door around parametric authoring, and do not commit NL2 park files or exports of real rides (`Prototypes/NL2Csv/Tracks/` is gitignored for that reason).
 
-Do not start Phase 1 (Track Editor MVP) work until the Phase 0 spline-math and block-state-machine prototypes are de-risked — see `Docs/PROJECT_PLAN.md` Section 10, "Immediate Next Steps." (Both are now done; the vertical slice is the remaining Phase 0 engineering item.)
+One rule from this phase that outlived it, because it has now bitten twice: **these headers are engine-free but they are compiled INTO the engine, so a type name only needs to be unique against all of UE.** `FFrame` collided with the Blueprint VM's and became `FTrackFrame`; `FField` collided with `UObject/Field.h`'s and became `FTrackIOField`. Standalone clang compiles both cleanly, so the collision only appears at the port. Check a new type name against the engine before, not after.
 
 ## Key vocabulary (used throughout the docs and should be used consistently in code/comments)
 
