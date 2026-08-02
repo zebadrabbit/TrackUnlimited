@@ -56,6 +56,33 @@ inline FVec3 RotateAbout(const FVec3& V, const FVec3& UnitAxis, double Angle)
 
 // ------------------------------------------------------------------- segments
 
+// What a roll value is measured FROM.
+//
+// This was Docs/DEFERRED_DECISIONS.md item 1, and the answer is "both, per
+// segment", because neither is defined everywhere a coaster goes.
+enum class ERollMode
+{
+    // Roll relative to the rotation-minimising path frame. Roll 0 means "no
+    // twist beyond whatever the track's own shape carried here" — which on
+    // non-planar track is NOT level with the horizon. It is well defined
+    // everywhere, including vertical and inverted track, so it stays the
+    // default and it is the only thing the integrator ever sees.
+    PathRelative,
+
+    // Roll relative to the horizon: the value is the bank angle a spirit level
+    // would read. This is what an author means by "bank this turn 30 degrees".
+    //
+    // Resolved per sample against the walked frame, NOT baked in when it is
+    // typed — so editing an upstream hill cannot silently change a downstream
+    // bank. The stored number keeps meaning what the author said.
+    //
+    // UNDEFINED where the tangent is vertical: there is no horizontal direction
+    // perpendicular to straight up, so there is nothing to be level with. Near
+    // vertical the reference swings fast and the bank costs a real, large roll
+    // rate — see AnalyseResolvedRollRate. Author inversions as PathRelative.
+    WorldBank,
+};
+
 // One parametric segment. The curvature VECTOR is what varies over arc length:
 // its magnitude ramps linearly, and it may additionally rotate about the
 // tangent at a constant rate. That covers the whole authored vocabulary:
@@ -95,9 +122,11 @@ struct FTrackSegment
     double Torsion = 0.0;
 
     // Radians. +ve banks *into* a +ve (left) turn: the rider's up-vector tilts
-    // toward the centre of the turn, the way a motorcycle leans.
+    // toward the centre of the turn, the way a motorcycle leans. What these are
+    // measured from is RollMode's job.
     double RollStart = 0.0;
     double RollEnd = 0.0;
+    ERollMode RollMode = ERollMode::PathRelative;
 };
 
 // The curvature vector at local arc length U along a segment: linear ramp
@@ -201,10 +230,53 @@ struct FTrackFrame
     FVec3 Up;          // rider's up, banked
     FVec3 PathLateral; // unbanked left — the direction the path actually bends
     FVec3 PathUp;      // unbanked up
+    // Always PathRelative, whatever mode the segment authored it in — a
+    // WorldBank segment is resolved before it lands here. Everything
+    // downstream (FeltG, the rail cross-section, the ride camera) therefore
+    // needs to know nothing about roll modes.
     double Roll = 0.0;
     double YawCurvature = 0.0;
     double PitchCurvature = 0.0;
 };
+
+constexpr FVec3 WorldUpAxis{0.0, 0.0, 1.0};
+
+// How far the path frame has already twisted away from level at this point —
+// equivalently, the PathRelative roll that would put the rider level with the
+// horizon. Zero on flat ground; it is the accumulated holonomy elsewhere.
+//
+// This is the whole of ERollMode::WorldBank. The rider's lateral ends up at
+// (Psi - Roll) about the tangent from the level reference, so asking for a bank
+// of B means resolving to Roll = Psi + B.
+//
+// Returns 0 where the tangent is vertical — there is no horizontal direction
+// perpendicular to straight up, so there is no reference to be level with. That
+// keeps the geometry finite and continuous rather than producing a NaN, and it
+// degrades to PathRelative for that instant. It is not a fix: a WorldBank
+// segment that goes near vertical is authored wrong, and the symptom is a large
+// roll rate, which AnalyseResolvedRollRate reports.
+inline double LevelRollOffset(const FVec3& Tangent, const FVec3& PathLateral)
+{
+    const FVec3 Ref = Cross(WorldUpAxis, Tangent);
+    const double RefLen = Length(Ref);
+    if (RefLen < 1e-12)
+    {
+        return 0.0;
+    }
+    const FVec3 LevelLateral = Ref * (1.0 / RefLen);
+    // Both arguments are perpendicular to the tangent, so their cross product
+    // is exactly parallel to it and this atan2 is the exact signed angle.
+    return std::atan2(Dot(Cross(LevelLateral, PathLateral), Tangent),
+                      Dot(LevelLateral, PathLateral));
+}
+
+// The bank a spirit level would read at this frame: 0 is level, +ve leans the
+// rider toward their left, matching the sign of RollStart/RollEnd. The inverse
+// of what WorldBank authoring asks for, and how a test checks it.
+inline double WorldBankOf(const FTrackFrame& F)
+{
+    return -LevelRollOffset(F.Tangent, F.Lateral);
+}
 
 // -------------------------------------------------------------------- gravity
 
@@ -424,8 +496,23 @@ public:
             CurvatureAt(A, A.Length, AYaw, APitch);
             CurvatureAt(B, 0.0, BYaw, BPitch);
 
-            if (std::fabs(AYaw - BYaw) > Tolerance || std::fabs(APitch - BPitch) > Tolerance ||
-                std::fabs(A.RollEnd - B.RollStart) > Tolerance)
+            if (std::fabs(AYaw - BYaw) > Tolerance || std::fabs(APitch - BPitch) > Tolerance)
+            {
+                return false;
+            }
+
+            // Roll values are only comparable when both sides measure from the
+            // same thing. Across a mode change the two numbers are in different
+            // units of meaning, and whether the resolved roll actually steps
+            // depends on the frame at the joint — which this data-only check
+            // does not have. Refusing is the conservative answer: it can cry
+            // wolf on a joint that happens to be level, and the alternative is
+            // reporting a real instantaneous twist as continuous.
+            if (A.RollMode != B.RollMode)
+            {
+                return false;
+            }
+            if (std::fabs(A.RollEnd - B.RollStart) > Tolerance)
             {
                 return false;
             }
@@ -468,6 +555,15 @@ private:
             const FTrackSegment& Seg = Segments[Index];
             const double A = Seg.Length > 0.0 ? Local / Seg.Length : 0.0;
             Out.Roll = Lerp(Seg.RollStart, Seg.RollEnd, A);
+            if (Seg.RollMode == ERollMode::WorldBank)
+            {
+                // Solved here, against the frame we just walked to, rather than
+                // baked in at authoring time. That is the whole point: roll is
+                // the one authored quantity whose meaning depends on everything
+                // upstream of it, so resolving it late is what stops an edit to
+                // a hill from silently unbanking a turn a hundred metres later.
+                Out.Roll += LevelRollOffset(T, L);
+            }
             // Through CurvatureAt, so a helix reports the curvature actually
             // acting here rather than its unrotated start value. FeltG reads
             // these two against PathLateral and PathUp, so getting it wrong

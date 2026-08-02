@@ -44,6 +44,7 @@ Do not start Phase 1 (Track Editor MVP) work until the Phase 0 spline-math and b
 
 - **Block buffer / overlap** — the safety-margin state a block holds after a train physically exits it, before it reports CLEAR. Named after the real-railway "overlap" signaling concept.
 - **Heartline** — the reference line (not the rail centerline) that banking and ride-camera calculations are computed around, so felt-G through banked turns is physically correct.
+- **Roll vs bank** — not synonyms, and the difference is a per-segment mode (`ERollMode`). **Roll** is measured from the rotation-minimising path frame: defined everywhere including inverted and vertical track, and what the integrator sees. **Bank** is measured from the horizon — what a spirit level reads — and is undefined pointing straight up. Say which one you mean; `Roll = 0` is not level on non-planar track.
 - **Dispatch permissive** — the logic gate that allows a station/launch to release a train, based on downstream block clearance (and, for high-speed sections, braking-distance lookahead).
 - **VFD module** — the generated control-panel element for a powered segment (lift chain, tire-drive launch): target frequency/speed, actual motor feedback, torque/current draw, ramp rate.
 

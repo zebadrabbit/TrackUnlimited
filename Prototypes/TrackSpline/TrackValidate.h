@@ -45,6 +45,7 @@ enum class ETrackIssue
     CurvatureStep, // discontinuity at a joint: the jolt clothoids exist to remove
     RollStep,      // roll discontinuity at a joint
     RollRateStep,  // roll *rate* discontinuity: felt as a snap, invisible to felt-G
+    RollModeMixed, // joint where the two sides measure roll from different references
 };
 
 struct FTrackDiagnostic
@@ -250,6 +251,23 @@ inline std::vector<FTrackDiagnostic> ValidateTrack(
             Out.push_back(Make(ETrackIssue::CurvatureStep, false, i, Buf));
         }
 
+        // Across a roll-mode change the two numbers are not in the same frame
+        // of reference, so subtracting them means nothing. Say so and skip,
+        // rather than reporting a fabricated step or a fabricated clean bill.
+        // Whether the RESOLVED roll steps here needs the walked frame:
+        // AnalyseResolvedRollRate is the check that has it.
+        if (A.RollMode != B.RollMode)
+        {
+            std::snprintf(Buf, sizeof(Buf),
+                          "Roll reference changes into segment %zu (%s -> %s); roll checks here "
+                          "were skipped, the two values measure from different things.",
+                          i + 1,
+                          A.RollMode == ERollMode::WorldBank ? "world bank" : "path-relative",
+                          B.RollMode == ERollMode::WorldBank ? "world bank" : "path-relative");
+            Out.push_back(Make(ETrackIssue::RollModeMixed, false, i, Buf));
+            continue;
+        }
+
         const double RollStep = std::fabs(A.RollEnd - B.RollStart);
         if (RollStep > Limits.RollJointTolerance)
         {
@@ -308,6 +326,11 @@ struct FRollRateReport
     double HeadSnapG = 0.0;
 };
 
+// Measures the AUTHORED roll rate — what was typed, over the length it was
+// typed across. For PathRelative segments that is the whole story. A WorldBank
+// segment holding a constant bank through a hill reads zero here and is still
+// twisting, because the frame is moving underneath it; use
+// AnalyseResolvedRollRate for the rate a rider actually gets.
 inline FRollRateReport AnalyseRollRate(const std::vector<FTrackSegment>& Segments, double SpeedMs,
                                        double RiderOffset = 0.5)
 {
@@ -353,6 +376,88 @@ inline FRollRateReport AnalyseRollRate(const std::vector<FTrackSegment>& Segment
     R.HeadSnapG = Omega * Omega * RiderOffset / GravityMs2;
     return R;
 }
+
+// The same question asked of the built track instead of the authored list, so
+// the answer includes the roll the GEOMETRY contributes and not just the roll
+// somebody typed.
+//
+// This is the check ERollMode::WorldBank needs to exist. A constant bank held
+// through a climbing turn is a constant number in the data and a continuously
+// rotating rider in the world; the segment-list version is structurally unable
+// to see that, in the same way felt G is structurally unable to see roll rate
+// at all. Two blind spots, stacked — hence two reports.
+//
+// It also covers WorldBank's failure mode without needing a special case for
+// it: as the tangent approaches vertical the level reference swings, and the
+// peak rate here goes through the roof. That is not an artefact of the solve,
+// it is what banking against a horizon you are pointing at costs.
+struct FResolvedRollReport
+{
+    double PeakRateRadPerM = 0.0;
+    double PeakRateDegPerSec = 0.0; // at the speed passed in
+    double PeakS = 0.0;             // arc length, metres, where the peak sits
+    double HeadSnapG = 0.0;         // w^2 * r / g at the peak, RiderOffset above heartline
+};
+
+inline FResolvedRollReport AnalyseResolvedRollRate(const FTrack& Track, double SpeedMs,
+                                                   double RiderOffset = 0.5, double StepM = 0.25)
+{
+    const double Pi = 3.14159265358979323846;
+    FResolvedRollReport R;
+
+    const double Total = Track.TotalLength();
+    if (!(Total > 0.0) || !(StepM > 0.0))
+    {
+        return R;
+    }
+
+    // Walked with AdvanceFrom rather than repeated EvaluateAt: same reason the
+    // train uses it, and it also keeps every sample on one continuous
+    // integration so consecutive frames are directly comparable.
+    const int N = static_cast<int>(std::ceil(Total / StepM));
+    FTrackFrame Prev = Track.EvaluateAt(0.0);
+    double PrevS = 0.0;
+
+    for (int i = 1; i <= N; ++i)
+    {
+        const double Here = (i == N) ? Total : i * StepM;
+        const FTrackFrame F = Track.AdvanceFrom(Prev, PrevS, Here);
+        const double Span = Here - PrevS;
+        if (Span > 0.0)
+        {
+            // Unwrapped. Resolved roll carries an atan2 term, so a bank passing
+            // through +/-pi jumps by 2pi with nothing physical happening — and
+            // that fake step would otherwise be the reported peak every time.
+            double D = F.Roll - Prev.Roll;
+            while (D > Pi)
+            {
+                D -= 2.0 * Pi;
+            }
+            while (D < -Pi)
+            {
+                D += 2.0 * Pi;
+            }
+            const double Rate = std::fabs(D / Span);
+            if (Rate > R.PeakRateRadPerM)
+            {
+                R.PeakRateRadPerM = Rate;
+                R.PeakS = (PrevS + Here) * 0.5;
+            }
+        }
+        Prev = F;
+        PrevS = Here;
+    }
+
+    R.PeakRateDegPerSec = R.PeakRateRadPerM * SpeedMs * 180.0 / Pi;
+    const double Omega = R.PeakRateRadPerM * SpeedMs;
+    R.HeadSnapG = Omega * Omega * RiderOffset / GravityMs2;
+    return R;
+}
+
+// ponytail: finite-differenced over StepM, so a genuine roll STEP at a joint
+// reports as one very large rate over one step rather than as an infinity. That
+// is the right shape for a warning and the wrong shape for a precise number —
+// ValidateTrack is what locates steps exactly.
 
 // Is this list safe to build an FTrack from? Warnings do not block.
 inline bool HasErrors(const std::vector<FTrackDiagnostic>& Diagnostics)

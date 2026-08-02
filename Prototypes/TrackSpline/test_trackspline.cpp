@@ -556,6 +556,194 @@ static void TestRollRateIsVisibleWhereFeltGIsNot()
     assert(!HasIssue(ValidateTrack(Smooth), ETrackIssue::RollRateStep, 0));
 }
 
+// ------------------------------------------------------ world-referenced roll
+
+// Build climb 45 / turn left 90 / descend 45 in one roll mode. Curvature steps
+// at the joints on purpose — this is about what a roll value MEANS, not about
+// smoothness.
+static FTrack BuildCornerHill(ERollMode Mode)
+{
+    const double K = 1.0 / 25.0;
+    FTrackSegment Climb, Turn, Drop;
+    Climb.Length = (Pi / 4.0) / K;
+    Climb.PitchCurvatureStart = Climb.PitchCurvatureEnd = K;
+    Turn.Length = (Pi / 2.0) / K;
+    Turn.YawCurvatureStart = Turn.YawCurvatureEnd = K;
+    Drop.Length = (Pi / 4.0) / K;
+    Drop.PitchCurvatureStart = Drop.PitchCurvatureEnd = -K;
+    Climb.RollMode = Turn.RollMode = Drop.RollMode = Mode;
+
+    FTrack T;
+    T.AddSegment(Climb);
+    T.AddSegment(Turn);
+    T.AddSegment(Drop);
+    return T;
+}
+
+static void TestWorldBankIsLevelWherePathRelativeIsNot()
+{
+    // The finding DEFERRED_DECISIONS item 1 held open: the path frame is exactly
+    // rotation-minimising, so roll 0 does not mean level once the track stops
+    // being planar. Climb, corner, descend — roll 0 on every segment — and the
+    // rider arrives banked, purely from parallel transport around the bend.
+    // The geometry is right and the word is wrong.
+    const FTrack Rmf = BuildCornerHill(ERollMode::PathRelative);
+    const double RmfBank = WorldBankOf(Rmf.EvaluateAt(Rmf.TotalLength()));
+    assert(std::fabs(RmfBank) > 40.0 * Pi / 180.0); // nowhere near level
+
+    // Same geometry, same typed value, measured from the horizon instead. Now
+    // zero means zero. Note the PATH is untouched — roll never perturbs it —
+    // so this is the same track with the rider held differently.
+    const FTrack World = BuildCornerHill(ERollMode::WorldBank);
+    const double WorldBank = WorldBankOf(World.EvaluateAt(World.TotalLength()));
+    assert(Near(WorldBank, 0.0, 1e-9));
+    assert(NearVec(Rmf.EvaluateAt(Rmf.TotalLength()).Position,
+                   World.EvaluateAt(World.TotalLength()).Position, 1e-12));
+
+    // And it holds all the way along, not just at the exit.
+    for (double S = 0.0; S <= World.TotalLength(); S += 2.0)
+    {
+        assert(Near(WorldBankOf(World.EvaluateAt(S)), 0.0, 1e-9));
+    }
+
+    std::printf("  corner hill at roll 0: path-relative exits %.3f deg of bank, "
+                "world-referenced exits %.2e\n",
+                RmfBank * 180.0 / Pi, WorldBankOf(World.EvaluateAt(World.TotalLength())));
+}
+
+static void TestWorldBankAgreesWithPathRelativeOnLevelTrack()
+{
+    // Flat ground is where the two modes MUST agree, or adding the mode changes
+    // the meaning of every track already authored. On level track the level
+    // reference is the path frame, so the solved offset is identically zero.
+    const double Bank = 0.35;
+    FTrackSegment P = MakeArc(60.0, 30.0, Bank);
+    FTrackSegment W = P;
+    W.RollMode = ERollMode::WorldBank;
+
+    FTrack Path, World;
+    Path.AddSegment(P);
+    World.AddSegment(W);
+
+    for (double S = 0.0; S <= 60.0; S += 5.0)
+    {
+        const FTrackFrame FP = Path.EvaluateAt(S);
+        const FTrackFrame FW = World.EvaluateAt(S);
+        assert(Near(FP.Roll, FW.Roll, 1e-12));
+        // Also pins the SIGN: a +ve world bank reads +ve on the spirit level,
+        // the same sense as a +ve path-relative roll, which
+        // TestBankingCancelsLateralG has already tied to banking into a left
+        // turn. Get this backwards and every banked turn leans outward.
+        assert(Near(WorldBankOf(FW), Bank, 1e-12));
+    }
+}
+
+static void TestWorldBankThroughVerticalDegradesVisibly()
+{
+    // Straight up has no horizon to be level with. The requirement is that this
+    // stays finite and orthonormal — but NOT that it looks fine, because it is
+    // not fine: the level reference flips through the vertical, and holding a
+    // world bank across that costs the rider a genuine half-turn of roll.
+    const double K = 1.0 / 10.0;
+    FTrackSegment Loop;
+    Loop.Length = Pi / K; // half a vertical circle: up, over the top, back down
+    Loop.PitchCurvatureStart = Loop.PitchCurvatureEnd = K;
+    Loop.RollMode = ERollMode::WorldBank;
+
+    FTrack World;
+    World.AddSegment(Loop);
+    for (double S = 0.0; S <= Loop.Length; S += 0.5)
+    {
+        const FTrackFrame F = World.EvaluateAt(S);
+        assert(std::isfinite(F.Roll));
+        assert(Near(Length(F.Up), 1.0, 1e-9)); // no NaN leaked into the frame
+        assert(Near(Dot(F.Up, F.Tangent), 0.0, 1e-9));
+    }
+
+    // The visible symptom, and the reason no special-case error type is needed:
+    // the roll rate is enormous exactly where the reference gives out.
+    const FResolvedRollReport Bad = AnalyseResolvedRollRate(World, 20.0);
+    assert(std::isfinite(Bad.PeakRateRadPerM));
+    assert(Bad.PeakRateRadPerM > 1.0); // rad per METRE — nothing sane is this
+    assert(Near(Bad.PeakS, Pi * 0.5 / K, 1.0)); // at the top, where it flips
+
+    // Authored path-relative, the identical geometry costs nothing at all.
+    Loop.RollMode = ERollMode::PathRelative;
+    FTrack Path;
+    Path.AddSegment(Loop);
+    const FResolvedRollReport Good = AnalyseResolvedRollRate(Path, 20.0);
+    assert(Near(Good.PeakRateRadPerM, 0.0, 1e-9));
+
+    std::printf("  world bank through vertical: peak %.1f rad/m at S=%.1f m; "
+                "path-relative %.1e rad/m\n",
+                Bad.PeakRateRadPerM, Bad.PeakS, Good.PeakRateRadPerM);
+}
+
+static void TestResolvedRollRateSeesWhatTheAuthoredRateCannot()
+{
+    // One segment, one constant bank, zero authored roll rate. The segment-list
+    // report is structurally unable to see anything here — and the rider is
+    // rotating the entire way, because a climbing turn twists the path frame
+    // underneath the constant bank that is holding them level.
+    //
+    // Same shape of blind spot as felt-G-versus-roll-rate, one level up: there,
+    // the model had no roll term; here, the data has no geometry.
+    FTrackSegment S = MakeHelix(25.0, 20.0 * Pi / 180.0, 0.75, 0.0);
+    S.RollMode = ERollMode::WorldBank;
+    S.RollStart = S.RollEnd = 0.5;
+
+    const FRollRateReport Authored = AnalyseRollRate({S}, 20.0);
+    assert(Authored.PeakRateRadPerM == 0.0); // nothing was typed, nothing is seen
+
+    FTrack T;
+    T.AddSegment(S);
+    const FResolvedRollReport Resolved = AnalyseResolvedRollRate(T, 20.0);
+    assert(Resolved.PeakRateRadPerM > 1e-3);
+    assert(Resolved.HeadSnapG > 0.0);
+
+    // The bank itself is held, which is what makes the rotation invisible in
+    // the data: the number never changes, the frame under it does.
+    for (double A = 0.0; A <= S.Length; A += S.Length / 8.0)
+    {
+        assert(Near(WorldBankOf(T.EvaluateAt(A)), 0.5, 1e-6));
+    }
+
+    std::printf("  constant world bank on a helix: authored rate %.1e rad/m, "
+                "resolved %.4f rad/m (%.1f deg/s, %.3f g head snap)\n",
+                Authored.PeakRateRadPerM, Resolved.PeakRateRadPerM,
+                Resolved.PeakRateDegPerSec, Resolved.HeadSnapG);
+}
+
+static void TestMixedRollModesAreReportedNotGuessed()
+{
+    // Two roll values measured from different references cannot be subtracted.
+    // Whether the resolved roll actually steps at this joint depends on the
+    // frame there, which a data-only check does not have — so it says so.
+    std::vector<FTrackSegment> Segs = {MakeArc(40.0, 30.0, 0.3), MakeArc(40.0, 30.0, 0.3)};
+    Segs[1].RollMode = ERollMode::WorldBank;
+
+    FTrack T;
+    T.AddSegment(Segs[0]);
+    T.AddSegment(Segs[1]);
+    assert(!T.IsCurvatureContinuous()); // refuses rather than guessing
+
+    const std::vector<FTrackDiagnostic> D = ValidateTrack(Segs);
+    assert(!HasErrors(D)); // buildable — this is a warning, not a rejection
+    assert(HasIssue(D, ETrackIssue::RollModeMixed, 0));
+    assert(!HasIssue(D, ETrackIssue::RollStep, 0));     // skipped, not fabricated
+    assert(!HasIssue(D, ETrackIssue::RollRateStep, 0)); // likewise
+
+    // Matching modes: the ordinary checks come back, and this track is clean.
+    Segs[0].RollMode = ERollMode::WorldBank;
+    const std::vector<FTrackDiagnostic> Same = ValidateTrack(Segs);
+    assert(!HasIssue(Same, ETrackIssue::RollModeMixed, 0));
+    assert(!HasIssue(Same, ETrackIssue::RollStep, 0));
+    FTrack Clean;
+    Clean.AddSegment(Segs[0]);
+    Clean.AddSegment(Segs[1]);
+    assert(Clean.IsCurvatureContinuous());
+}
+
 // -------------------------------------------------------------------- helix
 
 static void TestHelixIsActuallyAHelix()
@@ -745,6 +933,11 @@ int main()
     TestValidationRejectsAndWarnsWithoutRepairing();
     TestValidationLocatesJointStepsAndStaysQuietWhenClean();
     TestRollRateIsVisibleWhereFeltGIsNot();
+    TestWorldBankIsLevelWherePathRelativeIsNot();
+    TestWorldBankAgreesWithPathRelativeOnLevelTrack();
+    TestWorldBankThroughVerticalDegradesVisibly();
+    TestResolvedRollRateSeesWhatTheAuthoredRateCannot();
+    TestMixedRollModesAreReportedNotGuessed();
     TestHelixIsActuallyAHelix();
     TestHelixHandednessAndDegenerateCases();
     TestHelixExitIsNotContinuousWithAPlainArc();
