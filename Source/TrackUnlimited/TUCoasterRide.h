@@ -32,6 +32,9 @@ public:
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaSeconds) override;
 
+	/** Runs on place, load, move and property change — so the preview is live without pressing play. */
+	virtual void OnConstruction(const FTransform& Transform) override;
+
 #if WITH_EDITOR
 	/** Rebuild and re-check the moment a number changes, so editing has feedback. */
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& Event) override;

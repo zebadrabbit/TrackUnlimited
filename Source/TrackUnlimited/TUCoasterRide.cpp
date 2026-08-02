@@ -342,18 +342,20 @@ void ATUCoasterRide::RebuildFromSegments()
 #if WITH_EDITOR
 void ATUCoasterRide::PostEditChangeProperty(FPropertyChangedEvent& Event)
 {
-	Super::PostEditChangeProperty(Event);
-
+	// Before Super, deliberately: Super reruns the construction script, and
+	// OnConstruction is what rebuilds and redraws. Resetting afterwards would
+	// leave the preview showing the layout that was just replaced.
 	if (bResetToReferenceLayout)
 	{
 		bResetToReferenceLayout = false;
 		Segments = ReferenceLayout();
 	}
 
-	// Rebuild on every edit so a typed number gets an answer immediately: total
-	// length, continuity, where it ends up, and whether it hits itself. The
-	// viewport stays a read-only preview — this is feedback, not manipulation.
-	RebuildFromSegments();
+	// Rebuild and redraw happen in OnConstruction, so a typed number gets an
+	// answer immediately — the drawn track, plus total length, continuity, where
+	// it ends up and whether it hits itself. The viewport stays a read-only
+	// preview: this is feedback, not manipulation.
+	Super::PostEditChangeProperty(Event);
 }
 #endif
 
@@ -379,6 +381,38 @@ FQuat ATUCoasterRide::ToWorldRotation(const FTrackFrame& Frame) const
 	// Built from the basis directly. The frame is already exactly orthonormal,
 	// so going via FRotator angles would only reintroduce error.
 	return FMatrix(Forward, Right, Up, FVector::ZeroVector).ToQuat();
+}
+
+void ATUCoasterRide::OnConstruction(const FTransform& Transform)
+{
+	Super::OnConstruction(Transform);
+
+	// This is the live preview. OnConstruction runs when the actor is placed,
+	// when the level loads, when the actor is moved, and after any property
+	// change — which is exactly the set of moments the drawn track is stale.
+	RebuildFromSegments();
+
+#if WITH_EDITOR
+	// Editor worlds only. In PIE, BeginPlay does the drawing, and doing it here
+	// as well would just draw the same lines twice.
+	//
+	// ponytail: flushes ALL persistent debug lines in the world, so two of these
+	// actors in one level would erase each other's preview. Fine while the
+	// vertical slice is the only thing in the level; the real fix is a line
+	// batcher component per actor, or the Phase 4 track mesh making this whole
+	// function unnecessary.
+	if (UWorld* World = GetWorld())
+	{
+		if (!World->IsGameWorld())
+		{
+			FlushPersistentDebugLines(World);
+			if (bDrawTrack)
+			{
+				DrawTrack();
+			}
+		}
+	}
+#endif
 }
 
 void ATUCoasterRide::BeginPlay()
