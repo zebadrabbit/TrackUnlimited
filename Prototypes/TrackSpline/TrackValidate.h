@@ -44,6 +44,7 @@ enum class ETrackIssue
     ShortSegment,  // shorter than the integrator's own step; the editor cannot show it
     CurvatureStep, // discontinuity at a joint: the jolt clothoids exist to remove
     RollStep,      // roll discontinuity at a joint
+    RollRateStep,  // roll *rate* discontinuity: felt as a snap, invisible to felt-G
 };
 
 struct FTrackDiagnostic
@@ -76,6 +77,18 @@ struct FTrackValidationLimits
     // counts as a discontinuity rather than floating-point noise.
     double CurvatureJointTolerance = 1e-9;
     double RollJointTolerance = 1e-9;
+
+    // Roll RATE step, in rad per metre of track. Speed-independent, so the
+    // check needs no design speed — multiply by v to get rad/s.
+    //
+    // This is not floating-point noise territory like the two above: a roll
+    // rate step is a real authored discontinuity that the standard banking
+    // pattern produces on purpose (ramp bank over the clothoid, hold it through
+    // the arc, ramp out). PHASE0_FINDINGS measured 53.7 deg/s of step at four
+    // joints per banked turn, with felt-G reporting nothing at all, because
+    // felt G has no roll-rate term. Default is deliberately loose enough not to
+    // flag every banked turn ever authored.
+    double RollRateJointTolerance = 0.02;
 };
 
 namespace TrackValidateDetail
@@ -246,9 +259,99 @@ inline std::vector<FTrackDiagnostic> ValidateTrack(
                           RollStep, RollStep * 180.0 / 3.14159265358979323846, i + 1);
             Out.push_back(Make(ETrackIssue::RollStep, false, i, Buf));
         }
+
+        // The one felt G cannot see. Roll rate is rad per metre here, so it is
+        // speed-independent; multiply by v for rad/s.
+        const double RateA = (A.RollEnd - A.RollStart) / A.Length;
+        const double RateB = (B.RollEnd - B.RollStart) / B.Length;
+        const double RateStep = std::fabs(RateA - RateB);
+        if (RateStep > Limits.RollRateJointTolerance)
+        {
+            std::snprintf(Buf, sizeof(Buf),
+                          "Roll RATE steps by %.4g rad/m into segment %zu — %.1f deg/s at "
+                          "20 m/s. Felt as a snap; no G reading will show it, because felt G "
+                          "has no roll-rate term.",
+                          RateStep, i + 1, RateStep * 20.0 * 180.0 / 3.14159265358979323846);
+            Out.push_back(Make(ETrackIssue::RollRateStep, false, i, Buf));
+        }
     }
 
     return Out;
+}
+
+// ------------------------------------------------------------- roll rate
+
+// What banking costs the rider, expressed as something a human can judge.
+//
+// PHASE0_FINDINGS records two facts that only make sense together. The rider is
+// modelled as a POINT at the heartline, so roll-rate terms vanish exactly — the
+// felt-G numbers are correct and will never show this. But a real head sits
+// about 0.5 m above the heartline, and the omitted centripetal term there is
+// w^2 * r: measured at 0.031 g for 45 deg/s, 0.126 g at 90, and 0.503 g at 180.
+// A fast barrel roll that reads perfectly smooth at the heartline is half a G
+// of head snap.
+//
+// So this is not a redundant view of felt G. It is the part felt G structurally
+// cannot contain, and until the train has length it is the only way to see it.
+struct FRollRateReport
+{
+    double PeakRateRadPerM = 0.0;
+    double PeakRateDegPerSec = 0.0; // at the speed passed in
+    std::size_t PeakSegment = 0;
+
+    double WorstStepRadPerM = 0.0;
+    double WorstStepDegPerSec = 0.0;
+    std::size_t WorstStepJoint = 0; // joint between this segment and the next
+
+    // w^2 * r / g at the peak rate, for a rider RiderOffset above the
+    // heartline. The G the model does not report.
+    double HeadSnapG = 0.0;
+};
+
+inline FRollRateReport AnalyseRollRate(const std::vector<FTrackSegment>& Segments, double SpeedMs,
+                                       double RiderOffset = 0.5)
+{
+    const double RadToDeg = 180.0 / 3.14159265358979323846;
+    FRollRateReport R;
+
+    for (std::size_t i = 0; i < Segments.size(); ++i)
+    {
+        const FTrackSegment& S = Segments[i];
+        if (!(S.Length > 0.0) || !std::isfinite(S.RollStart) || !std::isfinite(S.RollEnd))
+        {
+            continue;
+        }
+        const double Rate = std::fabs((S.RollEnd - S.RollStart) / S.Length);
+        if (Rate > R.PeakRateRadPerM)
+        {
+            R.PeakRateRadPerM = Rate;
+            R.PeakSegment = i;
+        }
+    }
+
+    for (std::size_t i = 0; i + 1 < Segments.size(); ++i)
+    {
+        const FTrackSegment& A = Segments[i];
+        const FTrackSegment& B = Segments[i + 1];
+        if (!(A.Length > 0.0) || !(B.Length > 0.0))
+        {
+            continue;
+        }
+        const double Step = std::fabs((A.RollEnd - A.RollStart) / A.Length
+                                      - (B.RollEnd - B.RollStart) / B.Length);
+        if (Step > R.WorstStepRadPerM)
+        {
+            R.WorstStepRadPerM = Step;
+            R.WorstStepJoint = i;
+        }
+    }
+
+    R.PeakRateDegPerSec = R.PeakRateRadPerM * SpeedMs * RadToDeg;
+    R.WorstStepDegPerSec = R.WorstStepRadPerM * SpeedMs * RadToDeg;
+
+    const double Omega = R.PeakRateRadPerM * SpeedMs; // rad/s
+    R.HeadSnapG = Omega * Omega * RiderOffset / GravityMs2;
+    return R;
 }
 
 // Is this list safe to build an FTrack from? Warnings do not block.

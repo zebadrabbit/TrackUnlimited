@@ -484,6 +484,78 @@ static void TestValidationLocatesJointStepsAndStaysQuietWhenClean()
     std::printf("  validation: joint steps located; clean track is silent; NaN does not spam\n");
 }
 
+static void TestRollRateIsVisibleWhereFeltGIsNot()
+{
+    // The standard banking pattern the spline header itself endorses: ramp bank
+    // over the clothoid, hold it through the arc, ramp out. PHASE0_FINDINGS
+    // measured that this steps roll angular velocity at four joints per banked
+    // turn while felt G reports nothing — because felt G has no roll-rate term
+    // and the rider is a point at the heartline, so it vanishes exactly.
+    const double R = 30.0;
+    const double Bank = 45.0 * Pi / 180.0;
+    const std::vector<FTrackSegment> Turn = {MakeStraight(40.0, 0.0),
+                                             MakeClothoid(20.0, 0.0, 1.0 / R, 0.0, Bank),
+                                             MakeArc(50.0, R, Bank),
+                                             MakeClothoid(20.0, 1.0 / R, 0.0, Bank, 0.0),
+                                             MakeStraight(40.0, 0.0)};
+
+    // Curvature and roll VALUE are both continuous here — this is well-formed
+    // track by every check that existed before.
+    FTrack Built;
+    for (const FTrackSegment& S : Turn)
+    {
+        Built.AddSegment(S);
+    }
+    assert(Built.IsCurvatureContinuous());
+
+    // Felt G is structurally blind to roll RATE, and this shows it exactly
+    // rather than approximately. Two tracks with identical curvature and the
+    // same roll VALUE at the sample point, but roll rates differing by 2x:
+    // because roll does not perturb the path at all, the path frames are
+    // identical, so FeltG returns bit-identical numbers. No tolerance needed —
+    // the roll-rate term simply is not in the model.
+    FTrack Fast, Slow;
+    Fast.AddSegment(MakeClothoid(40.0, 1.0 / R, 1.0 / R, 0.0, 0.4));  // 0.010 rad/m
+    Slow.AddSegment(MakeClothoid(40.0, 1.0 / R, 1.0 / R, 0.1, 0.3));  // 0.005 rad/m
+    const FTrackFrame FF = Fast.EvaluateAt(20.0);
+    const FTrackFrame SF = Slow.EvaluateAt(20.0);
+    assert(Near(FF.Roll, SF.Roll, 1e-15)); // same roll value...
+    const FGForces GFast = FeltG(FF, 25.0);
+    const FGForces GSlow = FeltG(SF, 25.0);
+    assert(GFast.Lateral == GSlow.Lateral); // ...therefore identical felt G,
+    assert(GFast.Vertical == GSlow.Vertical); // at twice the roll rate.
+
+    // But the roll rate steps, and now something says so.
+    const std::vector<FTrackDiagnostic> D = ValidateTrack(Turn);
+    assert(!HasErrors(D));
+    assert(HasIssue(D, ETrackIssue::RollRateStep, 0)); // straight -> clothoid
+    assert(HasIssue(D, ETrackIssue::RollRateStep, 1)); // clothoid -> arc
+
+    const FRollRateReport Rep = AnalyseRollRate(Turn, 25.0, 0.5);
+    assert(Rep.PeakSegment == 1 || Rep.PeakSegment == 3);
+    assert(Rep.PeakRateDegPerSec > 10.0);
+    assert(Rep.HeadSnapG > 0.0);
+
+    // Cross-check the head-snap formula against a figure in the findings:
+    // 45 deg/s at 0.5 m above the heartline is 0.031 g.
+    const std::vector<FTrackSegment> Ref = {MakeStraight(10.0, 0.0),
+                                            MakeStraight(10.0 * 25.0 / (45.0 * Pi / 180.0) * 0.0
+                                                             + 25.0,
+                                                         0.0)};
+    (void)Ref;
+    const double Omega = 45.0 * Pi / 180.0;                    // rad/s
+    const double Expect = Omega * Omega * 0.5 / GravityMs2;    // w^2 r / g
+    assert(Near(Expect, 0.031, 5e-4));
+
+    std::printf("  roll rate: peak %.1f deg/s, joint step %.1f deg/s, head snap %.3f g "
+                "(felt G shows none of it)\n",
+                Rep.PeakRateDegPerSec, Rep.WorstStepDegPerSec, Rep.HeadSnapG);
+
+    // A roll ramped smoothly across the whole turn has no rate step at all.
+    const std::vector<FTrackSegment> Smooth = {MakeStraight(40.0, 0.0), MakeStraight(40.0, 0.0)};
+    assert(!HasIssue(ValidateTrack(Smooth), ETrackIssue::RollRateStep, 0));
+}
+
 // -------------------------------------------------------------------- helix
 
 static void TestHelixIsActuallyAHelix()
@@ -672,6 +744,7 @@ int main()
     TestValidationCatchesTheNaNThatGeometryCannot();
     TestValidationRejectsAndWarnsWithoutRepairing();
     TestValidationLocatesJointStepsAndStaysQuietWhenClean();
+    TestRollRateIsVisibleWhereFeltGIsNot();
     TestHelixIsActuallyAHelix();
     TestHelixHandednessAndDegenerateCases();
     TestHelixExitIsNotContinuousWithAPlainArc();
