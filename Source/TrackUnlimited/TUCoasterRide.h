@@ -1,4 +1,4 @@
-// Phase 0 vertical slice: a hand-authored track, a cart that follows it with
+// Phase 0 vertical slice: a hand-authored track, a train that follows it with
 // real physics, and a ride camera at the heartline.
 //
 // This is a thin shell. All the maths lives in the engine-free prototype
@@ -58,9 +58,21 @@ public:
 	/** The reference ride: station, eased 25 degree lift, drop, teardrop loop, banked turn, brakes. */
 	static TArray<FTUTrackSegment> ReferenceLayout();
 
-	/** Ride from the seat rather than watching from outside. */
-	UPROPERTY(EditAnywhere, Category = "TrackUnlimited")
-	bool bRideCamera = true;
+	/** Where to watch from. */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Camera")
+	ETUCameraMode CameraMode = ETUCameraMode::Rider;
+
+	/** Chase only: how far behind the train to sit, in metres. */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Camera",
+		meta = (ClampMin = "2.0", UIMax = "60.0",
+		EditCondition = "CameraMode == ETUCameraMode::Chase", EditConditionHides))
+	float ChaseDistanceM = 18.f;
+
+	/** Chase only: how far above it, in metres. */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Camera",
+		meta = (ClampMin = "0.0", UIMax = "40.0",
+		EditCondition = "CameraMode == ETUCameraMode::Chase", EditConditionHides))
+	float ChaseHeightM = 6.f;
 
 	/** Draw the heartline and rail centreline, since there is no track mesh yet. */
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited")
@@ -172,4 +184,13 @@ private:
 	// because it depends on the whole layout.
 	double GroundOffsetM = 0.0;
 	float StoppedFor = 0.f;
+
+	// Chase camera state. Smoothed in world space rather than recomputed from
+	// the track, so it lags the way a following camera should and needs no
+	// EvaluateAt — which is O(track length) and has no business in a tick.
+	FVector ChaseLocation = FVector::ZeroVector;
+	// Held over when the track goes vertical and there is no horizontal
+	// direction of travel to derive one from.
+	FVector LastChaseForward = FVector(1.f, 0.f, 0.f);
+	bool bChaseInitialised = false;
 };

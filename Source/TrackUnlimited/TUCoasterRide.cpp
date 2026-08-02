@@ -627,12 +627,46 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 		}
 	}
 
-	Camera->SetWorldLocationAndRotation(ToWorld(Frame.Position), Rotation);
-
-	if (!bRideCamera)
+	if (CameraMode == ETUCameraMode::Rider)
 	{
-		Camera->SetWorldLocation(ToWorld(Frame.Position) - Rotation.GetForwardVector() * 1400.f
-			+ FVector(0.f, 0.f, 450.f));
+		Camera->SetWorldLocationAndRotation(ToWorld(Frame.Position), Rotation);
+	}
+	else
+	{
+		// Behind and above, held LEVEL with the world. The old non-ride view
+		// took the rider's rotation and simply stepped back from it, which meant
+		// it turned upside down through the loop — disorienting rather than
+		// dramatic, and it made the inversion hard to actually look at.
+		//
+		// Direction of travel flattened into the horizontal plane. Through a
+		// vertical section there is no horizontal component to speak of, so the
+		// last good one is held rather than letting the camera spin.
+		const FVector Target = ToWorld(Train->GetFrame().Position);
+		FVector Forward = ToWorldRotation(Train->GetFrame()).GetForwardVector();
+		Forward.Z = 0.f;
+		if (Forward.SizeSquared() > 0.05f)
+		{
+			LastChaseForward = Forward.GetSafeNormal();
+		}
+
+		const FVector Desired = Target - LastChaseForward * (ChaseDistanceM * MetresToUU)
+			+ FVector(0.f, 0.f, ChaseHeightM * MetresToUU);
+
+		// Critically-damped-ish follow. A rigid offset reads as a camera bolted
+		// to the train; lagging it is what makes the speed legible.
+		//
+		// ponytail: one exponential smooth, no spring, no collision. Add a
+		// spring arm the day the camera needs to avoid terrain.
+		if (!bChaseInitialised)
+		{
+			ChaseLocation = Desired;
+			bChaseInitialised = true;
+		}
+		const float Alpha = 1.f - FMath::Exp(-6.f * DeltaSeconds);
+		ChaseLocation = FMath::Lerp(ChaseLocation, Desired, Alpha);
+
+		Camera->SetWorldLocationAndRotation(ChaseLocation,
+			(Target - ChaseLocation).ToOrientationQuat());
 	}
 
 	if (bShowTelemetry && GEngine)

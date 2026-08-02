@@ -60,6 +60,20 @@ enum class ETUSegmentZone : uint8
 	Brake UMETA(DisplayName = "Brake run"),
 };
 
+UENUM(BlueprintType)
+enum class ETUCameraMode : uint8
+{
+	// At the chosen seat, in the rider's own frame — so it inverts through the
+	// loop, which is the point.
+	Rider UMETA(DisplayName = "Rider (on-ride)"),
+
+	// Behind and above, held level with the world. Deliberately NOT the rider's
+	// frame: a chase camera that inherits roll turns upside down through an
+	// inversion, which is disorienting rather than dramatic and is what the old
+	// non-ride view did.
+	Chase UMETA(DisplayName = "Chase"),
+};
+
 USTRUCT(BlueprintType)
 struct FTUTrackSegment
 {
