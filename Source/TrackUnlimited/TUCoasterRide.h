@@ -13,6 +13,7 @@
 #include "GameFramework/Pawn.h"
 
 #include "TrainPhysics/TrainPhysics.h"
+#include "TrainPhysics/RideProfile.h"
 #include "TrackSpline/TrackProfile.h"
 #include "TUTrackSegment.h"
 
@@ -69,6 +70,38 @@ public:
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited")
 	bool bShowTelemetry = true;
 
+	// ---- Ride profile: the whole ride measured at EDIT time, not ride time.
+	//
+	// Each channel draws as a curve offset from the track, so the track itself
+	// is the zero line and a spike is visible exactly where it happens. Roll
+	// rate is here because no G trace can ever show it — felt G models the rider
+	// as a point, so spinning one costs nothing.
+	//
+	// ponytail: booleans and one scale, not a UI. The panel with per-channel
+	// visibility, units and readouts is a UI/UX design question and wants
+	// designing rather than accreting — this is the data plumbing under it.
+
+	/** Speed along the track. */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Ride profile")
+	bool bGraphSpeed = false;
+
+	/** Vertical G. The airtime-and-compression axis. */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Ride profile")
+	bool bGraphVerticalG = true;
+
+	/** Lateral G. Near zero through a correctly banked turn. */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Ride profile")
+	bool bGraphLateralG = true;
+
+	/** Roll rate. The one channel felt G structurally cannot contain. */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Ride profile")
+	bool bGraphRollRate = false;
+
+	/** Metres of offset per unit. Each channel has its own sensible unit under this. */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Ride profile",
+		meta = (ClampMin = "0.1", UIMax = "10.0"))
+	float GraphScale = 2.f;
+
 	/** Restart the ride this many seconds after the train comes to rest. */
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited")
 	float RestartDelaySeconds = 3.f;
@@ -76,6 +109,10 @@ public:
 private:
 	void RebuildFromSegments();
 	void DrawTrack() const;
+	void DrawRideProfile() const;
+
+	/** The whole ride, sampled by arc length. Recomputed on every rebuild. */
+	FRideProfile Profile_;
 
 	/** Prototype metres/right-handed -> Unreal centimetres/left-handed. */
 	FVector ToWorld(const FVec3& V) const;

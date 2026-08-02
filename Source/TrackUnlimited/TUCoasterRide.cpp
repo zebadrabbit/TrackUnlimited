@@ -327,6 +327,31 @@ void ATUCoasterRide::RebuildFromSegments()
 	// riding it. Each of these was a defect that took riding the track to find:
 	// a discontinuity, an underground back half, and a loop passing through
 	// itself. None of them are visible in a G trace.
+	// Run the whole ride now, at edit time. An author needs to know a hill is
+	// too tall BEFORE watching a train fail to crest it, and the extremes are
+	// worth more with a position attached: "4.25 g" is a number, "4.25 g at
+	// S=310 m" is somewhere to go and look.
+	Profile_ = RunRideProfile(*Train, Track, 1.0);
+	Train->Place(0.0, 0.0);
+
+	if (!Profile_.bCompleted)
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("TrackUnlimited: the train does not get round — it stalls at %.1f m, ")
+			TEXT("%.1f m up. Everything past that point is unridden."),
+			Profile_.StalledAtS, Profile_.StalledHeight);
+	}
+	else
+	{
+		UE_LOG(LogTemp, Log,
+			TEXT("TrackUnlimited ride: %.0f s | top %.1f km/h at %.0f m | vertical %+.2f at %.0f m ")
+			TEXT("to %+.2f at %.0f m | lateral %.2f at %.0f m | roll rate %.0f deg/s at %.0f m"),
+			Profile_.Duration, Profile_.TopSpeed * 3.6, Profile_.TopSpeedS, Profile_.MinVerticalG,
+			Profile_.MinVerticalGS, Profile_.MaxVerticalG, Profile_.MaxVerticalGS,
+			Profile_.MaxAbsLateralG, Profile_.MaxAbsLateralGS, Profile_.MaxAbsRollRate,
+			Profile_.MaxAbsRollRateS);
+	}
+
 	const FClosureGap Gap = MeasureClosure(Track, HeightTarget(Track));
 	const FClearanceReport Clear = AnalyseSelfClearance(Track, Profile, 1.0, 12.0);
 	UE_LOG(LogTemp, Log,
@@ -410,6 +435,7 @@ void ATUCoasterRide::OnConstruction(const FTransform& Transform)
 			{
 				DrawTrack();
 			}
+			DrawRideProfile();
 		}
 	}
 #endif
@@ -424,6 +450,7 @@ void ATUCoasterRide::BeginPlay()
 	{
 		DrawTrack();
 	}
+	DrawRideProfile();
 }
 
 void ATUCoasterRide::DrawTrack() const
@@ -475,6 +502,71 @@ void ATUCoasterRide::DrawTrack() const
 	}
 }
 
+void ATUCoasterRide::DrawRideProfile() const
+{
+	// Each channel is a curve offset from the heartline along the rider's UP,
+	// so the track itself is the zero line and the offset is in the rider's own
+	// frame rather than the world's. Through an inversion the trace goes with
+	// the rider, which is the honest reading — "how hard, which way, for the
+	// person in the seat".
+	//
+	// Per-channel units chosen so the four are comparable at one scale: 1 metre
+	// per G, per 10 km/h, per 30 deg/s.
+	struct FChannel
+	{
+		bool bEnabled;
+		FColor Colour;
+		double PerUnit;
+		double FRideSample::*Field;
+	};
+	const FChannel Channels[] = {
+		{bGraphVerticalG, FColor(120, 235, 130), 1.0, &FRideSample::VerticalG},
+		{bGraphLateralG, FColor(250, 175, 80), 1.0, &FRideSample::LateralG},
+		{bGraphSpeed, FColor(110, 205, 255), 1.0 / (10.0 / 3.6), &FRideSample::Speed},
+		{bGraphRollRate, FColor(230, 130, 235), 1.0 / 30.0, &FRideSample::RollRateDegPerSec},
+	};
+
+	if (Profile_.Samples.size() < 2)
+	{
+		return;
+	}
+
+	// One walk for every channel rather than one per channel: the frames are
+	// the expensive part and they do not depend on which trace is being drawn.
+	FTrackFrame Walk = Track.EvaluateAt(0.0);
+	double PrevS = Profile_.Samples[0].S;
+	for (std::size_t i = 1; i < Profile_.Samples.size(); ++i)
+	{
+		const FRideSample& A = Profile_.Samples[i - 1];
+		const FRideSample& B = Profile_.Samples[i];
+		const FTrackFrame FrameA = Walk;
+		const FTrackFrame FrameB = Track.AdvanceFrom(Walk, PrevS, B.S);
+
+		for (const FChannel& C : Channels)
+		{
+			if (!C.bEnabled)
+			{
+				continue;
+			}
+			const double VA = A.*(C.Field) * C.PerUnit * GraphScale;
+			const double VB = B.*(C.Field) * C.PerUnit * GraphScale;
+			DrawDebugLine(GetWorld(), ToWorld(FrameA.Position + FrameA.Up * VA),
+				ToWorld(FrameB.Position + FrameB.Up * VB), C.Colour, true, -1.f, 0, 2.f);
+		}
+
+		Walk = FrameB;
+		PrevS = B.S;
+	}
+
+	// Where the train gave up, if it did. A marker beats a log line nobody reads.
+	if (!Profile_.bCompleted)
+	{
+		const FTrackFrame Stall = Track.EvaluateAt(Profile_.StalledAtS);
+		DrawDebugSphere(GetWorld(), ToWorld(Stall.Position), 200.f, 12, FColor::Red, true, -1.f, 0,
+			4.f);
+	}
+}
+
 void ATUCoasterRide::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
@@ -514,6 +606,24 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 				G.Vertical, G.Lateral, Train->GetTangentialG()));
 		GEngine->AddOnScreenDebugMessage(3, 0.f, FColor::Silver,
 			S >= BrakeStartS ? TEXT("BRAKE RUN") : TEXT("on course"));
+
+		// The ride's own worst case, alongside the current reading, so a number
+		// on screen means something without having to remember the whole lap.
+		// Roll rate is here rather than in the G line because it belongs to a
+		// different question: G is what presses on you, roll rate is what spins
+		// you, and no amount of looking at the first will show you the second.
+		GEngine->AddOnScreenDebugMessage(4, 0.f, FColor(150, 150, 150),
+			FString::Printf(
+				TEXT("this ride: %.0f km/h max, %+.2f..%+.2f vertical, %.2f lateral, ")
+				TEXT("%.0f deg/s roll"),
+				Profile_.TopSpeed * 3.6, Profile_.MinVerticalG, Profile_.MaxVerticalG,
+				Profile_.MaxAbsLateralG, Profile_.MaxAbsRollRate));
+		if (!Profile_.bCompleted)
+		{
+			GEngine->AddOnScreenDebugMessage(5, 0.f, FColor::Red,
+				FString::Printf(TEXT("TRAIN DOES NOT GET ROUND — stalls at %.0f m"),
+					Profile_.StalledAtS));
+		}
 	}
 
 	// Send it round again once it has settled in the brakes.

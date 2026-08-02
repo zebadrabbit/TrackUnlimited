@@ -2,6 +2,7 @@
 // Build & run:  clang++ -std=c++17 -Wall -Wextra -o test_trainphysics test_trainphysics.cpp && ./test_trainphysics
 
 #include "TrainPhysics.h"
+#include "RideProfile.h"
 
 #include <cassert>
 #include <cstdio>
@@ -469,6 +470,136 @@ static void TestStepRejectsBadDeltas()
     assert(Near(Train.GetFrame().Position.X, Track.TotalLength(), 1e-9));
 }
 
+// ------------------------------------------------------------- ride profile
+
+// Station, eased climb, crest, drop, level run-out. The shape of a ride,
+// stripped to what a profile needs to have something to say about.
+static FTrack ProfileTestTrack(double LiftClimb)
+{
+    auto EasedPitch = [](FTrack& T, double PitchDelta, double Peak) {
+        const double K = PitchDelta >= 0.0 ? Peak : -Peak;
+        const double L = std::fabs(PitchDelta) / Peak;
+        FTrackSegment In;
+        In.Length = L;
+        In.PitchCurvatureEnd = K;
+        T.AddSegment(In);
+        FTrackSegment Out;
+        Out.Length = L;
+        Out.PitchCurvatureStart = K;
+        T.AddSegment(Out);
+    };
+
+    FTrack T;
+    T.AddSegment(MakeStraight(20.0));
+    EasedPitch(T, 25.0 * Pi / 180.0, 0.03);
+    T.AddSegment(MakeStraight(LiftClimb));
+    EasedPitch(T, -50.0 * Pi / 180.0, 0.05);
+    T.AddSegment(MakeStraight(30.0));
+    EasedPitch(T, 25.0 * Pi / 180.0, 0.012);
+    T.AddSegment(MakeArc(60.0, 40.0, 25.0 * Pi / 180.0));
+    T.AddSegment(MakeStraight(60.0));
+    return T;
+}
+
+static void TestRideProfileMeasuresTheWholeRideAtEditTime()
+{
+    const FTrack Track = ProfileTestTrack(60.0);
+    FTrain Train(Track);
+    Train.AddZone(MakeLift(0.0, 140.0, 4.0, 6.0)); // must run PAST the crest, not to the top of the climb
+
+    const FRideProfile P = RunRideProfile(Train, Track, 1.0);
+    assert(P.bCompleted);
+    assert(P.Samples.size() > 100);
+    assert(P.Duration > 10.0);
+
+    // Sampled by ARC LENGTH, not by time, so the data does not thin out exactly
+    // where the ride is fastest and the G is worth looking at.
+    for (std::size_t i = 1; i < P.Samples.size(); ++i)
+    {
+        assert(P.Samples[i].S >= P.Samples[i - 1].S);
+    }
+
+    // Extremes carry WHERE, because "4.25 g" is a number and "4.25 g at
+    // S=310 m" is something an author can go and look at.
+    assert(P.TopSpeed > 20.0);
+    assert(P.TopSpeedS > 100.0);           // at the bottom of the drop, not on the lift
+    assert(P.MaxVerticalG > 1.5);          // the pull-out
+    assert(P.MaxVerticalGS > 100.0);
+    assert(P.HighestHeight > 20.0);
+    assert(P.LowestHeight <= 0.0);
+
+    // The lift holds chain speed, so the profile knows the train crawls up and
+    // only then goes fast — a speed trace that peaked on the lift would mean
+    // the zone was not being applied at all.
+    double SpeedOnLift = 0.0;
+    for (const FRideSample& S : P.Samples)
+    {
+        if (S.S > 40.0 && S.S < 80.0) { SpeedOnLift = S.Speed; }
+    }
+    assert(Near(SpeedOnLift, 4.0, 0.5));
+
+    std::printf("  ride profile: %.0f m in %.1f s, top %.1f km/h at S=%.0f, "
+                "vertical %+.2f..%+.2f, lowest %.1f m\n",
+                Track.TotalLength(), P.Duration, P.TopSpeed * 3.6, P.TopSpeedS, P.MinVerticalG,
+                P.MaxVerticalG, P.LowestHeight);
+}
+
+static void TestRideProfileReportsAStallRatherThanHanging()
+{
+    // The single most useful thing an editor can say, and the only way to know
+    // is to run it: this train does not get round. A 6 m lift cannot carry it
+    // over what a 60 m lift could.
+    const FTrack Track = ProfileTestTrack(6.0);
+    FTrain Train(Track);
+    Train.AddZone(MakeLift(0.0, 40.0, 4.0, 6.0));
+
+    const FRideProfile P = RunRideProfile(Train, Track, 1.0);
+    assert(!P.bCompleted);
+    assert(P.StalledAtS > 0.0);
+    assert(P.StalledAtS < Track.TotalLength());
+    // And it says where, so the author can see which hill did it.
+    assert(P.StalledHeight > -100.0 && P.StalledHeight < 100.0);
+    assert(!P.Samples.empty()); // the run up to the stall is still worth having
+
+    std::printf("  ride profile: stalled at S=%.1f m, %.1f m up — reported, not hung\n",
+                P.StalledAtS, P.StalledHeight);
+}
+
+static void TestRideProfileCarriesRollRateWhichGCannot()
+{
+    // A banked turn entered from level track twists the rider while the G trace
+    // says nothing about it, because felt G has no roll-rate term at all. The
+    // profile carries it as its own channel for exactly that reason.
+    // Rolled in over 20 m and out over 40 m, so the peak is unambiguously the
+    // entry transition rather than a coin flip between two identical ones.
+    //
+    // The roll-out clothoid is not decoration: without it the arc ends at 45
+    // degrees of bank against a straight at 0, which is a 45 degree
+    // INSTANTANEOUS twist. The first version of this fixture had exactly that,
+    // and the profile correctly reported the step as the peak — a real
+    // authoring error caught by the thing being tested.
+    FTrack Track;
+    Track.AddSegment(MakeStraight(40.0));
+    Track.AddSegment(MakeClothoid(20.0, 0.0, 1.0 / 30.0, 0.0, 45.0 * Pi / 180.0));
+    Track.AddSegment(MakeArc(50.0, 30.0, 45.0 * Pi / 180.0));
+    Track.AddSegment(MakeClothoid(40.0, 1.0 / 30.0, 0.0, 45.0 * Pi / 180.0, 0.0));
+    Track.AddSegment(MakeStraight(40.0));
+
+    FTrain Train(Track);
+    Train.AddZone(MakeLaunch(0.0, 20.0, 25.0, 6.0));
+
+    const FRideProfile P = RunRideProfile(Train, Track, 0.5);
+    assert(P.bCompleted);
+    assert(P.MaxAbsRollRate > 10.0);
+    // On the entry transition — not on a straight, and not in the arc where the
+    // bank is being held constant and the rider is no longer rotating.
+    assert(P.MaxAbsRollRateS > 38.0 && P.MaxAbsRollRateS < 62.0);
+
+    std::printf("  ride profile: peak roll rate %.1f deg/s at S=%.1f m, where the G trace "
+                "reports nothing\n",
+                P.MaxAbsRollRate, P.MaxAbsRollRateS);
+}
+
 int main()
 {
     TestGravityIsExactEnergyExchange();
@@ -488,6 +619,9 @@ int main()
     TestAddZoneRejectsMalformedZones();
     TestStallsInsteadOfProducingNaN();
     TestStepRejectsBadDeltas();
+    TestRideProfileMeasuresTheWholeRideAtEditTime();
+    TestRideProfileReportsAStallRatherThanHanging();
+    TestRideProfileCarriesRollRateWhichGCannot();
     std::printf("All train physics tests passed.\n");
     return 0;
 }

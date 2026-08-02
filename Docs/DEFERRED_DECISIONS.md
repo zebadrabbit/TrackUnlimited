@@ -22,36 +22,15 @@ A helix segment is constant curvature plus constant torsion. That is a true heli
 
 ---
 
-## 2. Does `Torsion` belong in the authored vocabulary, or only as a derived field?
-
-**Status:** open.
-
-`FTrackSegment::Torsion` is what makes a helix expressible. But torsion is not a quantity anyone authors — you author radius, climb angle and turns, and `MakeHelix` converts. The question is whether the Phase 1 editor ever shows a torsion field.
-
-- **Hide it.** Editor offers straight / arc / clothoid / helix, each with natural parameters, and torsion is computed. Keeps the UI honest to how track is actually designed.
-- **Expose it.** More general — any constant-curvature-constant-torsion curve becomes authorable. Almost certainly a footgun.
-
-**Meanwhile:** the field exists on the struct because the integrator needs it; only `MakeHelix` sets it.
-**Cost of deciding later:** none for the data model. Purely a UI question, and it belongs with the numeric entry card.
-
----
-
-## 3. Which roll mode should the editor offer by *default*?
-
-**Status:** open. Raised by resolving the roll-mode question below — the data model answer does not settle the UI one.
-
-`ERollMode::PathRelative` is the struct default because it is defined everywhere and it keeps every existing track meaning exactly what it did. That is a compatibility choice, not an authoring one. What a new segment should arrive as in the editor is separate:
-
-- **Default path-relative.** Never undefined, never surprises anyone through an inversion. Costs the author a mental conversion on the single most common thing they will do, which is bank a turn.
-- **Default world bank.** Matches what "bank" means to a human, and the common case — a banked turn on rolling terrain — comes out right with no thought. Wrong for inversions, where it is undefined and the author must notice and switch.
-- **Default by segment type.** Arc and clothoid arrive world-referenced; anything the author builds an inversion from arrives path-relative. Best behaviour, and the only option that needs the editor to carry an opinion about what a segment is *for*.
-
-**Meanwhile:** path-relative, from the struct default. No editor exists yet to have a different opinion.
-**Cost of deciding later:** low now, high after tracks are saved. The mode is stored per segment, so changing the default silently changes the meaning of every segment authored under the old one. Decide before the save format ships.
-
----
-
 ## Resolved
+
+### Which roll mode does the editor default to? — **path-relative, for every kind** (2026-08-02)
+
+Not "world bank for arcs, path-relative for the rest", which was the earlier provisional call. Switching the default on segment kind means changing a segment's kind silently changes what its roll number *means*, and that trade is worse than one extra dropdown. Path-relative is defined everywhere; the author picks "Bank (from horizon)" when they want it, and the dropdown says so in words.
+
+### Does `Torsion` belong in the authored vocabulary? — **yes, show it** (2026-08-02)
+
+It is not a quantity anyone reaches for first — you author radius, climb and turns, and `MakeHelix` converts — but it is worth knowing and worth being able to set directly, because it is the one field that turns a planar curve into a corkscrewing one. The loop side-step investigation needed exactly that and had to reach past the authored vocabulary to get it. Editable on the kinds where it is genuinely an input, and shown as a derived read-only value on a helix, where it is an output.
 
 ### World-referenced roll mode, or keep rotation-minimising only? — **both, per segment** (2026-08-02)
 
