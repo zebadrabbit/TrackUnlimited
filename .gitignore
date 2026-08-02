@@ -49,6 +49,8 @@ Prototypes/NL2Telemetry/record
 Prototypes/NL2Telemetry/record.exe
 Prototypes/NL2Telemetry/calibrate
 Prototypes/NL2Telemetry/calibrate.exe
+Prototypes/NL2Csv/compare
+Prototypes/NL2Csv/compare.exe
 Prototypes/**/telemetry*.csv
 
 # --- NL2 track imports and park files (scratch) ---
