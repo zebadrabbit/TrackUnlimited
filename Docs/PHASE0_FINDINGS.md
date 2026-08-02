@@ -139,6 +139,16 @@ At the peak lateral event — a 6.35 m radius unbanked turn at 12.35 m/s — NL2
 
 The defaults run this ride consistently *fast* — 11.0 m/s against NL2's 10.6 at mid-circuit, and 11.0 against 9.4 by the end, i.e. the error grows with distance travelled, which is what too little total resistance looks like. See "Still unknown" for why these fitted numbers are **not** being adopted as defaults.
 
+> **Corrected in Phase 2 (2026-08-02): that fitted PAIR was never separable, and calling it a measurement of two things overstated it.** `Prototypes/NL2Telemetry/calibrate.cpp` refits it properly — the model is *linear* in both coefficients for a coasting train, so the whole thing is a closed-form 2×2 solve rather than the search the first attempt used. The diagnostic that matters: the correlation between the two predictors, `N·g` and `v²`, is **0.975**, and the normal matrix has a condition number around **2000**. They move together across this recording, so nothing can say which of them the energy loss belongs to. The split between them is a free parameter, not a result.
+>
+> The symptom is visible once you look for it: refitting at train lengths from 0 to 25 m, `DragK` flips sign — −0.00138, −0.00019, +0.00021, −0.00050, +0.00048, +0.00143 — while the residual barely moves. That is noise along a direction the data does not constrain.
+>
+> **The cause is the ride, not the method.** This recording tops out at 44.5 km/h over 234 m. Drag scales with `v²`, so at these speeds it is a small share of the loss with very little to be measured against. Separating the two needs a *fast* reference ride, and that is now a specific, actionable thing to go and record rather than a vague "calibrate against something".
+>
+> **Train length does not rescue it.** That was the hypothesis — that a point-mass model had nowhere to put the discrepancy except drag — and it is not supported: the correlation stays at 0.975 across every train length tested. The hypothesis is untested rather than disproved, because this data cannot test it.
+>
+> **What this recording does support** is one parameter, not two. Pin `DragK` at its derived 0.00045 and rolling resistance alone is well conditioned: **`RollingResistance` = 0.02204**, against a shipped default of 0.006. That is high for steel-on-steel, which most likely says something about this particular NL2 track's own friction settings rather than about steel — one more reason a second, faster reference ride is the next real step. **The defaults remain unchanged.**
+
 **Test suites are discriminating.** This was checked by mutation rather than assumed: deliberately broken variants of the headers were generated and run against the suites. The first pass found four surviving mutants in the spline suite — including one that put the loop apex at z = **-16** instead of +16 while leaving *every* G reading numerically identical, because the frame flipped in step with the curvature. An entirely inverted track would have reported perfectly self-consistent G. Six asserts closed that gap, and all six previously-surviving mutants are now killed.
 
 ## What was disproved

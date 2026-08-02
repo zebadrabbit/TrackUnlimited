@@ -47,6 +47,8 @@ Prototypes/**/*.pdb
 # misses it; its recordings are machine-specific captures, not source.
 Prototypes/NL2Telemetry/record
 Prototypes/NL2Telemetry/record.exe
+Prototypes/NL2Telemetry/calibrate
+Prototypes/NL2Telemetry/calibrate.exe
 Prototypes/**/telemetry*.csv
 
 # --- NL2 track imports and park files (scratch) ---
