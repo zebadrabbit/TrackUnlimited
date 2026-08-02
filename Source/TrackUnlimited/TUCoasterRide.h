@@ -106,6 +106,18 @@ public:
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited")
 	float RestartDelaySeconds = 3.f;
 
+	/**
+	 * Metres, nose to tail. Zero is a point mass at the heartline.
+	 *
+	 * A train's speed is governed by the height of its centre of mass, so a
+	 * long one softens sharp features — it does not pay the full height of a
+	 * crest it is straddling. On this layout 15 m takes the peak vertical from
+	 * +4.30 g to +4.20 and FIRMS the loop apex from +1.34 to +1.52, because
+	 * straddling the top of a loop means more speed at the top.
+	 */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited", meta = (ClampMin = "0.0", UIMax = "30.0"))
+	float TrainLengthM = 15.f;
+
 private:
 	void RebuildFromSegments();
 	void DrawTrack() const;

@@ -112,15 +112,30 @@ TArray<FTUTrackSegment> ATUCoasterRide::ReferenceLayout()
 		Out.Add(Tail);
 	};
 
-	// The chain has to run over the crest: the climb tops out before the track
-	// stops RISING, and releasing at the top of the straight strands the train.
-	// Zones are per segment now, so the chain covers the crest's first half —
-	// segment granularity rather than the old hand-picked "+24 m".
-	Straight(20.0, ETUSegmentZone::Lift, 4.f);            // station
-	EasedPitch(Lift, 0.03, ETUSegmentZone::Lift, 4.f);    // into the climb
-	Straight(LiftClimb, ETUSegmentZone::Lift, 4.f);       // lift climb
-	EasedPitch(Drop - Lift, 0.05, ETUSegmentZone::Lift, 4.f); // crest, chain still on
-	Straight(12.0);                                       // drop
+	Straight(20.0, ETUSegmentZone::Lift, 4.f);         // station
+	EasedPitch(Lift, 0.03, ETUSegmentZone::Lift, 4.f); // into the climb
+	Straight(LiftClimb, ETUSegmentZone::Lift, 4.f);    // lift climb
+
+	// The chain has to run OVER the crest and stop AT it, and the window is
+	// narrower than it looks in both directions.
+	//
+	// Release at the top of the climb and the train is stranded: the straight
+	// tops out while the track is still rising. Carry on down the far side and
+	// it is worse — MakeLift holds a fast train back as well as pulling a slow
+	// one, so the chain sits on the train at 4 m/s down a 34-degree drop and
+	// takes the ride's energy with it. Measured: powering both halves of the
+	// crest instead of the first costs 10 km/h of top speed and flattens the
+	// loop apex from +1.34 g to nothing.
+	//
+	// So only the FIRST of the pair is powered — the segment carrying the track
+	// from +25 degrees down through level. Pitch crosses zero 17.4 m into a
+	// 20.6 m segment, so the chain lets go just past the top.
+	const int32 CrestFirst = Out.Num();
+	EasedPitch(Drop - Lift, 0.05);
+	Out[CrestFirst].Zone = ETUSegmentZone::Lift;
+	Out[CrestFirst].ZoneSpeed = 4.f;
+
+	Straight(12.0);                                    // drop
 	EasedPitch(-Drop, 0.012);                             // pull-out
 
 	// Teardrop loop: curvature eases in and out rather than stepping, so the
@@ -210,7 +225,9 @@ void ATUCoasterRide::RebuildFromSegments()
 		return;
 	}
 
-	Train = MakeUnique<FTrain>(Track);
+	FTrainConfig TrainConfig;
+	TrainConfig.TrainLength = TrainLengthM;
+	Train = MakeUnique<FTrain>(Track, TrainConfig);
 
 	// Zones come from contiguous runs of segments carrying the same kind, so a
 	// lift is however many segments in a row say "Lift" and moving one is an
@@ -604,6 +621,18 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 			G.Vertical > 4.5 || G.Vertical < -1.0 ? FColor::Red : FColor::Green,
 			FString::Printf(TEXT("vertical %+5.2f G    lateral %+5.2f G    fore-aft %+5.2f G"),
 				G.Vertical, G.Lateral, Train->GetTangentialG()));
+
+		// Front and back, when there is a train to have ends. Every car shares
+		// one speed, so the spread is purely which curvature each one is on —
+		// and it is the whole reason people queue for the back row.
+		if (TrainLengthM > 0.f)
+		{
+			const double Half = TrainLengthM * 0.5;
+			GEngine->AddOnScreenDebugMessage(6, 0.f, FColor(200, 200, 120),
+				FString::Printf(TEXT("%.0f m train:  front %+5.2f G    back %+5.2f G"),
+					TrainLengthM, Train->GetForcesAt(+Half).Vertical,
+					Train->GetForcesAt(-Half).Vertical));
+		}
 		GEngine->AddOnScreenDebugMessage(3, 0.f, FColor::Silver,
 			S >= BrakeStartS ? TEXT("BRAKE RUN") : TEXT("on course"));
 
