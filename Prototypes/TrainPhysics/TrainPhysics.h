@@ -86,6 +86,23 @@ struct FTrainConfig
     // 0.00045 is that formula evaluated for a loaded 7-car steel train — around
     // 8000 kg at a CdA of 5.5 m^2. Still a knob, but a defensible starting one.
     double DragK = 0.00045;
+
+    // Metres, nose to tail. ZERO is a point mass at the heartline, which is
+    // what every result recorded before Phase 2 was measured with — so it stays
+    // the default and nothing already asserted moves.
+    //
+    // PHASE0_FINDINGS calls length "the one omission most likely to be FELT",
+    // and the mechanism is one substitution: a train's speed is governed by the
+    // height of its CENTRE OF MASS, not by where its front happens to be. A
+    // train straddling a crest has its mass lower than the crest, so it arrives
+    // travelling faster than a point would — which is why the back car gets
+    // thrown over an airtime hill harder than the front, and why point-mass
+    // coaster sims are known to feel wrong.
+    //
+    // It is also the leading suspect for the fitted DragK landing 3.2x above
+    // its physically derived value: with no length in the model, the fit had
+    // nowhere to put the discrepancy except into drag.
+    double TrainLength = 0.0;
 };
 
 class FTrain
@@ -96,6 +113,9 @@ public:
         , Config(InConfig)
         , Current(InTrack.EvaluateAt(0.0))
     {
+        // Populates the sample frames. Every mean the step takes reads them, so
+        // they cannot be left empty even before anyone calls Place.
+        Place(0.0, 0.0);
     }
 
     // Refuses a malformed zone rather than storing it, mirroring
@@ -118,10 +138,25 @@ public:
         DistanceAlong = std::max(0.0, std::min(Track.TotalLength(), S));
         SpeedMs = Speed;
         LastTangentialAccel = 0.0;
-        Current = Track.EvaluateAt(DistanceAlong);
+
+        // O(track length) per sample, but only on Place — Step advances these
+        // incrementally afterwards.
+        const int N = SampleCount();
+        Samples.resize(static_cast<std::size_t>(N));
+        SampleS.resize(static_cast<std::size_t>(N));
+        for (int i = 0; i < N; ++i)
+        {
+            SampleS[static_cast<std::size_t>(i)] = ClampS(DistanceAlong + OffsetOf(i));
+            Samples[static_cast<std::size_t>(i)] =
+                Track.EvaluateAt(SampleS[static_cast<std::size_t>(i)]);
+        }
+        Current = Samples[static_cast<std::size_t>(N / 2)];
     }
 
+    /** Centre of the train. Front and rear are half a length either side. */
     double GetDistance() const { return DistanceAlong; }
+    double GetFrontS() const { return ClampS(DistanceAlong + Config.TrainLength * 0.5); }
+    double GetRearS() const { return ClampS(DistanceAlong - Config.TrainLength * 0.5); }
     double GetSpeed() const { return SpeedMs; }
     bool IsAtEnd() const { return DistanceAlong >= Track.TotalLength(); }
 
@@ -135,6 +170,32 @@ public:
     // Lateral and vertical G at the heartline. The geometric part comes
     // straight from the track; see TrackSpline.h.
     FGForces GetForces() const { return FeltG(GetFrame(), SpeedMs); }
+
+    // What a rider OffsetM ahead of (+) or behind (-) the train's centre feels.
+    // The whole train shares one speed — it is rigid and on rails — so the
+    // difference between cars is purely the curvature each one is sitting on,
+    // and that is enough: the back car crests an airtime hill while the centre
+    // of mass is already descending, so it is doing so faster than the front
+    // car was. With TrainLength = 0 every offset returns the same thing.
+    FGForces GetForcesAt(double OffsetM) const
+    {
+        return FeltG(GetFrameAt(OffsetM), SpeedMs);
+    }
+
+    // Nearest sampled frame to that offset. Sampling is uniform along the
+    // train, so this is exact at the ends and at the centre.
+    const FTrackFrame& GetFrameAt(double OffsetM) const
+    {
+        const int N = static_cast<int>(Samples.size());
+        if (N <= 1 || !(Config.TrainLength > 0.0))
+        {
+            return Current;
+        }
+        const double A = (OffsetM / Config.TrainLength + 0.5) * (N - 1);
+        int Index = static_cast<int>(A + 0.5);
+        Index = Index < 0 ? 0 : (Index > N - 1 ? N - 1 : Index);
+        return Samples[static_cast<std::size_t>(Index)];
+    }
 
     // Fore-aft G, the axis the track alone cannot know — what the rider feels
     // under launch and braking. Positive presses them back into the seat.
@@ -161,7 +222,6 @@ public:
 
         const double Total = Track.TotalLength();
         const double S0 = DistanceAlong;
-        const FTrackFrame& F0 = Current;
 
         // Every influence is resolved to an acceleration along the track at the
         // START of the step, so that gravity, the losses and the powered
@@ -169,7 +229,15 @@ public:
         // powered section afterwards, as a per-time clamp on speed, lets it
         // ratchet against the per-distance energy exchange on a gradient and
         // manufacture energy out of nothing.
-        const double GravityAccel = -GravityMs2 * F0.Tangent.Z;
+        // Averaged over the train, not read off its centre. For a point mass
+        // these means are the single sample and every number below is
+        // bit-identical to what it was before length existed.
+        //
+        // The gravity term is the one that matters: a train is a rigid body on
+        // rails, so what accelerates it is the slope its whole MASS sits on. A
+        // train half over a crest is still being pulled backwards by the half
+        // that has not crested yet.
+        const double GravityAccel = -GravityMs2 * MeanTangentZ();
 
         double Resistive = 0.0;
         if (SpeedMs > 0.0)
@@ -177,9 +245,10 @@ public:
             // Rolling resistance follows the normal load, so it is heavier
             // through a valley or a hard banked turn than on level track at the
             // same speed. This is the reason FeltG is worth reusing here rather
-            // than assuming 1 g.
-            const FGForces G = FeltG(F0, SpeedMs);
-            const double NormalG = std::sqrt(G.Lateral * G.Lateral + G.Vertical * G.Vertical);
+            // than assuming 1 g — and with length, a train draped through a
+            // valley has only some of its wheels being pressed hard, which is
+            // why this averages too.
+            const double NormalG = MeanNormalG();
             Resistive = Config.RollingResistance * NormalG * GravityMs2
                       + Config.DragK * SpeedMs * SpeedMs;
         }
@@ -242,12 +311,20 @@ public:
         // track start: O(one tick's travel) instead of O(track length). On a
         // 425 m layout that is ~33 integrator steps a frame instead of ~42,500,
         // which is the difference between fitting in a frame and not.
-        const FTrackFrame F1 = Track.AdvanceFrom(F0, S0, S1);
+        const double MeanZ0 = MeanHeight();
+        AdvanceSamples(Travelled);
+        const FTrackFrame F1 = Samples[Samples.size() / 2];
+        const double MeanZ1 = MeanHeight();
 
         // Gravity: exact, no discretisation error, at any step size. Everything
         // else does work over the distance actually travelled.
+        //
+        // The height that matters is the CENTRE OF MASS, which is what gives a
+        // train its length. Straddling a crest, its mass is lower than the
+        // crest, so it does not pay the full height and arrives faster than a
+        // point would — the whole reason the back car gets thrown harder.
         double SpeedSq = SpeedMs * SpeedMs
-                       - 2.0 * GravityMs2 * (F1.Position.Z - F0.Position.Z)
+                       - 2.0 * GravityMs2 * (MeanZ1 - MeanZ0)
                        + 2.0 * (ZoneAccel - Resistive) * Travelled;
 
         const double NewSpeed = bStopsThisStep ? 0.0 : (SpeedSq > 0.0 ? std::sqrt(SpeedSq) : 0.0);
@@ -259,6 +336,83 @@ public:
     }
 
 private:
+    double ClampS(double S) const
+    {
+        const double Total = Track.TotalLength();
+        return S < 0.0 ? 0.0 : (S > Total ? Total : S);
+    }
+
+    // Odd, so the middle sample sits exactly on the train's centre and
+    // GetFrame() needs no separate frame of its own.
+    //
+    // ponytail: nine points, uniformly spaced, uniform mass. A 15 m train is
+    // sampled every 1.9 m, which resolves the mean height of a smooth curve
+    // far better than the model's other approximations. Real cars have gaps
+    // and a real train is heavier at the back when it is full — give this a
+    // mass distribution the day someone wants to model a specific train.
+    int SampleCount() const { return Config.TrainLength > 0.0 ? 9 : 1; }
+
+    double OffsetOf(int Index) const
+    {
+        const int N = SampleCount();
+        if (N <= 1)
+        {
+            return 0.0;
+        }
+        return (static_cast<double>(Index) / (N - 1) - 0.5) * Config.TrainLength;
+    }
+
+    double MeanHeight() const
+    {
+        double Sum = 0.0;
+        for (const FTrackFrame& F : Samples)
+        {
+            Sum += F.Position.Z;
+        }
+        return Sum / static_cast<double>(Samples.size());
+    }
+
+    double MeanTangentZ() const
+    {
+        double Sum = 0.0;
+        for (const FTrackFrame& F : Samples)
+        {
+            Sum += F.Tangent.Z;
+        }
+        return Sum / static_cast<double>(Samples.size());
+    }
+
+    double MeanNormalG() const
+    {
+        double Sum = 0.0;
+        for (const FTrackFrame& F : Samples)
+        {
+            const FGForces G = FeltG(F, SpeedMs);
+            Sum += std::sqrt(G.Lateral * G.Lateral + G.Vertical * G.Vertical);
+        }
+        return Sum / static_cast<double>(Samples.size());
+    }
+
+    // Every sample moves by the same distance — the train is rigid — so each
+    // one continues from its own cached frame. O(one tick's travel) per sample
+    // rather than O(track length), same reason the centre frame is cached.
+    //
+    // Samples clamp at the track ends, so a train part-way onto a
+    // point-to-point layout has its overhanging mass piled at the endpoint
+    // rather than off the end. That dilutes the mean height slightly at the
+    // very start and finish; both are stations on flat track, where height is
+    // not changing anyway.
+    void AdvanceSamples(double Travelled)
+    {
+        for (std::size_t i = 0; i < Samples.size(); ++i)
+        {
+            const double Next = ClampS(SampleS[i] + Travelled);
+            Samples[i] = Track.AdvanceFrom(Samples[i], SampleS[i], Next);
+            SampleS[i] = Next;
+        }
+        Current = Samples[Samples.size() / 2];
+    }
+
     const FTrack& Track;
     FTrainConfig Config;
     std::vector<FTrackZone> Zones;
@@ -267,4 +421,9 @@ private:
     double SpeedMs = 0.0;
     double LastTangentialAccel = 0.0;
     FTrackFrame Current;
+
+    // Rear to front. One entry for a point mass, so every mean below collapses
+    // to the value it had before length existed.
+    std::vector<FTrackFrame> Samples;
+    std::vector<double> SampleS;
 };

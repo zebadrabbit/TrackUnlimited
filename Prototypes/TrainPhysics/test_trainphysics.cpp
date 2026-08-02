@@ -470,6 +470,208 @@ static void TestStepRejectsBadDeltas()
     assert(Near(Train.GetFrame().Position.X, Track.TotalLength(), 1e-9));
 }
 
+// -------------------------------------------------------------- train length
+
+// A symmetric airtime hill: nose up, crest, nose back to level. Pitch curvature
+// integrates to zero over the three segments, and the shape is symmetric about
+// the crest, so the track leaves at the same height and heading it arrived at.
+static FTrack AirtimeHill(double K, double L)
+{
+    FTrack T;
+    T.AddSegment(MakeStraight(60.0));
+    FTrackSegment Up;
+    Up.Length = L;
+    Up.PitchCurvatureStart = Up.PitchCurvatureEnd = K;
+    T.AddSegment(Up);
+    FTrackSegment Crest;
+    Crest.Length = 2.0 * L;
+    Crest.PitchCurvatureStart = Crest.PitchCurvatureEnd = -K;
+    T.AddSegment(Crest);
+    FTrackSegment Down;
+    Down.Length = L;
+    Down.PitchCurvatureStart = Down.PitchCurvatureEnd = K;
+    T.AddSegment(Down);
+    T.AddSegment(MakeStraight(60.0));
+    return T;
+}
+
+static void TestTrainLengthIsBitIdenticalAtZero()
+{
+    // The default is a point mass, and every number recorded before Phase 2 was
+    // measured with one. Adding length must not move any of them, so this is
+    // asserted exactly rather than within a tolerance.
+    const FTrack Hill = AirtimeHill(0.02, 25.0);
+    FTrainConfig Point;
+    Point.TrainLength = 0.0;
+
+    FTrain A(Hill, Point);
+    FTrain B(Hill, FTrainConfig()); // whatever the default happens to be
+    A.Place(0.0, 25.0);
+    B.Place(0.0, 25.0);
+    for (int i = 0; i < 4000 && !A.IsAtEnd(); ++i)
+    {
+        A.Step(1.0 / 240.0);
+        B.Step(1.0 / 240.0);
+        assert(A.GetSpeed() == B.GetSpeed());
+        assert(A.GetDistance() == B.GetDistance());
+    }
+    // And with no length, every car is the same car.
+    assert(A.GetForcesAt(+7.5).Vertical == A.GetForces().Vertical);
+    assert(A.GetForcesAt(-7.5).Vertical == A.GetForces().Vertical);
+    assert(A.GetFrontS() == A.GetDistance());
+}
+
+static void TestLengthConservesEnergyOverASymmetricHill()
+{
+    // The mean-height accounting has to be conservative, or length quietly
+    // becomes an energy source. Frictionless, and the hill returns to the
+    // height and heading it started at, so the exit speed must equal the entry
+    // speed however long the train is.
+    // Measured between two points where the WHOLE train is on flat track: the
+    // lead-in runs 0-60 m and the run-out 160-220 m, so a 24 m train centred at
+    // 30 m and again at 190 m is entirely on the level both times and the two
+    // mean heights are directly comparable.
+    //
+    // Not measured to the end of the track, deliberately. Samples clamp at the
+    // track ends, so a train hanging off a point-to-point layout has its
+    // overhanging mass piled at the endpoint and its mean height is wrong for
+    // as long as that lasts. That is a real limitation of the model rather than
+    // something this test should paper over.
+    const FTrack Hill = AirtimeHill(0.015, 25.0);
+    for (const double Length : {0.0, 8.0, 15.0, 24.0})
+    {
+        FTrainConfig C = Frictionless();
+        C.TrainLength = Length;
+        FTrain Train(Hill, C);
+        Train.Place(30.0, 22.0);
+        for (int i = 0; i < 40000 && Train.GetDistance() < 190.0; ++i)
+        {
+            Train.Step(1.0 / 480.0);
+        }
+        assert(Train.GetDistance() >= 190.0);
+        assert(Near(Train.GetSpeed(), 22.0, 1e-3));
+    }
+}
+
+static void TestLongTrainCrestsFasterThanAPoint()
+{
+    // The mechanism, isolated. A train straddling a crest has its centre of
+    // mass BELOW the crest, so it has not paid the full height and arrives
+    // travelling faster than a point mass would. This is the whole of what
+    // length does to the physics; everything else follows from it.
+    const FTrack Hill = AirtimeHill(0.02, 25.0);
+    const double CrestS = 60.0 + 25.0 + 25.0; // middle of the crest segment
+
+    double SpeedAtCrest[2] = {0.0, 0.0};
+    double MinVertical[2] = {9.0, 9.0};
+    const double Lengths[2] = {0.0, 15.0};
+
+    for (int i = 0; i < 2; ++i)
+    {
+        FTrainConfig C = Frictionless();
+        C.TrainLength = Lengths[i];
+        FTrain Train(Hill, C);
+        Train.Place(20.0, 25.0);
+        bool bRecorded = false;
+        for (int Step = 0; Step < 20000 && !Train.IsAtEnd(); ++Step)
+        {
+            Train.Step(1.0 / 480.0);
+            if (!bRecorded && Train.GetDistance() >= CrestS)
+            {
+                SpeedAtCrest[i] = Train.GetSpeed();
+                bRecorded = true;
+            }
+            MinVertical[i] = std::fmin(MinVertical[i], Train.GetForces().Vertical);
+        }
+    }
+
+    assert(SpeedAtCrest[1] > SpeedAtCrest[0]);   // the train is faster over the top
+    assert(MinVertical[1] < MinVertical[0]);     // and therefore lighter in the seat
+    std::printf("  train length: point mass crests at %.3f m/s (%.3f G), 15 m train at "
+                "%.3f m/s (%.3f G)\n",
+                SpeedAtCrest[0], MinVertical[0], SpeedAtCrest[1], MinVertical[1]);
+}
+
+// The shape of a real airtime hill: a gentle rise to the crest and a sharp fall
+// away from it. Deliberately NOT symmetric — see the test below for why that is
+// the whole point.
+static FTrack AsymmetricCrest()
+{
+    FTrack T;
+    T.AddSegment(MakeStraight(60.0));
+    FTrackSegment Up; // gentle, to +18 degrees
+    Up.Length = 31.4;
+    Up.PitchCurvatureStart = Up.PitchCurvatureEnd = 0.01;
+    T.AddSegment(Up);
+    FTrackSegment Crest; // sharp, carrying on down to -40 degrees
+    Crest.Length = 20.3;
+    Crest.PitchCurvatureStart = Crest.PitchCurvatureEnd = -0.05;
+    T.AddSegment(Crest);
+    FTrackSegment Recover;
+    Recover.Length = 35.05;
+    Recover.PitchCurvatureStart = Recover.PitchCurvatureEnd = 0.02;
+    T.AddSegment(Recover);
+    T.AddSegment(MakeStraight(60.0));
+    return T;
+}
+
+static void TestBackCarIsThrownHarderThanTheFront()
+{
+    // The claim PHASE0_FINDINGS makes about why point-mass sims feel wrong, now
+    // measurable — and with the condition on it that the findings did not state.
+    //
+    // Every car shares one speed at any instant, because the train is rigid and
+    // on rails. So the difference between cars is entirely about WHEN each one
+    // reaches the crest and how fast the train happens to be moving then.
+    //
+    // On a SYMMETRIC hill there is no difference at all. The front car crests
+    // when the centre of mass is half a train short of the crest; the back car
+    // crests when it is half a train past. Symmetric and frictionless, those two
+    // positions are the same height, so the speeds are identical and so is the
+    // airtime. The first version of this test used a symmetric hill and
+    // correctly measured no effect.
+    //
+    // It takes an ASYMMETRIC crest — gentle rise, sharp fall, which is what real
+    // airtime hills are. Then the centre of mass is LOWER when the back car
+    // crests than it was when the front car did, so the train is moving faster,
+    // and the back car takes the same curvature harder.
+    const FTrack Hill = AsymmetricCrest();
+    FTrainConfig C = Frictionless();
+    C.TrainLength = 15.0;
+
+    FTrain Train(Hill, C);
+    Train.Place(20.0, 25.0);
+
+    double FrontMin = 9.0, BackMin = 9.0, CentreMin = 9.0;
+    for (int Step = 0; Step < 20000 && !Train.IsAtEnd(); ++Step)
+    {
+        Train.Step(1.0 / 480.0);
+        FrontMin = std::fmin(FrontMin, Train.GetForcesAt(+7.5).Vertical);
+        BackMin = std::fmin(BackMin, Train.GetForcesAt(-7.5).Vertical);
+        CentreMin = std::fmin(CentreMin, Train.GetForces().Vertical);
+    }
+
+    assert(BackMin < FrontMin);   // the back gets thrown harder
+    assert(BackMin < CentreMin);  // and harder than the reading at the heartline
+    std::printf("  train length: over an asymmetric crest the front car sees %+.3f G, the "
+                "centre %+.3f G, the back car %+.3f G\n",
+                FrontMin, CentreMin, BackMin);
+
+    // And on a symmetric hill the two ends agree, which is the control that
+    // stops the assertion above passing for the wrong reason.
+    const FTrack Symmetric = AirtimeHill(0.02, 25.0);
+    FTrain Even(Symmetric, C);
+    Even.Place(20.0, 25.0);
+    double EvenFront = 9.0, EvenBack = 9.0;
+    for (int Step = 0; Step < 20000 && !Even.IsAtEnd(); ++Step)
+    {
+        Even.Step(1.0 / 480.0);
+        EvenFront = std::fmin(EvenFront, Even.GetForcesAt(+7.5).Vertical);
+        EvenBack = std::fmin(EvenBack, Even.GetForcesAt(-7.5).Vertical);
+    }
+    assert(Near(EvenFront, EvenBack, 0.01));
+}
+
 // ------------------------------------------------------------- ride profile
 
 // Station, eased climb, crest, drop, level run-out. The shape of a ride,
@@ -619,6 +821,10 @@ int main()
     TestAddZoneRejectsMalformedZones();
     TestStallsInsteadOfProducingNaN();
     TestStepRejectsBadDeltas();
+    TestTrainLengthIsBitIdenticalAtZero();
+    TestLengthConservesEnergyOverASymmetricHill();
+    TestLongTrainCrestsFasterThanAPoint();
+    TestBackCarIsThrownHarderThanTheFront();
     TestRideProfileMeasuresTheWholeRideAtEditTime();
     TestRideProfileReportsAStallRatherThanHanging();
     TestRideProfileCarriesRollRateWhichGCannot();
