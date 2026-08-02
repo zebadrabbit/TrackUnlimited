@@ -1,6 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="TrackUnlimited mark">
-<rect width="64" height="64" rx="10" fill="#0B0E11"/>
-<g fill="none" stroke-linecap="square" transform="translate(-14.40,-14.40) scale(1.450)">
-<path d="M 6.40 44.80 L 57.60 44.80" stroke="#3E7E9B" stroke-width="3.20"/>
-<path d="M 6.40 44.80 L 12.54 44.80 L 23.81 19.20 L 40.19 19.20 L 51.46 44.80 L 57.60 44.80" stroke="#7FD8FF" stroke-width="6.40" stroke-linejoin="round"/>
-</g></svg>
