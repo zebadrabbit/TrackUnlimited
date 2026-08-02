@@ -20,7 +20,7 @@
 #include "TUCoasterRide.generated.h"
 
 class UCameraComponent;
-class UStaticMeshComponent;
+class UInstancedStaticMeshComponent;
 
 UCLASS()
 class TRACKUNLIMITED_API ATUCoasterRide : public APawn
@@ -118,6 +118,18 @@ public:
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited", meta = (ClampMin = "0.0", UIMax = "30.0"))
 	float TrainLengthM = 15.f;
 
+	/**
+	 * Which row the rider sits in: -1 is the back, 0 the middle, +1 the front.
+	 *
+	 * Now that the train has length this is a real choice rather than a camera
+	 * offset. Every car shares one speed, so what differs between them is the
+	 * curvature each is sitting on at any instant — and on an asymmetric crest
+	 * that is worth most of a G. The back row is not folklore.
+	 */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited",
+		meta = (ClampMin = "-1.0", ClampMax = "1.0"))
+	float RiderPosition = 0.f;
+
 private:
 	void RebuildFromSegments();
 	void DrawTrack() const;
@@ -133,8 +145,11 @@ private:
 	UPROPERTY(VisibleAnywhere, Category = "TrackUnlimited")
 	TObjectPtr<USceneComponent> Root;
 
+	// One instance per sample point along the train, so the thing on the track
+	// looks like a train rather than a cube. Instanced because the count is
+	// whatever the length implies and they all share one mesh.
 	UPROPERTY(VisibleAnywhere, Category = "TrackUnlimited")
-	TObjectPtr<UStaticMeshComponent> Cart;
+	TObjectPtr<UInstancedStaticMeshComponent> Cars;
 
 	UPROPERTY(VisibleAnywhere, Category = "TrackUnlimited")
 	TObjectPtr<UCameraComponent> Camera;

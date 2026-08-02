@@ -4,7 +4,7 @@
 #include "TrackSpline/TrackValidate.h"
 
 #include "Camera/CameraComponent.h"
-#include "Components/StaticMeshComponent.h"
+#include "Components/InstancedStaticMeshComponent.h"
 #include "DrawDebugHelpers.h"
 #include "Engine/Engine.h"
 #include "UObject/ConstructorHelpers.h"
@@ -26,16 +26,14 @@ ATUCoasterRide::ATUCoasterRide()
 	Root = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
 	SetRootComponent(Root);
 
-	Cart = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("Cart"));
-	Cart->SetupAttachment(Root);
-	Cart->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	Cars = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("Cars"));
+	Cars->SetupAttachment(Root);
+	Cars->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	Cars->SetCastShadow(false);
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> CubeMesh(TEXT("/Engine/BasicShapes/Cube.Cube"));
 	if (CubeMesh.Succeeded())
 	{
-		Cart->SetStaticMesh(CubeMesh.Object);
-		// Roughly one car: 2.4 m long, 1.4 m wide, 1 m tall. The train is still
-		// a POINT in the simulation — this is a stand-in, not a length model.
-		Cart->SetRelativeScale3D(FVector(2.4f, 1.4f, 1.0f));
+		Cars->SetStaticMesh(CubeMesh.Object);
 	}
 
 	Camera = CreateDefaultSubobject<UCameraComponent>(TEXT("Camera"));
@@ -595,13 +593,40 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 
 	Train->Step(DeltaSeconds);
 
-	const FTrackFrame& Frame = Train->GetFrame();
+	// Where the rider is sitting, which is a real choice now that cars differ.
+	const double SeatOffset = RiderPosition * TrainLengthM * 0.5;
+	const FTrackFrame& Frame = Train->GetFrameAt(SeatOffset);
 	const FQuat Rotation = ToWorldRotation(Frame);
 
-	// The cart sits on the rails; the rider sits at the heartline. That
-	// distinction is the entire reason the heartline model exists, so the slice
-	// should show it rather than putting both in the same place.
-	Cart->SetWorldLocationAndRotation(ToWorld(Track.RailCentreAt(Train->GetDistance())), Rotation);
+	// One car per sample point. The cars sit on the RAILS; the rider sits at
+	// the heartline. That distinction is the entire reason the heartline model
+	// exists, so the slice shows it rather than putting both in one place.
+	//
+	// Frames come from the train rather than from Track.EvaluateAt, which is
+	// O(track length) a call and would be six of those every frame.
+	{
+		const int32 CarCount = Train->NumSamplePoints();
+		const double CarLength =
+			TrainLengthM > 0.f ? TrainLengthM / CarCount : 2.4;
+		if (Cars->GetInstanceCount() != CarCount)
+		{
+			Cars->ClearInstances();
+			for (int32 i = 0; i < CarCount; ++i)
+			{
+				Cars->AddInstance(FTransform::Identity, true);
+			}
+		}
+		const FVector CarScale(CarLength * 0.9, 1.4, 1.0);
+		for (int32 i = 0; i < CarCount; ++i)
+		{
+			const FTrackFrame& CarFrame = Train->GetSamplePoint(i);
+			const FVec3 OnRails = CarFrame.Position - CarFrame.Up * Track.GetHeartlineHeight();
+			Cars->UpdateInstanceTransform(i,
+				FTransform(ToWorldRotation(CarFrame), ToWorld(OnRails), CarScale), true,
+				i == CarCount - 1, true);
+		}
+	}
+
 	Camera->SetWorldLocationAndRotation(ToWorld(Frame.Position), Rotation);
 
 	if (!bRideCamera)
@@ -612,7 +637,9 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 
 	if (bShowTelemetry && GEngine)
 	{
-		const FGForces G = Train->GetForces();
+		// What the RIDER feels, at whichever row they are sitting in — not the
+		// train's centre. That is the whole point of choosing a seat.
+		const FGForces G = Train->GetForcesAt(SeatOffset);
 		const double S = Train->GetDistance();
 		GEngine->AddOnScreenDebugMessage(1, 0.f, FColor::White,
 			FString::Printf(TEXT("%6.1f km/h    %5.1f m along %.0f m    height %5.1f m"),

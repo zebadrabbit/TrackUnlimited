@@ -182,6 +182,19 @@ public:
         return FeltG(GetFrameAt(OffsetM), SpeedMs);
     }
 
+    // The sample points themselves, rear to front. Uniformly spaced along the
+    // train and each one an exact frame, so anything wanting to place a car per
+    // point — a renderer, say — can use these rather than re-evaluating the
+    // track, which is O(track length) a time.
+    int NumSamplePoints() const { return static_cast<int>(Samples.size()); }
+
+    const FTrackFrame& GetSamplePoint(int Index) const
+    {
+        const int N = NumSamplePoints();
+        const int Clamped = Index < 0 ? 0 : (Index > N - 1 ? N - 1 : Index);
+        return Samples[static_cast<std::size_t>(Clamped)];
+    }
+
     // Nearest sampled frame to that offset. Sampling is uniform along the
     // train, so this is exact at the ends and at the centre.
     const FTrackFrame& GetFrameAt(double OffsetM) const
