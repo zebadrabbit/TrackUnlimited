@@ -217,10 +217,21 @@ int main(int argc, char** argv)
                     std::max(2.0, Total / std::max(1.0, Covered)));
         return 1;
     }
-    if (Rec.back().ArcS < Total * 0.5)
+    // NOT an error. A launched coast-down rig is SUPPOSED to stop partway: the
+    // train running out of energy IS the measurement, not a truncated run. The
+    // first version scolded about an unfinished ride on a track built
+    // deliberately to end that way, and I believed it over the person who built
+    // the track.
+    if (Rec.back().Speed < 0.3)
     {
-        std::printf("\n  Covers only %.0f m of a %.0f m track — the ride was not finished.\n",
+        std::printf("  train came to rest at %.0f m of %.0f m — a completed coast-down.\n",
                     Rec.back().ArcS, Total);
+    }
+    else if (Rec.back().ArcS < Total * 0.5)
+    {
+        std::printf("\n  Ends at %.0f m of %.0f m still doing %.1f km/h, so the recording\n"
+                    "  stopped before the ride did.\n",
+                    Rec.back().ArcS, Total, Rec.back().Speed * 3.6);
     }
 
     // Our model over the same geometry, from the recorded entry speed at the

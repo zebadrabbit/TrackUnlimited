@@ -182,7 +182,14 @@ struct FTrackIndex
     std::vector<double> ArcLength;
     FTrack Track;
 
-    bool Nearest(const FVec3& WorldPos, double& OutS, double& OutDistance) const
+    // One frame per sample, walked ONCE. EvaluateAt is O(track length), so
+    // calling it per logged row made a 180 s recording grind: 1508 segments is
+    // about 75,000 integrator steps a call, and 9,657 rows of that is most of a
+    // billion. Walking the track once with AdvanceFrom costs one pass total.
+    std::vector<FTrackFrame> Frames;
+
+    bool Nearest(const FVec3& WorldPos, double& OutS, double& OutDistance,
+                 std::size_t* OutIndex = nullptr) const
     {
         if (Samples.empty())
         {
@@ -201,6 +208,7 @@ struct FTrackIndex
         }
         OutS = ArcLength[Best];
         OutDistance = BestD;
+        if (OutIndex != nullptr) { *OutIndex = Best; }
         return true;
     }
 };
@@ -231,6 +239,16 @@ static bool BuildIndex(const std::string& CsvPath, FTrackIndex& Out, std::string
         Out.ArcLength[i] = Out.ArcLength[i - 1]
                          + Length(Out.Samples[i].Position - Out.Samples[i - 1].Position);
     }
+
+    Out.Frames.resize(Out.Samples.size());
+    FTrackFrame Walk = Out.Track.EvaluateAt(0.0);
+    double PrevS = 0.0;
+    for (std::size_t i = 0; i < Out.Samples.size(); ++i)
+    {
+        Walk = Out.Track.AdvanceFrom(Walk, PrevS, Out.ArcLength[i]);
+        Out.Frames[i] = Walk;
+        PrevS = Out.ArcLength[i];
+    }
     return true;
 }
 
@@ -257,9 +275,10 @@ static void WriteRow(std::ofstream& Out, const FNL2Telemetry& T, const FTrackInd
                      bool bHaveTrack)
 {
     double S = -1.0, Miss = -1.0, PitchDeg = 0.0, OurLat = 0.0, OurVert = 0.0;
-    if (bHaveTrack && Index.Nearest(T.Position, S, Miss))
+    std::size_t Idx = 0;
+    if (bHaveTrack && Index.Nearest(T.Position, S, Miss, &Idx))
     {
-        const FTrackFrame F = Index.Track.EvaluateAt(S);
+        const FTrackFrame& F = Index.Frames[Idx];
         const FGForces G = FeltG(F, static_cast<double>(T.Speed));
         PitchDeg = std::asin(std::max(-1.0, std::min(1.0, F.Tangent.Z))) * 180.0 / Pi;
         OurLat = G.Lateral;
