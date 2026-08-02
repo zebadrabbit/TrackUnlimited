@@ -189,6 +189,10 @@ public:
 
     std::size_t NumSegments() const { return Segments.size(); }
 
+    // Exposed so a cross-section can be placed against the same reference line
+    // RailCentreAt uses, instead of a caller keeping its own copy that can drift.
+    double GetHeartlineHeight() const { return HeartlineHeight; }
+
     double TotalLength() const
     {
         double Sum = 0.0;

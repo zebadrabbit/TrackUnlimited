@@ -2,6 +2,7 @@
 // Build & run:  clang++ -std=c++17 -Wall -Wextra -o test_trackspline test_trackspline.cpp && ./test_trackspline
 
 #include "TrackSpline.h"
+#include "TrackProfile.h"
 
 #include <cassert>
 #include <cstdio>
@@ -349,8 +350,69 @@ static void TestEvaluateClampsAndSpansSegments()
     assert(NearVec(Track.EvaluateAt(999.0).Position, FVec3{20.0, 0.0, 0.0}));
 }
 
+// ------------------------------------------------------------ cross-section
+
+static void TestCrossSectionRidesTheFrame()
+{
+    // Through a banked inverted loop, the geometry that must hold regardless of
+    // orientation: the rails stay exactly Gauge apart, they straddle the rail
+    // centre symmetrically, and the whole section stays square to the track.
+    FTrack Track;
+    FTrackSegment Loop;
+    Loop.Length = 2.0 * Pi * 8.0;
+    Loop.PitchCurvatureStart = Loop.PitchCurvatureEnd = 1.0 / 8.0;
+    Loop.RollStart = 0.0;
+    Loop.RollEnd = 0.9;
+    Track.AddSegment(Loop);
+
+    const FTrackProfile Profile;
+    for (int i = 0; i <= 200; ++i)
+    {
+        const double S = Track.TotalLength() * i / 200.0;
+        const FTrackFrame F = Track.EvaluateAt(S);
+        const FTrackCrossSection X = CrossSectionAt(F, Track.GetHeartlineHeight(), Profile);
+
+        // Gauge holds to roundoff because the frame is orthonormal by
+        // construction — no renormalisation anywhere in the cross-section.
+        assert(Near(Length(X.LeftRail - X.RightRail), Profile.Gauge, 1e-12));
+        assert(Near(Length(X.LeftRail - X.RailCentre), Profile.Gauge * 0.5, 1e-12));
+        assert(Near(Length(X.RightRail - X.RailCentre), Profile.Gauge * 0.5, 1e-12));
+
+        // Square to the track: the rail axis is perpendicular to travel.
+        assert(std::fabs(Dot(X.LeftRail - X.RightRail, F.Tangent)) < 1e-12);
+
+        // Spine hangs below the rails along the banked up-axis, not world down.
+        assert(Near(Dot(X.RailCentre - X.SpineCentre, F.Up), Profile.SpineDrop, 1e-12));
+
+        // And the section agrees with the track's own rail centreline.
+        assert(NearVec(X.RailCentre, Track.RailCentreAt(S), 1e-9));
+    }
+    std::printf("  cross-section rides the frame through an inverted banked loop\n");
+}
+
+static void TestCrossSectionSidednessAndWidth()
+{
+    // +Lateral is the rider's LEFT. On an unbanked left turn the left rail is
+    // the inside one, so it must sit nearer the centre of the turn. Getting
+    // this backwards mirrors the track while leaving it self-consistent.
+    FTrack Track;
+    Track.AddSegment(MakeArc(40.0, 25.0)); // +radius = left turn, no bank
+    const FTrackProfile Profile;
+    const FTrackCrossSection X = CrossSectionAt(Track, 20.0, Profile);
+    const FTrackFrame F = Track.EvaluateAt(20.0);
+
+    // Turn centre lies along +PathLateral from the rail centre.
+    const FVec3 Centre = X.RailCentre + F.PathLateral * 25.0;
+    assert(Length(X.LeftRail - Centre) < Length(X.RightRail - Centre));
+
+    assert(Near(TrackWidth(Profile), Profile.Gauge + Profile.RailDiameter, 1e-15));
+    std::printf("  left rail is inside a left turn; swept width %.3f m\n", TrackWidth(Profile));
+}
+
 int main()
 {
+    TestCrossSectionRidesTheFrame();
+    TestCrossSectionSidednessAndWidth();
     TestStraightIsStraight();
     TestArcMatchesExactCircle();
     TestClothoidTurnsByIntegralOfCurvature();

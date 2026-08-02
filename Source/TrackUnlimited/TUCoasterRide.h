@@ -13,6 +13,7 @@
 #include "GameFramework/Pawn.h"
 
 #include "TrainPhysics/TrainPhysics.h"
+#include "TrackSpline/TrackProfile.h"
 
 #include "TUCoasterRide.generated.h"
 
@@ -66,6 +67,11 @@ private:
 	// Not UPROPERTYs: plain C++ with no reflection needed, and deliberately so.
 	FTrack Track;
 	TUniquePtr<FTrain> Train;
+
+	// Generic track cross-section: gauge, rail and spine dimensions, tie
+	// spacing. Defaults sit mid-range for real steel coaster track. Model a
+	// track style against these rather than against numbers baked into a mesh.
+	FTrackProfile Profile;
 
 	// Landmarks along the track, in metres, filled in by BuildTrack.
 	double BrakeStartS = 0.0;

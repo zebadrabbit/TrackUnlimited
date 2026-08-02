@@ -158,23 +158,50 @@ void ATUCoasterRide::BeginPlay()
 
 void ATUCoasterRide::DrawTrack() const
 {
-	// No track mesh yet — that is Phase 4. Debug lines are enough to see the
-	// shape and to confirm the heartline and the rails are different curves.
+	// No track mesh yet — that is Phase 4. This draws the actual cross-section
+	// as wireframe instead: two running rails at gauge, the spine below them,
+	// and cross-ties. Enough to model a track style against, and enough to see
+	// that the heartline and the rails really are different curves.
+	//
+	// Everything comes off the frame the walk already has. The previous version
+	// called Track.RailCentreAt(S) in here, which re-runs EvaluateAt — O(track
+	// length) per call, so the loop was quadratic: about 118 million integrator
+	// steps on this 543 m layout, all of it at BeginPlay.
 	const double Total = Track.TotalLength();
 	const double Step = 0.5;
+	const double Heartline = Track.GetHeartlineHeight();
 
 	FTrackFrame Walk = Track.EvaluateAt(0.0);
+	FTrackCrossSection Section = CrossSectionAt(Walk, Heartline, Profile);
+	double SinceTie = 0.0;
+
 	for (double S = 0.0; S < Total; S += Step)
 	{
 		const double Next = FMath::Min(S + Step, Total);
 		const FTrackFrame NextFrame = Track.AdvanceFrom(Walk, S, Next);
+		const FTrackCrossSection NextSection = CrossSectionAt(NextFrame, Heartline, Profile);
 
 		DrawDebugLine(GetWorld(), ToWorld(Walk.Position), ToWorld(NextFrame.Position),
-			FColor(90, 190, 255), true, -1.f, 0, 4.f);
-		DrawDebugLine(GetWorld(), ToWorld(Track.RailCentreAt(S)), ToWorld(Track.RailCentreAt(Next)),
-			FColor(230, 230, 230), true, -1.f, 0, 2.f);
+			FColor(90, 190, 255), true, -1.f, 0, 2.f);                 // heartline
+		DrawDebugLine(GetWorld(), ToWorld(Section.LeftRail), ToWorld(NextSection.LeftRail),
+			FColor(235, 235, 235), true, -1.f, 0, 3.f);                // running rails
+		DrawDebugLine(GetWorld(), ToWorld(Section.RightRail), ToWorld(NextSection.RightRail),
+			FColor(235, 235, 235), true, -1.f, 0, 3.f);
+		DrawDebugLine(GetWorld(), ToWorld(Section.SpineCentre), ToWorld(NextSection.SpineCentre),
+			FColor(150, 150, 160), true, -1.f, 0, 4.f);                // spine
+
+		SinceTie += Next - S;
+		if (SinceTie >= Profile.TieSpacing)
+		{
+			SinceTie = 0.0;
+			DrawDebugLine(GetWorld(), ToWorld(Section.LeftRail), ToWorld(Section.RightRail),
+				FColor(200, 160, 90), true, -1.f, 0, 2.f);             // tie across the rails
+			DrawDebugLine(GetWorld(), ToWorld(Section.RailCentre), ToWorld(Section.SpineCentre),
+				FColor(200, 160, 90), true, -1.f, 0, 2.f);             // down to the spine
+		}
 
 		Walk = NextFrame;
+		Section = NextSection;
 	}
 }
 
