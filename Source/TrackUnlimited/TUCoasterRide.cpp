@@ -48,8 +48,9 @@ ATUCoasterRide::ATUCoasterRide()
 TArray<FTUTrackSegment> ATUCoasterRide::ReferenceLayout()
 {
 	// The reference ride, as authored data rather than as code. Tuned in the
-	// standalone harness first; these numbers give a 43.4 m lift, 101 km/h,
-	// +0.70..+4.25 vertical G, 0.36 peak lateral and +1.25 G over the loop apex.
+	// standalone harness first; these numbers give a 50.1 m crest, 105.2 km/h,
+	// +0.66..+4.19 vertical G, 0.28 peak lateral and +1.13 G over the loop apex,
+	// with the track ending at station height to within a millimetre.
 	//
 	// This used to be a sequence of AddSegment calls, which meant the layout was
 	// only editable by recompiling. It is a list now because that is what the
@@ -62,13 +63,23 @@ TArray<FTUTrackSegment> ATUCoasterRide::ReferenceLayout()
 	const double BankDeg = FMath::RadiansToDegrees(
 		FMath::Atan((26.5 * 26.5) / (GravityMs2 * TurnRadius)));
 
-	// Solved, not eyeballed. At 55.0 m this layout ended 8.498 m BELOW its own
-	// station and ran the whole back half underground — the rail centreline
-	// bottomed out at -9.60 m, which is what "dropping through the floor after
-	// the loop" actually was. TrackClose.h's HeightTarget with the lift climb
-	// freed closes that to +0.0007 m at 75.11 m, and costs nothing in ride feel
-	// because the chain reaches the crest at 4 m/s whatever height the crest is.
-	const double LiftClimb = 75.11;
+	// Both solved rather than eyeballed, and they do different jobs.
+	//
+	// The DROP sets the ride. Everything the train has at the loop comes from
+	// the descent below the crest, so this is the only lever that changes how it
+	// feels. 12.0 m was tuned when RollingResistance was 0.006 — a figure
+	// justified against steel-on-steel, which is a railway rather than a coaster.
+	// At the corrected 0.024 for polyurethane wheels, 12 m leaves the train
+	// cresting the loop at +0.13 g: hanging on the track rather than held to it.
+	// 24 m restores +1.13 g and the original G profile almost exactly.
+	//
+	// The LIFT sets the height and nothing else. Raising it changes no G number
+	// on this layout at all — measured, across 75 to 115 m — because the chain
+	// delivers the train to the crest at 4 m/s whatever height the crest is. So
+	// it is free to use purely to close the ride back to station level, which is
+	// what 90.99 does: deepening the drop by 12 m put the ending 6.710 m low.
+	const double LiftClimb = 90.99;
+	const double DropLength = 24.0;
 
 	TArray<FTUTrackSegment> Out;
 
@@ -133,7 +144,7 @@ TArray<FTUTrackSegment> ATUCoasterRide::ReferenceLayout()
 	Out[CrestFirst].Zone = ETUSegmentZone::Lift;
 	Out[CrestFirst].ZoneSpeed = 4.f;
 
-	Straight(12.0);                                    // drop
+	Straight(DropLength);                              // drop
 	EasedPitch(-Drop, 0.012);                             // pull-out
 
 	// Teardrop loop: curvature eases in and out rather than stepping, so the

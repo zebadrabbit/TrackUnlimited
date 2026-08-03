@@ -79,7 +79,28 @@ struct FTrainConfig
     // Dimensionless rolling resistance. Scales with the normal load, so it
     // rises in a valley and through a hard banked turn and falls toward zero at
     // airtime — which is why it reads felt G rather than assuming 1 g.
-    double RollingResistance = 0.006;
+    //
+    // 0.024, and the previous 0.006 was justified against the WRONG MATERIAL.
+    // It was written down as "a plausible steel-on-steel figure", but steel
+    // wheel on steel rail is a railway — coaster running wheels are
+    // POLYURETHANE on steel, typically around 95A, and the hysteresis loss as
+    // that elastomer deforms under load is a real and continuous drain. Published
+    // figures for polyurethane on steel sit around 0.01–0.03; steel-on-steel is
+    // nearer 0.001–0.002, so the old default was not even right for the material
+    // it claimed.
+    //
+    // Measured, not guessed: three NoLimits 2 recordings — two coaster types on
+    // two layouts — fit 0.022 to 0.026. The cleanest is a purpose-built 621 m
+    // flat coast-down launched at exactly 30 km/h, which fits Crr = 0.02602 with
+    // a residual of 0.0005 m/s² against decelerations of 0.1–0.2. That is a 0.3%
+    // fit, and it says the MODEL's shape was right all along; only this constant
+    // was wrong. Reproduced bit-identically across two separate recordings of the
+    // same configuration.
+    //
+    // It also explains something that made no sense before: rolling resistance
+    // outweighing air drag 3:1 even at 100 km/h. Absurd for a steel railway
+    // wheel, exactly right for polyurethane tyres.
+    double RollingResistance = 0.024;
 
     // Lumped aerodynamic drag: 0.5 * rho * Cd * A / mass, so the deceleration
     // is DragK * v^2. Dominates at speed; negligible in a station.
