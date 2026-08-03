@@ -75,9 +75,14 @@ airtime hill, and why over a symmetric one it does not.
 ![The block state machine: CLEAR, OCCUPIED, BUFFER(x), CLEAR](Brand/github/signalling-1280x420.png)
 
 Not "train present / absent". Each block is a state machine that withholds CLEAR for a configurable
-safety overlap after a train has physically left it — the real-railway *overlap* concept. Dispatch
-permissives read forward through the block list, and the interlocks apply identically whether a
-human or the system decides the timing.
+safety overlap after a train has physically left it — the real-railway *overlap* concept. A train
+occupies a *range* of blocks, nose to tail, so it holds two while it straddles a boundary.
+
+That is wired to the ride, not just to a test: the station will not release until the permissive
+grants, and on the reference layout it visibly holds for the five seconds the brake block takes to
+give up its overlap. Manual dispatch is designed but not built — the interlocks are meant to apply
+identically whichever way the timing is decided, which is precisely why manual is not a second code
+path.
 
 → [`Docs/SIGNALLING.md`](Docs/SIGNALLING.md)
 
@@ -117,9 +122,10 @@ actor over the top:
 | Undo / redo | snapshots, with the save format as identity |
 | Train physics | energy-exact motion, zones, a train with length |
 | Ride profile | the whole ride measured at edit time |
-| Block signalling | the state machine and permissive logic, unit-tested |
+| Block signalling | state machine, overlap, permissives — and a running train that trips them |
 | NL2 interop | CSV and live telemetry — validation fixtures, not an authoring path |
-| In-engine slice | builds against UE 5.8, rides, reads out speed and G |
+| Starter layouts | three worked examples of the vocabulary, each measured before shipping |
+| In-engine slice | builds against UE 5.8, rides, reads out speed, G and block state |
 
 → [`Docs/ROADMAP.md`](Docs/ROADMAP.md) for what each phase ships and what is left.
 
