@@ -69,18 +69,24 @@ own `Prototypes/TrackSpline` and `Prototypes/TrainPhysics` headers were compiled
 the result with the slice's own 15 m train. The output lives in the `TU` object inlined into each
 page.
 
-Measured, current as of this pack:
+Measured, regenerated 2026-08-02:
 
 ```
-16 segments · 563.84 m developed · 342.87 m horizontal · crest 43.35 m
-101.0 km/h · vertical G +0.66 to +4.20 · peak lateral 0.36 g · 59.2 s
-loop R9.0 m with 54 m eases · banked turn R32.0 m at 65.92°
+16 segments · 591.72 m developed · 367.21 m horizontal · crest 50.07 m
+105.2 km/h · vertical G +0.66 to +4.20 · peak lateral 0.28 g · 63.4 s
+loop R9.0 m with 54 m eases, apex 27.63 m at +1.13 g
+banked turn R32.0 m at 65.92° · closes to +0.0015 m
 curvature-continuous, verified to 1e-9 across all 15 joints
 ```
 
-**Heads-up:** several repo documents still publish the pre-closure-solver figures
-(543.7 m, 34.9 m lift) and an older set of ride figures. Those are stale — see the note that came
-with this pack. The numbers above are what the current code actually produces.
+`Docs/REFERENCE_LAYOUT.md` is the canonical home for these. If this pack and that page ever
+disagree, that page is right.
+
+**These are not the figures the pack shipped with.** The pack was built against 563.84 m / 43.35 m /
+101.0 km/h, which were correct at the time and were superseded hours later: `RollingResistance` had
+been justified as steel-on-steel, where a coaster runs polyurethane on steel, and correcting
+0.006 → 0.024 forced a re-tune of the reference layout (deeper drop to restore the loop apex, longer
+lift to close back to station level). `src/data.js` has been regenerated against the current code.
 
 ## Regenerating
 
@@ -88,6 +94,38 @@ The pack is built from `src/` by `build.py`, which inlines `src/tokens.css`, `sr
 brand geometry from `src/logo.py` into the templates. If you only want to change a colour, edit
 `src/tokens.css` and rebuild — or edit the `:root` block at the top of any single HTML file, since
 each one carries its own copy.
+
+## TODO for Cowork — two things to repair
+
+**1. `build.py` cannot run: `templates/` is not in the repo.** It reads `templates/{loading,site,social,brand}.html`
+and substitutes `/*__TOKENS__*/`, `/*__DATA__*/` and `/*__LOGO__*/` into them. Only the *built*
+outputs are here, so the pack currently cannot be rebuilt from source at all — which is what blocked
+fixing item 2 by hand. Restore `templates/`, or reconstruct them by replacing each inlined block in
+the built HTML with its marker.
+
+**2. Two PNGs bake superseded figures into the artwork.** Both were pulled from the repo rather than
+committed, because both are captioned as measured output and a wrong "MEASURED, NOT DRAWN" diagram is
+worse than none:
+
+| File | Shows | Should show |
+|---|---|---|
+| `github/layout-1280x560.png` | 563.84 m · 43.35 m · 101.0 km/h · apex 27.90 m | 591.72 m · 50.07 m · 105.2 km/h · apex 27.63 m at +1.13 g |
+| `github/social-preview-1280x640.png` | 563.84 m · 43.35 m · 101.0 km/h | as above |
+
+`src/data.js` is already correct — it was regenerated directly from the prototype headers, so a
+rebuild picks the new figures up with no hand-editing. The elevation *shape* changes slightly too
+(the lift is 15.9 m longer and the drop 12 m deeper), so the traces want re-plotting, not just the
+labels retyping.
+
+Also stale, same cause, lower priority: the built `index.html`, `brand-system.html`,
+`loading-screen.html` and `social-pack.html` each carry their own inlined copy of the old `TU`
+object. A rebuild fixes all four at once.
+
+Once both are done, restore the diagram to the README (`## The reference layout`) and to
+`Docs/REFERENCE_LAYOUT.md`, where a note currently explains its absence.
+
+**Regenerate after any change to `ReferenceLayout()` or to the physics defaults.** This went stale
+within a day the first time. `src/data.js` carries the same warning at the top.
 
 Licence: same as the project (MIT). No manufacturer trademarks, logos or ride designs are used
 anywhere in these assets.
