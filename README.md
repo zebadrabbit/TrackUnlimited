@@ -23,6 +23,8 @@ the ones a rider would actually feel — not a plausible-looking curve.
 
 ## The reference layout
 
+![The reference layout, drawn as a side elevation with dimensions and callouts](Brand/github/layout-1280x560.png)
+
 Sixteen typed segments, authored as numbers, riding inside the engine and reading out on screen: a
 station, an eased lift, a 34° drop, a teardrop loop and a 65.92° banked turn, closing back to
 station level within two millimetres.

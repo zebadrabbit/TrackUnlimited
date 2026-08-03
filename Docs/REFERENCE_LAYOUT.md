@@ -8,11 +8,11 @@ from.
 **This page is the canonical home for its figures.** If another document disagrees with this one,
 this one is right and the other is stale — see [the note at the bottom](#a-note-on-stale-figures).
 
-> The side-elevation diagram that used to sit here (`Brand/github/layout-1280x560.png`) is captioned
-> "MEASURED, NOT DRAWN" and carries the pre-2026-08-02 figures — 563.84 m, 43.35 m crest, 101.0 km/h.
-> Its data source `Brand/src/data.js` has been regenerated against current code, but the PNG cannot
-> be re-rendered from it: `Brand/build.py` needs a `templates/` directory that is not in the repo.
-> Pulled from here and from the README until it can be rebuilt.
+![The reference layout, drawn as a side elevation with dimensions and callouts](../Brand/github/layout-1280x560.png)
+
+That diagram is regenerated from `Brand/src/data.js` — the same figures as the table below, drawn
+rather than retyped. `cd Brand && python3 build.py`, then re-export it from the GitHub group in
+`social-pack.html`.
 
 ## Measured
 
@@ -32,7 +32,8 @@ read off a ride profile run over the built geometry.
 | Vertical G | **+0.66 to +4.20 g** (min at S = 173.8, max at S = 330.8) |
 | Peak lateral G | **0.28 g** at S = 427.7 m |
 | Peak roll rate | 63.7 °/s at S = 415.8 m |
-| Loop | R9.0 m, 54 m eased in and out. Apex 27.63 m at **+1.13 g**, inverted, at S = 357.2 m |
+| Loop | R9.0 m, 54 m eased in and out. Apex **27.90 m** at S = 359.5 m (+1.16 g there) |
+| Loop, minimum felt G | **+1.13 g** at S = 357.2 m — 2.26 m of arc *before* the apex, at 27.62 m |
 | Banked turn | R32.0 m at **65.92°**, clothoid in and out |
 | Ride time | **63.4 s**, dispatch to standstill at S = 560.5 m in the brake run |
 | Heartline | 1.1 m above rail centreline |
@@ -42,6 +43,12 @@ read off a ride profile run over the built geometry.
 Sampled at 0.5 m. The G extremes are the sampled ones — at 1.0 m spacing the maximum reads +4.19
 rather than +4.20, which is the sampling grid landing differently on a sharp peak, not a difference
 in the physics.
+
+The two loop rows are **two different points, not two samples of one**, and finer sampling will not
+make them converge. Felt G bottoms out slightly *before* the top because the train is still slowing
+as it climbs the back of the loop, so the speed that sets the centripetal term is still falling while
+the height is still rising. Quote +1.13 g for ride feel and 27.90 m for height; quoting "apex 27.63 m"
+conflates them, which an earlier version of this page did.
 
 ## Zones
 
@@ -81,8 +88,17 @@ a ride-design call, not a bug fix. See
 
 ## Reproducing these numbers
 
-No Unreal install needed. Build a driver against the prototype headers that rebuilds the same segment
-list, then run the ride profile over it:
+No Unreal install needed, and there is now a committed driver that does exactly this —
+[`Brand/src/gen_data.cpp`](../Brand/src/gen_data.cpp). It mirrors `ReferenceLayout()` segment for
+segment, runs the ride profile, and prints every figure on this page:
+
+```sh
+clang++ -std=c++17 -O2 -I Prototypes/TrackSpline -o gen_data.exe Brand/src/gen_data.cpp
+./gen_data.exe            # writes Brand/src/data.js, which drives the diagram
+```
+
+It lives under `Brand/` because its output is the brand pack's data file, but it is the same
+measurement either way. To write your own instead:
 
 ```cpp
 #include "TrackIO.h"      // Prototypes/TrackSpline

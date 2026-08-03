@@ -9,10 +9,25 @@ import json, os, re, shutil, subprocess, sys
 ROOT = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.join(ROOT, "src")
 TPL = os.path.join(ROOT, "templates")
-DIST = os.path.join(ROOT, "dist")
+# Ship layout: templates/, src/ and the built pages all sit in Brand/, so write
+# next to this file. Dev layout keeps a dist/ — use it when it exists.
+DIST = os.environ.get("TU_DIST") or (
+    os.path.join(ROOT, "dist") if os.path.isdir(os.path.join(ROOT, "dist")) else ROOT)
 
-subprocess.run([sys.executable, os.path.join(SRC, "logo.py")], check=True,
-               stdout=open(os.path.join(SRC, "logo.json"), "w"))
+LOGO_JSON = os.path.join(SRC, "logo.json")
+# logo.py converts the wordmark to outlines and needs fonttools plus the TeX Gyre
+# Heros Cn font files. If either is missing, fall back to the last generated
+# logo.json rather than failing the whole build — the geometry does not change
+# unless the mark itself does.
+try:
+    out = subprocess.run([sys.executable, os.path.join(SRC, "logo.py")],
+                         check=True, capture_output=True, text=True).stdout
+    with open(LOGO_JSON, "w") as f:
+        f.write(out)
+except Exception as e:
+    if not os.path.exists(LOGO_JSON):
+        raise SystemExit("logo.py failed and there is no src/logo.json to fall back on: %s" % e)
+    print("logo.py failed (%s) — reusing the existing src/logo.json" % type(e).__name__)
 
 tokens = open(os.path.join(SRC, "tokens.css")).read()
 data = open(os.path.join(SRC, "data.js")).read()
@@ -38,4 +53,5 @@ for tpl, out in OUT.items():
     s = s.replace("/*__LOGO__*/", "const LOGO = " + logo + ";")
     with open(os.path.join(DIST, out), "w") as f:
         f.write(s)
-    print("wrote dist/%s  (%.1f KB)" % (out, len(s) / 1024))
+    print("wrote %s  (%.1f KB)" % (os.path.relpath(os.path.join(DIST, out), ROOT),
+                                   len(s) / 1024))

@@ -182,7 +182,10 @@ def svg_lockup(size=56.0, fg="#E8F2F8", accent="#7FD8FF", bg=None):
 
 
 if __name__ == "__main__":
-    out = os.path.join(os.path.dirname(__file__), "..", "dist", "brand")
+    # Ship layout puts brand/ next to src/; dev layout keeps a dist/. Match build.py.
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    out = os.path.join(root, "dist", "brand") if os.path.isdir(os.path.join(root, "dist")) \
+        else os.path.join(root, "brand")
     os.makedirs(out, exist_ok=True)
     files = {
         "wordmark.svg": svg_wordmark(64),
