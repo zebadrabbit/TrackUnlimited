@@ -95,7 +95,7 @@ brand geometry from `src/logo.py` into the templates. If you only want to change
 `src/tokens.css` and rebuild — or edit the `:root` block at the top of any single HTML file, since
 each one carries its own copy.
 
-## TODO for Cowork — two things to repair
+## TODO for Cowork
 
 **1. `build.py` cannot run: `templates/` is not in the repo.** It reads `templates/{loading,site,social,brand}.html`
 and substitutes `/*__TOKENS__*/`, `/*__DATA__*/` and `/*__LOGO__*/` into them. Only the *built*
