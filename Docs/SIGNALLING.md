@@ -44,7 +44,7 @@ CLEAR ──train enters──▶ OCCUPIED ──train exits──▶ BUFFER(x) 
 |---|---|
 | `CLEAR` | No train, and no overlap being held. Safe to admit one. |
 | `OCCUPIED` | A train is physically within the block. |
-| `BUFFER(x)` | The train has left, but the block **withholds CLEAR** until a configurable time or distance safety overlap has elapsed. |
+| `BUFFER(x)` | The train has left, but the block **withholds CLEAR** until a configurable safety overlap has elapsed. **Time-based today** — `FBlockConfig::BufferSeconds`. Distance-based overlap is deferred until the signalling layer can read train position. |
 | `CLEAR` | Back to the top. |
 
 The `BUFFER` state is the whole point, and it is named after the real-railway **overlap** concept: the
@@ -57,9 +57,15 @@ and holding it is what makes the timing of a busy dispatch cycle feel like a rea
 A **dispatch permissive** is the logic gate that allows a station or launch to release a train.
 
 It reads *forward* through the block list: a station may dispatch only once the next block reports
-CLEAR — and for high-speed sections, as many blocks ahead as the train's **braking distance**
-requires. A launch that can put a train at 100 km/h into a block it cannot stop short of is not
-permitted to fire, regardless of what the block immediately ahead says.
+CLEAR — and for high-speed sections, further ahead than that. The rule being expressed is the
+**braking-distance** one: a launch that can put a train at 100 km/h into a block it cannot stop short
+of should not be permitted to fire, regardless of what the block immediately ahead says.
+
+What the prototype implements is the *count*. `CanDispatch(FromBlock, Lookahead)` requires the next
+`Lookahead` blocks to report CLEAR, and `Lookahead > 1` is how a braking-distance requirement is
+expressed today. **Deriving that number from an actual braking distance is not implemented** — it
+needs train speed and position, which `FBlockController` deliberately cannot see, and it belongs to
+wiring signalling to the ride in Phase 3.
 
 This is the piece that turns a set of state machines into a safety system, and it is why the logic
 lives in C++ rather than Blueprint.
@@ -72,6 +78,12 @@ own block, and a train cannot clear itself.
 
 That is correct for a circuit and **wrong for a shuttle or a transfer spur**, which will need an
 explicit topology when they exist. This is a known limitation, recorded rather than papered over.
+
+Two more, for the same reason. The controller takes **enter/exit events keyed by block index** and
+holds no train identity, so it can say a block is occupied but not by which train — fine for
+interlocking, not enough to drive a panel that labels trains. And the **block count is fixed at
+construction** from the config vector, so re-blocking a layout means building a new controller rather
+than mutating one.
 
 ## Automatic and manual dispatch
 
