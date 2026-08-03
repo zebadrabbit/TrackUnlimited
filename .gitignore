@@ -61,3 +61,17 @@ Prototypes/**/telemetry*.csv
 # self-authored test track if one is ever actually needed as a fixture.
 Prototypes/NL2Csv/Tracks/
 NL2/
+
+# Brand pack. The source machinery — templates, build scripts, SVG marks, the
+# built HTML pages and the 4K loading-screen exports — is kept locally but is
+# not part of the codebase. The five figures the README and Docs/ actually embed
+# ARE tracked, because a public README with four broken images is worse than no
+# brand pack at all.
+#
+# The measurement driver that used to live at Brand/src/gen_data.cpp was NOT
+# branding and did not go with it: it is Prototypes/TrackSpline/reference_figures.cpp,
+# and it is what makes REFERENCE_LAYOUT.md's canonical numbers reproducible.
+Brand/*
+!Brand/github/
+Brand/github/*
+!Brand/github/*.png

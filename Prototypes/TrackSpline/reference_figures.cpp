@@ -1,24 +1,19 @@
-// Generates src/data.js from the project's own geometry.
-//
-// data.js drives every figure and every drawn line in the brand pack, and the
-// layout diagram is captioned "MEASURED, NOT DRAWN". This is the thing that
-// makes that caption true — and repeatable, which matters more. The figures went
-// stale within a day the first time, when RollingResistance was corrected from a
-// steel-on-steel value to the 0.024 a polyurethane-on-steel coaster runs and the
-// reference layout was re-tuned around it.
+// Measures the reference layout and prints the figures Docs/REFERENCE_LAYOUT.md
+// publishes, so the canonical numbers are reproducible by anyone with the repo
+// and a compiler rather than taken on trust.
 //
 // Build & run from the repo root:
-//   clang++ -std=c++17 -O2 -I Prototypes/TrackSpline -o gen_data.exe Brand/src/gen_data.cpp
-//   ./gen_data.exe > Brand/src/data.js
-//   cd Brand && python3 build.py
+//   clang++ -std=c++17 -O2 -I Prototypes/TrackSpline -o reference_figures.exe Prototypes/TrackSpline/reference_figures.cpp
+//   ./reference_figures.exe
 //
-// Then re-export github/*.png from social-pack.html — the PNGs are the one part
-// of the chain this cannot do.
+// Pass --data-js to emit the brand pack's src/data.js instead. That pack is no
+// longer part of the codebase (see .gitignore), but this driver was never
+// branding: it is the measurement, and it stayed.
 //
 // It mirrors ATUCoasterRide::ReferenceLayout() rather than including it, because
 // that lives in a UE translation unit. The two must be changed together; the
-// segment list below is deliberately in the same order and the same numbers so a
-// diff between them is readable.
+// segment list below is deliberately in the same order with the same numbers so
+// a diff between them is readable.
 
 #include "TrackSpline.h"
 #include "../../Prototypes/TrainPhysics/TrainPhysics.h"
@@ -26,6 +21,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <string>
 #include <vector>
 
 namespace
@@ -62,8 +58,18 @@ void Row(const char* Name, const std::vector<double>& V, int Dp)
 
 } // namespace
 
-int main()
+int main(int argc, char** argv)
 {
+    // Default: print the figures Docs/REFERENCE_LAYOUT.md publishes.
+    // --data-js: emit the brand pack's src/data.js instead. The pack is no longer
+    // part of the codebase, but whoever keeps a copy still needs a way to
+    // regenerate its numbers rather than hand-editing them.
+    bool bDataJs = false;
+    for (int i = 1; i < argc; ++i)
+    {
+        if (std::string(argv[i]) == "--data-js") { bDataJs = true; }
+    }
+
     const double Lift = Deg(25.0), Drop = Deg(-34.0);
     const double LoopRadius = 9.0, LoopEase = 54.0, TurnRadius = 32.0;
     const double Bank = std::atan((26.5 * 26.5) / (GravityMs2 * TurnRadius));
@@ -191,18 +197,61 @@ int main()
         if (T2.GetSpeed() <= 0.0 && n > 5000) { break; }
     }
 
+    // Default output is the table Docs/REFERENCE_LAYOUT.md publishes, so the
+    // canonical figures are reproducible by anyone with the repo and a compiler.
+    if (!bDataJs)
+    {
+        std::printf("Reference layout, measured from ReferenceLayout() in "
+                    "Source/TrackUnlimited/TUCoasterRide.cpp\n\n");
+        std::printf("  Segments              %zu\n", T.NumSegments());
+        std::printf("  Developed length      %.2f m\n", Total);
+        std::printf("  Horizontal extent     %.2f m\n", std::max(MaxX - MinX, MaxY - MinY));
+        std::printf("  Lift crest            %.2f m at S = %.1f m\n", CrestZ, CrestS);
+        std::printf("  Lowest point          %.2f m\n", P.LowestHeight);
+        std::printf("  Closure               %+.4f m relative to the station\n",
+                    T.EvaluateAt(Total).Position.Z);
+        std::printf("  Curvature continuity  %s to 1e-9 across %zu joints\n",
+                    T.IsCurvatureContinuous(1e-9) ? "verified" : "FAILED",
+                    T.NumSegments() - 1);
+        std::printf("  Top speed             %.1f km/h (%.2f m/s) at S = %.1f m\n",
+                    P.TopSpeed * 3.6, P.TopSpeed, P.TopSpeedS);
+        std::printf("  Vertical G            %+.2f (S = %.1f) .. %+.2f (S = %.1f)\n",
+                    P.MinVerticalG, P.MinVerticalGS, P.MaxVerticalG, P.MaxVerticalGS);
+        std::printf("  Peak lateral G        %.2f at S = %.1f m\n",
+                    P.MaxAbsLateralG, P.MaxAbsLateralGS);
+        std::printf("  Peak roll rate        %.1f deg/s at S = %.1f m\n",
+                    P.MaxAbsRollRate, P.MaxAbsRollRateS);
+        std::printf("  Loop                  R%.1f m, %.0f m eased. Apex %.2f m at S = %.1f m "
+                    "(%+.2f g there)\n", LoopRadius, LoopEase, ApexZ, ApexS, ApexG);
+        std::printf("  Loop, minimum felt G  %+.2f g at S = %.1f m — %.2f m of arc BEFORE the "
+                    "apex, at %.2f m\n", MinG, MinGS, ApexS - MinGS, MinGZ);
+        std::printf("  Banked turn           R%.1f m at %.2f deg\n",
+                    TurnRadius, Bank * 180.0 / Pi);
+        std::printf("  Ride time             %.1f s, dispatch to standstill at S = %.1f m\n",
+                    P.Duration, P.StalledAtS);
+        std::printf("  Heartline             %.1f m above rail centreline\n", 1.1);
+        std::printf("  Train                 %.0f m long, %d sample points\n",
+                    C.TrainLength, Train.NumSamplePoints());
+        std::printf("\nSampled at 0.5 m. The two loop rows are two DIFFERENT POINTS, not two "
+                    "samples of\none: felt G bottoms out before the top because the train is "
+                    "still slowing as it\nclimbs the back of the loop. Finer sampling will not "
+                    "make them converge.\n");
+        return 0;
+    }
+
     std::printf(
 "// TrackUnlimited - reference layout, measured.\n"
 "//\n"
 "// NOT hand-drawn, and NOT hand-edited: this file is the output of\n"
-"// src/gen_data.cpp, which compiles Prototypes/TrackSpline + Prototypes/TrainPhysics\n"
+"// Prototypes/TrackSpline/reference_figures.cpp --data-js, which compiles\n"
+"// Prototypes/TrackSpline + Prototypes/TrainPhysics\n"
 "// against the ReferenceLayout() segment list in Source/TrackUnlimited/TUCoasterRide.cpp\n"
 "// and runs RunRideProfile(). Every coordinate below is the project's own geometry.\n"
 "//\n"
 "// Regenerate after ANY change to ReferenceLayout() or to the physics defaults - these\n"
 "// figures went stale once already when RollingResistance was corrected to 0.024, and a\n"
 "// diagram captioned \"MEASURED, NOT DRAWN\" is worse than no diagram when it is wrong.\n"
-"// See the build line at the top of gen_data.cpp.\n"
+"// See the build line at the top of reference_figures.cpp.\n"
 "//\n"
 "// S  = arc length along the heartline, m\n"
 "// X  = horizontal station, m (side-elevation abscissa)\n"

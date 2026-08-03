@@ -10,9 +10,10 @@ this one is right and the other is stale — see [the note at the bottom](#a-not
 
 ![The reference layout, drawn as a side elevation with dimensions and callouts](../Brand/github/layout-1280x560.png)
 
-That diagram is regenerated from `Brand/src/data.js` — the same figures as the table below, drawn
-rather than retyped. `cd Brand && python3 build.py`, then re-export it from the GitHub group in
-`social-pack.html`.
+The diagram is drawn from the same measurement as the table below, not retyped from it. The brand
+pack that renders it is no longer part of the codebase — only the finished figures are tracked, under
+`Brand/github/` — but the measurement is: see
+[Reproducing these numbers](#reproducing-these-numbers).
 
 ## Measured
 
@@ -88,17 +89,22 @@ a ride-design call, not a bug fix. See
 
 ## Reproducing these numbers
 
-No Unreal install needed, and there is now a committed driver that does exactly this —
-[`Brand/src/gen_data.cpp`](../Brand/src/gen_data.cpp). It mirrors `ReferenceLayout()` segment for
-segment, runs the ride profile, and prints every figure on this page:
+No Unreal install needed. There is a committed driver that does exactly this —
+[`Prototypes/TrackSpline/reference_figures.cpp`](../Prototypes/TrackSpline/reference_figures.cpp).
+It mirrors `ReferenceLayout()` segment for segment, runs the ride profile, and prints every figure on
+this page:
 
 ```sh
-clang++ -std=c++17 -O2 -I Prototypes/TrackSpline -o gen_data.exe Brand/src/gen_data.cpp
-./gen_data.exe            # writes Brand/src/data.js, which drives the diagram
+clang++ -std=c++17 -O2 -I Prototypes/TrackSpline \
+    -o reference_figures.exe Prototypes/TrackSpline/reference_figures.cpp
+./reference_figures.exe
 ```
 
-It lives under `Brand/` because its output is the brand pack's data file, but it is the same
-measurement either way. To write your own instead:
+That is what makes this page checkable rather than trusted, and it is why the driver stayed when the
+brand pack left: it was never branding, it is the measurement. (`--data-js` still emits the pack's
+data file, for anyone keeping a local copy of it.)
+
+To write your own instead:
 
 ```cpp
 #include "TrackIO.h"      // Prototypes/TrackSpline
