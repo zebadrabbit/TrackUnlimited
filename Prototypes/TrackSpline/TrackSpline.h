@@ -167,7 +167,17 @@ inline void CurvatureAt(const FTrackSegment& Seg, double U, double& OutYaw, doub
 //
 // Sets B's START only. What B's END should be is the author's intent and not
 // something to guess: equal to the start for constant magnitude, or zero to ramp
-// out. See the side-stepping loop in TUCoasterRide.cpp for both in one run.
+// out. Both in one run: the side-stepping loop in test_trackspline.cpp.
+//
+// NOTHING IN THE BUILD PATH CALLS THIS. It is reachable from prototype C++ only —
+// BuildSegment maps one authored row to one segment with no neighbour awareness,
+// so a chained value can only reach a document by being typed into a Raw segment,
+// which stores a DERIVED number and goes stale the moment the neighbour is
+// edited. Measured: chain a helix exit by hand, then change the helix radius
+// 20 m -> 22 m, and the joint reopens to 4.523e-03 1/m with the file still
+// claiming to be valid. Wiring this into the build path is a real change with a
+// save-format question attached, not a tidy-up — see Docs/PHASE0_FINDINGS.md,
+// "The helix composes, but only from C++".
 inline void ChainCurvature(const FTrackSegment& A, FTrackSegment& B)
 {
     CurvatureAt(A, A.Length, B.YawCurvatureStart, B.PitchCurvatureStart);

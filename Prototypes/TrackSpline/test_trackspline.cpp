@@ -1713,6 +1713,60 @@ static void TestHelixExitIsNotContinuousWithAPlainArc()
                 H.Torsion * H.Length);
 }
 
+static void TestTheTwoBuildPathsCannotDiverge()
+{
+    // BuildTrack and BuildSegments are SEPARATE loops (TrackIO.h) that happen to
+    // agree because both just map BuildSegment over the rows. Nothing enforced
+    // that, and the actor uses BOTH, six lines apart: TUCoasterRide.cpp validates
+    // BuildSegments(Doc) and then RIDES ::BuildTrack(Doc).
+    //
+    // So the day anything neighbour-aware enters one of them — chaining a helix
+    // exit is the live candidate — and not the other, the validator reports a
+    // clean track and the train rides a stepped one. That is the exact inversion
+    // of "report, never repair", and it would be invisible: every existing suite
+    // passes either way, because nothing compared the two paths until this.
+    FTrackDocument Doc;
+    Doc.HeartlineHeight = 1.1;
+
+    auto Add = [&Doc](FAuthoredSegment A) { Doc.Segments.push_back(A); };
+    { FAuthoredSegment A; A.Kind = ESegmentKind::Straight; A.Length = 20.0; Add(A); }
+    { FAuthoredSegment A; A.Kind = ESegmentKind::Clothoid; A.Length = 26.0;
+      A.CurvatureStart = 0.0; A.CurvatureEnd = 1.0 / 32.0; A.RollEndDegrees = 40.0; Add(A); }
+    { FAuthoredSegment A; A.Kind = ESegmentKind::Arc; A.Length = 55.0; A.Radius = 32.0;
+      A.RollStartDegrees = A.RollEndDegrees = 40.0; Add(A); }
+    { FAuthoredSegment A; A.Kind = ESegmentKind::Helix; A.Radius = 20.0;
+      A.ClimbAngleDegrees = -11.0; A.Turns = 2.0; Add(A); }
+    { FAuthoredSegment A; A.Kind = ESegmentKind::Raw; A.Length = 30.0;
+      A.RawSegment.Length = 30.0; A.RawSegment.PitchCurvatureEnd = 0.01; Add(A); }
+
+    const FTrack ViaBuildTrack = BuildTrack(Doc);
+    const std::vector<FTrackSegment> ViaBuildSegments = BuildSegments(Doc);
+
+    assert(ViaBuildTrack.NumSegments() == ViaBuildSegments.size());
+
+    FTrack Rebuilt(Doc.HeartlineHeight);
+    for (const FTrackSegment& S : ViaBuildSegments)
+    {
+        Rebuilt.AddSegment(S);
+    }
+
+    // Same length, same continuity verdict, same endpoint. Exactly, not nearly:
+    // both paths run the identical BuildSegment on the identical rows, so any
+    // difference at all is a divergence and not a tolerance question.
+    assert(Rebuilt.NumSegments() == ViaBuildTrack.NumSegments());
+    assert(Rebuilt.TotalLength() == ViaBuildTrack.TotalLength());
+    assert(Rebuilt.IsCurvatureContinuous(1e-9) == ViaBuildTrack.IsCurvatureContinuous(1e-9));
+
+    const FTrackFrame A = ViaBuildTrack.EvaluateAt(ViaBuildTrack.TotalLength());
+    const FTrackFrame B = Rebuilt.EvaluateAt(Rebuilt.TotalLength());
+    assert(A.Position.X == B.Position.X);
+    assert(A.Position.Y == B.Position.Y);
+    assert(A.Position.Z == B.Position.Z);
+
+    std::printf("  both build paths agree over %zu segments, %.3f m, endpoint identical\n",
+                ViaBuildTrack.NumSegments(), ViaBuildTrack.TotalLength());
+}
+
 // ------------------------------------------------------------ cross-section
 
 static void TestCrossSectionRidesTheFrame()
@@ -1805,6 +1859,7 @@ int main()
     TestHelixIsActuallyAHelix();
     TestHelixHandednessAndDegenerateCases();
     TestHelixExitIsNotContinuousWithAPlainArc();
+    TestTheTwoBuildPathsCannotDiverge();
     TestCrossSectionRidesTheFrame();
     TestCrossSectionSidednessAndWidth();
     TestStraightIsStraight();
