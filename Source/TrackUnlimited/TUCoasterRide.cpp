@@ -40,9 +40,178 @@ ATUCoasterRide::ATUCoasterRide()
 	Camera->SetupAttachment(Root);
 
 	// Seeded so a freshly placed actor has a ride in it. Everything about that
-	// ride is now data in the Details panel rather than code, which is the whole
-	// point — bResetToReferenceLayout puts it back if an edit goes wrong.
-	Segments = ReferenceLayout();
+	// ride is data in the Details panel rather than code, which is the whole
+	// point — Preset + bLoadPreset puts a known-good one back if an edit goes
+	// wrong, or swaps in a different worked example to take apart.
+	Segments = PresetLayout(Preset);
+}
+
+TArray<FTUTrackSegment> ATUCoasterRide::PresetLayout(ETUPresetLayout Which)
+{
+	switch (Which)
+	{
+	case ETUPresetLayout::FlatRig:    return FlatRigLayout();
+	case ETUPresetLayout::OutAndBack: return OutAndBackLayout();
+	default:                          return ReferenceLayout();
+	}
+}
+
+// Shared shapes for the layouts below. ReferenceLayout keeps its own copies
+// deliberately: it is the fixture every published figure is measured from, and
+// re-pointing it at new helpers would mean re-verifying all of them to save a
+// dozen lines.
+namespace
+{
+
+FTUTrackSegment& AddStraight(TArray<FTUTrackSegment>& Out, double Length,
+	ETUSegmentZone Zone = ETUSegmentZone::None, float ZoneSpeed = 0.f)
+{
+	FTUTrackSegment S;
+	S.Kind = ETUSegmentKind::Straight;
+	S.Length = static_cast<float>(Length);
+	S.Zone = Zone;
+	S.ZoneSpeed = ZoneSpeed;
+	return Out[Out.Add(S)];
+}
+
+// A vertical curve with no curvature step at either end: pitch curvature ramps
+// 0 -> peak -> 0, so both joints stay continuous. Two Raw segments, because the
+// authored vocabulary is still yaw-only and no Make* helper builds pitch.
+void AddEasedPitch(TArray<FTUTrackSegment>& Out, double PitchDelta, double PeakCurvature,
+	ETUSegmentZone Zone = ETUSegmentZone::None, float ZoneSpeed = 0.f)
+{
+	const double K = PitchDelta >= 0.0 ? PeakCurvature : -PeakCurvature;
+	const double L = FMath::Abs(PitchDelta) / PeakCurvature;
+
+	FTUTrackSegment In;
+	In.Kind = ETUSegmentKind::Raw;
+	In.Length = static_cast<float>(L);
+	In.PitchCurvatureEnd = static_cast<float>(K);
+	In.Zone = Zone;
+	In.ZoneSpeed = ZoneSpeed;
+	Out.Add(In);
+
+	FTUTrackSegment Tail;
+	Tail.Kind = ETUSegmentKind::Raw;
+	Tail.Length = static_cast<float>(L);
+	Tail.PitchCurvatureStart = static_cast<float>(K);
+	Tail.Zone = Zone;
+	Tail.ZoneSpeed = ZoneSpeed;
+	Out.Add(Tail);
+}
+
+// Clothoid in, constant-radius hold, clothoid out, with roll ramping across the
+// clothoids so neither curvature nor roll steps at a joint.
+//
+// Roll RATE still steps, and measurably: roll varies LINEARLY across a segment,
+// so its rate is constant within one and changes abruptly at the ends. Every
+// banked turn in this vocabulary has that, the reference layout included — the
+// validator reports four such steps on it. Removing them needs roll rate itself
+// to ease, which the authored vocabulary cannot currently say.
+void AddBankedTurn(TArray<FTUTrackSegment>& Out, double Radius, double ArcLength,
+	double EaseLength, double BankDegrees)
+{
+	FTUTrackSegment In;
+	In.Kind = ETUSegmentKind::Clothoid;
+	In.Length = static_cast<float>(EaseLength);
+	In.CurvatureStart = 0.f;
+	In.CurvatureEnd = static_cast<float>(1.0 / Radius);
+	In.RollEndDegrees = static_cast<float>(BankDegrees);
+	Out.Add(In);
+
+	FTUTrackSegment Hold;
+	Hold.Kind = ETUSegmentKind::Arc;
+	Hold.Length = static_cast<float>(ArcLength);
+	Hold.Radius = static_cast<float>(Radius);
+	Hold.RollStartDegrees = Hold.RollEndDegrees = static_cast<float>(BankDegrees);
+	Out.Add(Hold);
+
+	FTUTrackSegment OutEase;
+	OutEase.Kind = ETUSegmentKind::Clothoid;
+	OutEase.Length = static_cast<float>(EaseLength);
+	OutEase.CurvatureStart = static_cast<float>(1.0 / Radius);
+	OutEase.CurvatureEnd = 0.f;
+	OutEase.RollStartDegrees = static_cast<float>(BankDegrees);
+	Out.Add(OutEase);
+}
+
+// The bank that cancels lateral G at a given speed on a given radius.
+double BankDegreesFor(double SpeedMs, double Radius)
+{
+	return FMath::RadiansToDegrees(
+		FMath::Atan((SpeedMs * SpeedMs) / (GravityMs2 * Radius)));
+}
+
+} // namespace
+
+TArray<FTUTrackSegment> ATUCoasterRide::FlatRigLayout()
+{
+	// Three straights. Dead level, so gravity contributes nothing and what the
+	// train does is purely launch, rolling resistance and drag — which is exactly
+	// why this shape was the rig the RollingResistance correction was measured
+	// on against NoLimits 2.
+	//
+	// Measured: 160 m, ends at station height, C2, 30.0 km/h, a flat +1.00 g
+	// throughout, no validation issues at all.
+	TArray<FTUTrackSegment> Out;
+	AddStraight(Out, 20.0, ETUSegmentZone::Launch, 8.333f);  // 30 km/h
+	AddStraight(Out, 90.0);
+	AddStraight(Out, 50.0, ETUSegmentZone::Brake, 0.f);
+	return Out;
+}
+
+TArray<FTUTrackSegment> ATUCoasterRide::OutAndBackLayout()
+{
+	// Measured: 20 segments, 631.4 m, ends within a millimetre of station height,
+	// C2 to 1e-9, 96.9 km/h, vertical -0.10..+2.04 g, lateral 0.34, closest
+	// self-approach 7.77 m. Gentler than the reference layout and it does not
+	// pass through itself, which the reference does at 0.19 m.
+	const double Up = Deg(25.0);
+	const double Drop = Deg(-32.0);
+
+	// Solved, not eyeballed: this is the drop that brings the ride back to
+	// station height at the end. 18 m left it 4.64 m in the air.
+	const double DropLength = 26.758;
+
+	TArray<FTUTrackSegment> Out;
+	AddStraight(Out, 20.0, ETUSegmentZone::Lift, 4.f);         // station
+	AddEasedPitch(Out, Up, 0.03, ETUSegmentZone::Lift, 4.f);   // into the climb
+	AddStraight(Out, 62.0, ETUSegmentZone::Lift, 4.f);         // lift climb
+
+	// Only the FIRST of the crest pair is powered, for the reason spelled out in
+	// ReferenceLayout: the chain must run over the top and let go just past it.
+	const int32 CrestFirst = Out.Num();
+	AddEasedPitch(Out, Drop - Up, 0.05);
+	Out[CrestFirst].Zone = ETUSegmentZone::Lift;
+	Out[CrestFirst].ZoneSpeed = 4.f;
+
+	AddStraight(Out, DropLength);
+	AddEasedPitch(Out, -Drop, 0.015);                          // pull-out to level
+
+	// The airtime hill: a lazy 14 degree rise into a sharp 30 degree fall, which
+	// puts the whole ride's minimum vertical G here at -0.10 g.
+	//
+	// MEASURED, because the obvious claim about it turned out to be false: the
+	// front car sees -0.14 g and the back -0.12, so on THIS hill the front gets
+	// marginally the better airtime, not the back. Asymmetry alone does not buy
+	// the back-row effect — PHASE0_FINDINGS records a crest where it is worth
+	// 0.73 g, so the shape matters and this one is not that shape. Left as it is
+	// because the ride is good; treat tuning it into a back-row hill as an open
+	// exercise rather than a fix.
+	//
+	// The largest front-to-back spread on this layout is 0.55 g and it is in the
+	// banked turn, not here — the cars are on different curvature there, which is
+	// a different mechanism entirely.
+	AddEasedPitch(Out, Deg(14.0), 0.006);
+	AddEasedPitch(Out, Deg(-30.0), 0.030);
+	AddEasedPitch(Out, Deg(16.0), 0.015);                      // back to level
+
+	// 180 degree turnaround, banked for the speed it is actually taken at.
+	AddBankedTurn(Out, 26.0, Pi * 26.0, 22.0, BankDegreesFor(20.0, 26.0));
+
+	AddStraight(Out, 40.0);
+	AddStraight(Out, 60.0, ETUSegmentZone::Brake, 0.f);        // brake run
+	return Out;
 }
 
 TArray<FTUTrackSegment> ATUCoasterRide::ReferenceLayout()
@@ -457,10 +626,10 @@ void ATUCoasterRide::PostEditChangeProperty(FPropertyChangedEvent& Event)
 	// Before Super, deliberately: Super reruns the construction script, and
 	// OnConstruction is what rebuilds and redraws. Resetting afterwards would
 	// leave the preview showing the layout that was just replaced.
-	if (bResetToReferenceLayout)
+	if (bLoadPreset)
 	{
-		bResetToReferenceLayout = false;
-		Segments = ReferenceLayout();
+		bLoadPreset = false;
+		Segments = PresetLayout(Preset);
 	}
 
 	// Rebuild and redraw happen in OnConstruction, so a typed number gets an

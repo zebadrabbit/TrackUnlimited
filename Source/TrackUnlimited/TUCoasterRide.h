@@ -54,12 +54,25 @@ public:
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Track")
 	TArray<FTUTrackSegment> Segments;
 
-	/** Rebuild the reference layout, discarding edits. */
+	/** Which starter layout the tick-box below loads. */
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Track")
-	bool bResetToReferenceLayout = false;
+	ETUPresetLayout Preset = ETUPresetLayout::Reference;
+
+	/** Load the preset above, DISCARDING every edit in the segment list. */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Track")
+	bool bLoadPreset = false;
+
+	/** The starter layouts, as authored segment lists. */
+	static TArray<FTUTrackSegment> PresetLayout(ETUPresetLayout Which);
 
 	/** The reference ride: station, eased 25 degree lift, drop, teardrop loop, banked turn, brakes. */
 	static TArray<FTUTrackSegment> ReferenceLayout();
+
+	/** Launch, coast, brake. Three straights — the smallest complete ride there is. */
+	static TArray<FTUTrackSegment> FlatRigLayout();
+
+	/** Lift, drop, asymmetric airtime hill, banked turnaround, brakes. No inversion. */
+	static TArray<FTUTrackSegment> OutAndBackLayout();
 
 	/** Where to watch from. */
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Camera")

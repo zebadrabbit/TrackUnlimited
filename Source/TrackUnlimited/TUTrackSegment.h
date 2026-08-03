@@ -60,6 +60,28 @@ enum class ETUSegmentZone : uint8
 	Brake UMETA(DisplayName = "Brake run"),
 };
 
+// Starter layouts. Each one is a worked example of the authored vocabulary
+// rather than decoration, and each is checked before shipping for the things
+// that make a preset worth having: it closes back to station height, it is C2,
+// it does not pass through itself, and the train actually gets round.
+UENUM(BlueprintType)
+enum class ETUPresetLayout : uint8
+{
+	// Launch, coast, brake. Three straights and nothing else — the smallest
+	// complete ride, and the rig the rolling-resistance calibration was measured
+	// on. Start here to see what a segment list even is.
+	FlatRig UMETA(DisplayName = "Flat rig (launch, coast, brake)"),
+
+	// Lift, drop, an airtime hill, a banked turnaround, brakes. No inversion, and
+	// unlike the reference layout it does not pass through itself — closest
+	// approach 7.77 m against the reference's 0.19. Gentler and friendlier.
+	OutAndBack UMETA(DisplayName = "Out and back (airtime, no inversion)"),
+
+	// The full thing: eased lift, 34 degree drop, teardrop loop, banked turn.
+	// Every figure quoted in Docs/REFERENCE_LAYOUT.md comes from this.
+	Reference UMETA(DisplayName = "Reference layout (loop + banked turn)"),
+};
+
 UENUM(BlueprintType)
 enum class ETUCameraMode : uint8
 {
