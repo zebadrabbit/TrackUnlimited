@@ -25,17 +25,12 @@ the ones a rider would actually feel — not a plausible-looking curve.
 
 ![The reference layout, drawn as a side elevation with dimensions and callouts](Brand/github/layout-1280x560.png)
 
-Sixteen typed segments, authored as numbers, riding inside the engine and reading out on screen: a
-station, an eased lift, a 34° drop, a teardrop loop and a 65.92° banked turn, closing back to
-station level within two millimetres.
+This drawing is not an illustration. It is produced by compiling the project's own prototype headers
+against the layout in [`Source/TrackUnlimited/TUCoasterRide.cpp`](Source/TrackUnlimited/TUCoasterRide.cpp)
+and running the ride profile over the result. Sixteen typed segments, authored as numbers, riding
+inside the engine and reading out on screen.
 
-Nothing about it is estimated. Every figure comes from a ride profile run over the built geometry,
-by compiling the project's own prototype headers against the layout in
-[`Source/TrackUnlimited/TUCoasterRide.cpp`](Source/TrackUnlimited/TUCoasterRide.cpp) — which is also
-why they are quoted in exactly one place rather than repeated here.
-
-**The measured figures — speed, all three G axes, closure, continuity, and how to reproduce them:**
-[`Docs/REFERENCE_LAYOUT.md`](Docs/REFERENCE_LAYOUT.md).
+Full figures and how to reproduce them: [`Docs/REFERENCE_LAYOUT.md`](Docs/REFERENCE_LAYOUT.md).
 
 ---
 
