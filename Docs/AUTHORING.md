@@ -85,6 +85,37 @@ what its roll number *means*, and that trade is worse than one extra dropdown. W
 per sample against the walked frame rather than baked in when typed, so editing an upstream hill
 cannot silently unbank a turn downstream.
 
+### Roll rate always steps at a joint, and that is a representation gap
+
+**Roll varies linearly across a segment.** Its *rate* is therefore constant within a segment and
+changes abruptly at every joint. Curvature has a start and an end and can be ramped; roll rate has
+neither, so nothing in the authored vocabulary can ease it.
+
+Every banked turn built the normal way — clothoid in, arc, clothoid out — has this. **The reference
+layout has four such steps**, and the validator reports all four. They are not a defect in any
+particular layout; they are what this representation does. It is worth stating plainly because the
+first reaction to seeing four roll-rate warnings on a new layout is to assume the layout is wrong.
+
+It *can* be mitigated by subdividing the roll ramp, at a cost in segment count. Measured on an R26
+turn banked 57.5° with a 22 m easement, at 20 m/s, distributing roll across the easement as a
+smoothstep rather than a straight line:
+
+| Easement split into | Segments | Worst roll-rate step |
+|---|---|---|
+| 1 (or 2) | 5 | 52.3 °/s |
+| 4 | 11 | 39.2 °/s |
+| 8 | 19 | 29.4 °/s |
+| 16 | 35 | 17.1 °/s — below the validator's threshold |
+
+Two pieces is identical to one because a smoothstep sampled at 0, ½, 1 *is* linear; the mitigation
+only starts working at four. The error falls roughly as 1/N, which is what approximating a smooth
+curve with a piecewise-constant one does.
+
+Nobody should author that by hand. The real fix is roll with its own easing — a roll *rate* at each
+end, the same way curvature already has one — and until that exists the honest position is that a
+banked turn snaps into and out of its bank by tens of degrees per second, and that no G trace will
+ever show it because felt G has no roll-rate term.
+
 ## The heartline
 
 Banking and ride-camera calculations are computed around the **heartline** — an offset reference line
