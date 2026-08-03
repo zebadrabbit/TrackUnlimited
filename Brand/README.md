@@ -15,14 +15,21 @@ no build step needed to *use* one, no webfonts, no network requests. Open any `.
 | `github/*.png` | The five images the repo README and `Docs/` use, pre-rendered. |
 | `export/*.png` | The loading screen at 3840×2160, ready for UMG. |
 | `templates/`, `src/`, `build.py` | The sources. `python3 build.py` regenerates all four pages. |
+| `src/gen_data.cpp` | Measures the reference layout and writes `src/data.js`. Every figure starts here. |
+| `render_github_pngs.py` | Re-renders `github/*.png` from `social-pack.html` headlessly. |
 
 ## Rebuilding
 
 ```sh
 clang++ -std=c++17 -O2 -I Prototypes/TrackSpline -o gen_data.exe Brand/src/gen_data.cpp
 ./gen_data.exe > Brand/src/data.js     # measure the layout
-cd Brand && python3 build.py           # templates/ + src/ -> the four built pages
+cd Brand
+python3 build.py                       # templates/ + src/ -> the four built pages
+python3 render_github_pngs.py          # the four pages -> github/*.png
 ```
+
+That is the whole chain, and every step of it is in the repo: the geometry measures itself, the pages
+inline the measurement, and the figures are screenshots of the pages. Nothing in `github/` is drawn.
 
 **`src/data.js` is generated, not hand-edited** — `src/gen_data.cpp` compiles the project's own
 prototype headers against `ReferenceLayout()` and prints it. Editing `data.js` by hand works until
@@ -35,15 +42,22 @@ in two places at once. Change `gen_data.cpp`.
 TeX Gyre Heros Cn so the mark carries no font dependency; if that font is not installed, the built
 pages keep whatever outlines `src/logo.json` already holds.
 
-To re-render `github/*.png` after a data change: open `social-pack.html`, scroll to the GitHub group,
-and use each card's **PNG @1×** button. For `export/*.png`, see [below](#exporting-the-loading-screen).
+To re-render `github/*.png` after a data change:
 
-> **One re-render outstanding, on one image.** `github/layout-1280x560.png` still labels its loop
-> callout `27.63 m` — the height where felt G bottoms out, not the loop's apex of `27.90 m`, which are
-> two different points on the track rather than two samples of one. `data.js` and all four built pages
-> are corrected, and every other figure on that PNG is current; it just needs the **PNG @1×** button
-> pressed once. The other four `github/*.png` are unaffected — `social-preview` carries no apex
-> callout, and the hero, authoring and signalling figures carry no measured figures at all.
+```sh
+python3 render_github_pngs.py            # all five, headless Edge or Chrome
+python3 render_github_pngs.py gh-layout-1280x560   # one, if you know what you are doing
+```
+
+It appends a small script to a throwaway copy of `social-pack.html` that discards everything except
+one card's SVG, then screenshots the viewport at that card's exact size, and fails loudly if the
+result comes out the wrong size. Pressing each card's **PNG @1×** button by hand still works and
+produces the same thing.
+
+> **Render the whole set, not one card.** Glyph rasterisation differs slightly between browser engines
+> and between machines' font sets, so a single re-rendered card will not quite match its siblings —
+> same typeface and same metrics, marginally different stroke weight. All five currently come from one
+> run of the script above. For `export/*.png`, see [below](#exporting-the-loading-screen).
 
 If you only want to change a colour, edit `src/tokens.css` and rebuild — or edit the `:root` block at
 the top of any single built page, since each one carries its own copy.
