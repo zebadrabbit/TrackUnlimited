@@ -15,6 +15,7 @@
 #include "TrainPhysics/TrainPhysics.h"
 #include "TrainPhysics/RideProfile.h"
 #include "TrackSpline/TrackProfile.h"
+#include "BlockSignal/RideSignals.h"
 #include "TUTrackSegment.h"
 
 #include "TUCoasterRide.generated.h"
@@ -126,14 +127,49 @@ public:
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited")
 	float RestartDelaySeconds = 3.f;
 
+	// ---- Signalling. Blocks are derived, not authored: a boundary falls wherever
+	// a powered run starts or ends, because that is the only place there is a
+	// device capable of holding a train. On the reference layout that gives three
+	// blocks — lift, course, brake.
+
+	/**
+	 * Seconds a block withholds CLEAR after the train's tail leaves it — the
+	 * real-railway "overlap".
+	 *
+	 * Zero clears the instant a tail crosses the boundary, which is a toy:
+	 * nothing then separates a following train from the one ahead. Turn it up and
+	 * the station visibly holds the train longer between laps.
+	 */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Signalling",
+		meta = (ClampMin = "0.0", UIMax = "30.0"))
+	float BlockBufferSeconds = 5.f;
+
+	/**
+	 * How many blocks must be clear ahead before the station releases.
+	 *
+	 * This is the braking-distance requirement expressed in whole blocks, which
+	 * is the only form of it that exists — nothing here computes a stopping
+	 * distance. Clamped internally to one less than the block count, since a
+	 * full-circuit lookahead would include the asking train's own block.
+	 */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Signalling",
+		meta = (ClampMin = "1", UIMax = "6"))
+	int32 DispatchLookahead = 2;
+
 	/**
 	 * Metres, nose to tail. Zero is a point mass at the heartline.
 	 *
 	 * A train's speed is governed by the height of its centre of mass, so a
 	 * long one softens sharp features — it does not pay the full height of a
-	 * crest it is straddling. On this layout 15 m takes the peak vertical from
-	 * +4.30 g to +4.20 and FIRMS the loop apex from +1.34 to +1.52, because
-	 * straddling the top of a loop means more speed at the top.
+	 * crest it is straddling. Measured on this layout, point mass against 15 m:
+	 * peak vertical +4.44 -> +4.20 g, and the loop apex FIRMS +1.11 -> +1.13,
+	 * because straddling the top of a loop means more speed at the top.
+	 *
+	 * Note how small that second number is. Length softens the sharp peak by a
+	 * quarter of a G and moves the apex by two hundredths — the direction is the
+	 * interesting part, not the magnitude, and an earlier version of this comment
+	 * quoted a much larger apex effect from before the rolling-resistance
+	 * correction and the re-tune that followed it.
 	 */
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited", meta = (ClampMin = "0.0", UIMax = "30.0"))
 	float TrainLengthM = 15.f;
@@ -189,6 +225,16 @@ private:
 	// Not UPROPERTYs: plain C++ with no reflection needed, and deliberately so.
 	FTrack Track;
 	TUniquePtr<FTrain> Train;
+
+	// Rebuilt wholesale alongside Train, for the same reason: block boundaries
+	// come off the segment list, so an edit to the track is an edit to the
+	// blocks. Null only if the track failed to build at all.
+	TUniquePtr<FRideSignals> Signals;
+
+	// Held at the station until the permissive says otherwise. This is the ONE
+	// place the interlock actually bites in the slice: while it is set the train
+	// is not stepped at all, so the station zone cannot pull it away.
+	bool bAwaitingDispatch = true;
 
 	// Generic track cross-section: gauge, rail and spine dimensions, tie
 	// spacing. Defaults sit mid-range for real steel coaster track. Model a

@@ -250,6 +250,26 @@ void ATUCoasterRide::RebuildFromSegments()
 		float OpenSpeed = 0.f;
 		double AccS = 0.0;
 
+		// Block boundaries fall out of this SAME walk, because they are the same
+		// fact: a boundary is only meaningful where there is a device that can
+		// hold a train, so one falls wherever a powered run starts or ends. No
+		// new authored field, no new enumerator, and every track already placed
+		// in a level gets blocks without being edited.
+		//
+		// It also inherits the accepted-geometry filter below for free, so a
+		// rejected degenerate segment cannot shift a block boundary any more than
+		// it can shift a zone boundary.
+		std::vector<double> BlockStarts{0.0};
+		auto AddBoundary = [&BlockStarts](double S)
+		{
+			// Ascending and unique. A zero-length block is one nothing can ever
+			// be inside, and two boundaries at the same S would make one.
+			if (S > BlockStarts.back())
+			{
+				BlockStarts.push_back(S);
+			}
+		};
+
 		auto Close = [this, &Open, &OpenS, &OpenSpeed](double EndS)
 		{
 			if (Open == ETUSegmentZone::None || !(EndS > OpenS))
@@ -288,6 +308,7 @@ void ATUCoasterRide::RebuildFromSegments()
 			if (Segments[i].Zone != Open)
 			{
 				Close(AccS);
+				AddBoundary(AccS);
 				Open = Segments[i].Zone;
 				OpenS = AccS;
 				OpenSpeed = Segments[i].ZoneSpeed;
@@ -295,6 +316,30 @@ void ATUCoasterRide::RebuildFromSegments()
 			AccS += SegLength;
 		}
 		Close(AccS);
+
+		// Reported before it is used, not repaired silently — FRideSignals will
+		// repair it either way, but a walk that produced something malformed is a
+		// bug upstream and should say so rather than be absorbed.
+		if (!FRideSignals::IsWellFormed(BlockStarts))
+		{
+			UE_LOG(LogTemp, Warning,
+				TEXT("TrackUnlimited: derived block boundaries are malformed; repairing."));
+		}
+		Signals = MakeUnique<FRideSignals>(BlockStarts, BlockBufferSeconds,
+			static_cast<std::size_t>(FMath::Max(1, DispatchLookahead)));
+
+		{
+			FString Where;
+			for (const double S : Signals->Boundaries())
+			{
+				Where += FString::Printf(TEXT("%.1f  "), S);
+			}
+			UE_LOG(LogTemp, Log, TEXT("TrackUnlimited: %d blocks, boundaries at %sm; "
+				"lookahead %d, overlap %.1f s"),
+				static_cast<int32>(Signals->NumBlocks()), *Where,
+				static_cast<int32>(Signals->Lookahead()), BlockBufferSeconds);
+		}
+
 		BrakeStartS = AccS;
 		for (int32 i = Segments.Num() - 1; i >= 0; --i)
 		{
@@ -306,6 +351,20 @@ void ATUCoasterRide::RebuildFromSegments()
 		}
 	}
 	Train->Place(0.0, 0.0);
+
+	// Seed occupancy from where the train actually is, before anything asks a
+	// permissive. Without this the station block reads CLEAR with a train sitting
+	// in it, and the first dispatch is granted against a lie.
+	if (Signals)
+	{
+		Signals->Update(Train->GetRearS(), Train->GetFrontS());
+	}
+
+	// Only hold if there is something to grant the release. Without this, a
+	// layout that somehow produced no signalling would sit in the station
+	// forever waiting on a permissive nothing can ever answer — the ride would
+	// simply never start, and nothing on screen would say why.
+	bAwaitingDispatch = Signals.IsValid();
 
 	// Where the ride's lowest structural point sits relative to the heartline
 	// origin, so ToWorld can lift the whole thing onto the ground.
@@ -649,7 +708,44 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 		return;
 	}
 
-	Train->Step(DeltaSeconds);
+	// Overlaps age whether or not the train is moving — that is the entire point
+	// of a time-based overlap, and a held train is exactly when it matters.
+	if (Signals)
+	{
+		Signals->Tick(DeltaSeconds);
+	}
+
+	if (bAwaitingDispatch && Signals)
+	{
+		// Held. The train is deliberately NOT stepped, because the station is a
+		// Lift zone at 4 m/s and would otherwise pull it straight out from under
+		// the interlock. Holding it by not integrating is honest for a station;
+		// a launch would want the zone itself gated instead.
+		// NumBlocks is never zero — the constructor repairs an empty boundary
+		// list into a single block — so the modulo is safe without a guard.
+		const std::size_t Here = Signals->BlockAt(Train->GetDistance());
+		const std::size_t Next = (Here + 1) % Signals->NumBlocks();
+		if (Signals->CanDispatchInto(Next))
+		{
+			bAwaitingDispatch = false;
+		}
+	}
+	else
+	{
+		Train->Step(DeltaSeconds);
+
+		// The return is the only record a signalling violation leaves besides the
+		// counter, so it is read rather than discarded. On a single-train circuit
+		// this should never fire; if it does, the permissive let something
+		// through and that is worth seeing immediately.
+		if (Signals && !Signals->Update(Train->GetRearS(), Train->GetFrontS()))
+		{
+			UE_LOG(LogTemp, Error,
+				TEXT("TrackUnlimited: SIGNALLING VIOLATION at %.1f m — entered a block "
+					"that was not clear."),
+				Train->GetDistance());
+		}
+	}
 
 	// Where the rider is sitting, which is a real choice now that cars differ.
 	const double SeatOffset = RiderPosition * TrainLengthM * 0.5;
@@ -779,6 +875,42 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 		GEngine->AddOnScreenDebugMessage(3, 0.f, FColor::Silver,
 			S >= BrakeStartS ? TEXT("BRAKE RUN") : TEXT("on course"));
 
+		// The block row. Making the causal chain VISIBLE is the pillar, not
+		// decoration — a block holding its overlap is why the train in the
+		// station is not moving, and that should be readable off the screen
+		// rather than inferred.
+		if (Signals)
+		{
+			FString Row;
+			for (std::size_t b = 0; b < Signals->NumBlocks(); ++b)
+			{
+				const TCHAR* Tag = TEXT("CLEAR");
+				if (Signals->GetState(b) == EBlockState::Occupied) { Tag = TEXT("OCCUPIED"); }
+				else if (Signals->GetState(b) == EBlockState::Buffer) { Tag = TEXT("BUFFER"); }
+
+				Row += FString::Printf(TEXT("[%d %s"), static_cast<int32>(b), Tag);
+				if (Signals->GetState(b) == EBlockState::Buffer)
+				{
+					Row += FString::Printf(TEXT(" %.1fs"), Signals->GetBufferRemaining(b));
+				}
+				Row += TEXT("]  ");
+			}
+			GEngine->AddOnScreenDebugMessage(8, 0.f,
+				bAwaitingDispatch ? FColor(255, 176, 32) : FColor(120, 200, 140), Row);
+
+			if (bAwaitingDispatch)
+			{
+				GEngine->AddOnScreenDebugMessage(9, 0.f, FColor(255, 176, 32),
+					TEXT("HELD — dispatch permissive not satisfied"));
+			}
+			if (Signals->Violations() > 0)
+			{
+				GEngine->AddOnScreenDebugMessage(10, 0.f, FColor::Red,
+					FString::Printf(TEXT("%d SIGNALLING VIOLATION(S)"),
+						static_cast<int32>(Signals->Violations())));
+			}
+		}
+
 		// Discoverable, because a keybinding nobody knows about does not exist.
 		const TCHAR* ModeName =
 			CameraMode == ETUCameraMode::Rider ? TEXT("rider")
@@ -809,13 +941,21 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 
 	MoveForward = MoveRight = MoveUp = LookYaw = LookPitch = 0.f;
 
-	// Send it round again once it has settled in the brakes.
-	if (Train->GetSpeed() <= 0.0)
+	// Send it round again once it has settled in the brakes. The return to the
+	// station is a teleport, and the range diff handles it with no special case:
+	// the brake block exits and arms its overlap, the station block enters. That
+	// overlap is then usually what holds the next dispatch.
+	if (!bAwaitingDispatch && Train->GetSpeed() <= 0.0)
 	{
 		StoppedFor += DeltaSeconds;
 		if (StoppedFor >= RestartDelaySeconds)
 		{
 			Train->Place(0.0, 0.0);
+			if (Signals)
+			{
+				Signals->Update(Train->GetRearS(), Train->GetFrontS());
+			}
+			bAwaitingDispatch = true;
 			StoppedFor = 0.f;
 		}
 	}
