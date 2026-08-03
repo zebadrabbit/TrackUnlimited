@@ -5,9 +5,10 @@ side of running a coaster.
 
 ![CLEAR to OCCUPIED to BUFFER(x) to CLEAR](../Brand/github/signalling-1280x420.png)
 
-**Status:** the state machine and permissive logic exist as a unit-tested standalone prototype
-(`Prototypes/BlockSignal/`). Wiring them to the ride, and generating the control panel, is Phase 3 —
-see [`ROADMAP.md`](ROADMAP.md).
+**Status:** the state machine, the permissive logic and the layer that maps a train's position onto
+them all exist as unit-tested standalone prototypes (`Prototypes/BlockSignal/`). What does *not*
+exist yet is the last hop: nothing in the Unreal actor constructs any of it, so a running train still
+trips no block. That and the generated control panel are Phase 3 — see [`ROADMAP.md`](ROADMAP.md).
 
 ## Contents
 

@@ -76,8 +76,27 @@ steadies inversions.
 The `CLEAR → OCCUPIED → BUFFER(x) → CLEAR` state machine and the dispatch permissive logic, with unit
 tests. See [`SIGNALLING.md`](SIGNALLING.md) for what the states mean and why the buffer exists.
 
-**Proves:** the permissive logic denies the cases it should, including the wrap-around case where a
-lookahead spanning the whole circuit would include the asking train's own block.
+| File | What it holds |
+|---|---|
+| `BlockSignal.h` | The per-block state machine and the permissive. Knows about blocks and nothing else |
+| `RideSignals.h` | The mapping layer: arc length → block index, a train's nose-and-tail range, one permissive keyed to the destination |
+
+`RideSignals.h` consumes **doubles, not an `FTrain`** — `RearS`, `FrontS`, `dt`. That keeps it
+independent of the physics, lets the assert suite drive it with bare numbers, and makes the Unreal
+actor a caller like any other. Neither `BlockSignal.h` nor `TrainPhysics.h` was modified to support
+it.
+
+**Proves:** the permissive denies the cases it should, including the wrap-around case where a
+lookahead spanning the whole circuit would include the asking train's own block; that one range diff
+handles a straddle, a rollback and a lap-end teleport with no special cases; and that a train stopped
+short of the station does *not* deny its own dispatch through a block it is standing in — which it
+would do permanently, since nothing would ever clear it.
+
+**Records two limits rather than fixing them**, both asserted so they stay known quantities: a block
+crossed entirely within one `dt` is never entered and never arms its overlap (needs a block under
+0.5 m at 60 Hz and 30 m/s), and the enter-before-exit ordering is *not* observable with a single
+train — reversing the two loops fails no assertion, and the comment says so rather than implying the
+suite covers it.
 
 ## `NL2Csv/` — validation fixtures
 

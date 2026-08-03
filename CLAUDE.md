@@ -35,7 +35,7 @@ What exists now, all of it engine-free and assert-tested under `Prototypes/`, wi
 - **Circuit closure solver** — damped Gauss-Newton over authored parameters. `TrackClose.h`
 - **Undo/redo** — snapshots, with the save format as identity. `TrackHistory.h`
 - **Train physics and the ride profile** — the whole ride measured at edit time. `TrainPhysics/`
-- **Block signalling** — `BlockSignal/`
+- **Block signalling** — the state machine in `BlockSignal/BlockSignal.h`, and `BlockSignal/RideSignals.h` mapping a train's nose-and-tail arc length onto it. `RideSignals` takes **doubles, not an `FTrain`**; keep it that way, it is why the whole layer is testable without the physics. Nothing in `Source/` constructs either yet.
 - **NL2 CSV and telemetry** — validation fixtures, not authoring paths. `NL2Csv/`, `NL2Telemetry/`
 
 The editor surface is Unreal's Details panel over `TArray<FTUTrackSegment>`, with a live viewport preview and ride-profile traces. That is not a placeholder for a Slate UI — see the numeric-entry card for why.
