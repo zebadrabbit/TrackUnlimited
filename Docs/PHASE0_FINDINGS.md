@@ -161,6 +161,62 @@ A true helix comes out of this integrator only from yaw and pitch of constant ma
 
 > **Closed in Phase 1 (2026-08-02).** Neither of the two options above was needed in full. The curvature *vector* now carries a constant `Torsion` — one field — and the path frame being rotation-minimising is exactly why that suffices: the Frenet frame turns about the tangent at the torsion rate relative to it, so constant curvature plus constant torsion reproduces `Yaw = k·cos(τs)`, `Pitch = k·sin(τs)` directly. `MakeHelix(Radius, ClimbAngle, Turns)` converts the parameters an author actually uses. Verified as geometry rather than as fields: over two turns at R = 20 m and 15° climb, the radius about a **vertical** axis holds 20.000000–20.000001 m and the climb rate `dz/ds` varies by 5.4e-09, against closed forms for rise (67.3430 m) and arc length that match exactly. Straight, arc and clothoid all carry `Torsion = 0` and are unchanged. Two consequences worth knowing: the helix **axis is inherited from the incoming frame**, so the track must already be pitched at the climb angle when the segment starts; and the curvature vector exits rotated by `τL` (2π·sin α per turn), so a helix does not generally end on pure yaw and `IsCurvatureContinuous` had to start comparing *effective* curvature rather than the raw end fields.
 
+> **The helix composes, but only from C++ (2026-08-03).** The entry above says the axis is inherited
+> from the incoming frame and the exit leaves on rotated curvature. Both are true, and neither is the
+> whole condition. Three independent designs and nine refutation passes settled it.
+>
+> **The axis needs TWO things, not one.** At the helix start the curvature vector is pure yaw
+> `k = cos²α/R`, so the axis is `sin(α)·T + cos(α)·U`. That equals world vertical exactly when the
+> tangent is pitched at the climb angle **and** the path frame is untwisted (ψ = 0). Two conditions,
+> so one knob provably cannot satisfy them: solving torsion alone drives ψ to 3.8e-16 rad but leaves
+> pitch at **+9.906°** against a target −7°, tilts the axis **16.906°**, *and* reopens the joint
+> (step 1.204e-02 1/m) because torsion rotates the ramp's own exit curvature off pure yaw.
+>
+> The failure this produces is nastier than "a bad helix". Fitted in the plane perpendicular to its
+> own tilted axis, the naive case is a **perfect circle of exactly the authored radius** — it is a
+> perfect helix about the **wrong axis**, tilted **9.42°**, not a deformed one. Anything measuring
+> radius in the XY plane reports a plausible-looking error and misdiagnoses it.
+>
+> **Entry and exit need different tools.** Entry: the helix starts on pure yaw, so
+> `MakeClothoid(L, 0, cos²α/R)` lands on it with a joint step of exactly 0 — `ChainCurvature` cannot
+> help there and would actively break it, overwriting the start fields and turning a constant-magnitude
+> helix into a ramp. Exit: the curvature vector has rotated by `τL` and carries a pitch component no
+> `Make*` helper expresses, and `ChainCurvature` is the only thing in the vocabulary that closes it.
+> Unchained the exit steps **4.223e-02 1/m** and the ride stalls; chained it is **0.000e+00** and
+> completes.
+>
+> **A full layout does work.** Solving the two interior pitch knots of a three-`Raw` entry bridge by
+> 2D Newton — targets: final pitch = climb angle, final ψ = 0 — converges in 3–4 iterations and gives
+> a 22-segment, 829.721 m ride: `IsCurvatureContinuous(1e-9)` true with worst joint step
+> **0.000e+00**, axis tilt **0.00000°**, plan radius **20.00000 m** (1.379e-08 rms against an authored
+> 20), climb held −7.000°, ends at −0.0000 m, completes, self-clearance 11.496 m. An independent
+> refuter rebuilt it with different code and a different seed and landed on the same knots to **eight
+> decimals**. **No header change; it uses only fields `FTrackSegment` already has.**
+>
+> **So why is this still a gap?** Because none of it can be *authored*. `BuildSegment` maps one row to
+> one segment with no neighbour awareness, so a chained or solved value reaches a document only by
+> being typed into a `Raw` segment — storing a **derived** number. Change the helix radius 20 → 22 m
+> and the stored value goes stale: joint reopens to **4.523e-03 1/m**, C² false, file still claiming to
+> be valid. That is exactly what "store what was typed, never what was derived" exists to prevent.
+> The solved bridge has the same disease one level up: editing an upstream turn from k = 0.030 to
+> 0.050 without re-solving tilts the axis **9.708°** and drifts the plan radius to 20.18351 m
+> (0.993 m rms) while `IsCurvatureContinuous` stays **true** and `ValidateTrack` reports **zero**
+> diagnostics. A fourth member of the blind-spot family this page already names.
+>
+> **The near miss worth recording.** One rejected design added a `MakeHelixEntry` helper that
+> overwrote the curvature *direction* instead of rotating it. Because `K = √(Yaw² + Pitch²)` is
+> unsigned, an authored **right**-hand descending helix came out **left**-hand ascending — +2.0706
+> turns where −2.00 was asked for, rising +42.373 m where −44.152 m was asked for — and it was
+> **silent**: `IsCurvatureContinuous` YES, `ValidateTrack` zero diagnostics, because the entry was
+> pre-wound from the same wrong phase so the joint closed perfectly onto mirrored geometry. Found only
+> because a refuter ran the sign sweep the designer never did. `TrackSpline.h`'s own `CurvatureAt`
+> comment already warns that a mirrored helix still looks like a helix.
+>
+> **Smallest thing that would close it:** a build-time hook that can see a segment's neighbour, plus a
+> stored *intent* flag rather than a stored derived value — the shape `ERollMode` already has, where
+> `WorldBank` is resolved per sample in `FTrack::Finish` rather than baked in when typed. Until then,
+> `Helix` is authorable as a lone segment and composable only from C++.
+
 ## Known limitations
 
 Deliberate, measured, and written down. A bounded limitation that is recorded is a Phase 0 success, not debt. Shortcuts also carry a `ponytail:` comment in the code naming the ceiling and the upgrade path — `grep -rn "ponytail:" Prototypes/` lists them.

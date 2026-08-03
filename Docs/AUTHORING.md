@@ -46,7 +46,7 @@ that data.
 | `Straight` | length | `κ = 0` |
 | `Arc` | length, radius | `κ = const`. **+ve radius is a left turn, −ve a right turn** |
 | `Clothoid` | length, κ start, κ end | `κ` varies linearly. The transition curve |
-| `Helix` | radius, climb angle, turns | Constant curvature plus constant torsion. Length is derived |
+| `Helix` | radius, climb angle, turns | Constant curvature plus constant torsion. Length is derived. **Not composable from authored data — see below** |
 | `Raw` | curvature endpoints, torsion | Everything the vocabulary cannot say yet |
 
 Every kind additionally carries **roll start**, **roll end** and a **roll mode**.
@@ -62,10 +62,24 @@ helper builds *pitch* curvature — so every hill in the reference layout is a p
 A track made entirely of `Raw` is a track nobody can meaningfully edit, and that is exactly what the
 file is telling you.
 
-**Helix entry is the author's job.** A helix inherits its axis orientation from the incoming frame,
-so the track must already be pitched at the climb angle when the segment starts — real track does
-this anyway, with a transition into the helix. Whether the editor should auto-insert that transition
-is an open question; see [`DEFERRED_DECISIONS.md`](DEFERRED_DECISIONS.md).
+**A helix cannot currently be composed from authored data, and that is the one gap in this table.**
+It works as a lone segment, and it can be composed perfectly from prototype C++ — measured, a
+22-segment 829.7 m layout with a real helix reports C² to 1e-9 with a worst joint step of exactly
+zero, an axis 0.00000° from vertical and a plan radius of 20.00000 m. What cannot be done is *typing*
+it, because the pieces that make it join need to see the neighbouring segment and `BuildSegment` maps
+one authored row to one segment with no neighbour awareness.
+
+Two things have to be right, and "pitch the track at the climb angle first" is only one of them. The
+helix axis is `sin(α)·T + cos(α)·U`, which is world-vertical only when the tangent is pitched at the
+climb angle **and** the path frame is untwisted. Miss the second and you get a perfect helix about a
+tilted axis — measured 9.42° off — which still reports every joint continuous and every diagnostic
+clean. The exit is a separate problem again: the curvature vector leaves rotated by `τL`, so it needs
+`ChainCurvature`, which nothing in the build path calls.
+
+Full measurements, including a rejected fix that silently mirrored a right-hand helix into a
+left-hand one, are in [`PHASE0_FINDINGS.md`](PHASE0_FINDINGS.md) under "The helix composes, but only
+from C++". Whether the editor should auto-insert the transition is the open question that would close
+this; see [`DEFERRED_DECISIONS.md`](DEFERRED_DECISIONS.md).
 
 ## Roll vs bank
 
