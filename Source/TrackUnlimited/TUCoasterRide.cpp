@@ -63,7 +63,9 @@ TArray<FTUTrackSegment> ATUCoasterRide::PresetLayout(ETUPresetLayout Which)
 namespace
 {
 
-FTUTrackSegment& AddStraight(TArray<FTUTrackSegment>& Out, double Length,
+// Returns nothing on purpose. Handing back a reference into a TArray invites
+// somebody to hold it across the next Add, which reallocates.
+void AddStraight(TArray<FTUTrackSegment>& Out, double Length,
 	ETUSegmentZone Zone = ETUSegmentZone::None, float ZoneSpeed = 0.f)
 {
 	FTUTrackSegment S;
@@ -71,7 +73,7 @@ FTUTrackSegment& AddStraight(TArray<FTUTrackSegment>& Out, double Length,
 	S.Length = static_cast<float>(Length);
 	S.Zone = Zone;
 	S.ZoneSpeed = ZoneSpeed;
-	return Out[Out.Add(S)];
+	Out.Add(S);
 }
 
 // A vertical curve with no curvature step at either end: pitch curvature ramps
