@@ -13,6 +13,39 @@
 // any other. Nothing here has to change when the physics does.
 //
 // Neither BlockSignal.h nor TrainPhysics.h is modified to support this.
+//
+// ============================ ONE TRAIN ONLY ============================
+//
+// This class tracks ONE train, and there is no way to make it track two that
+// does not FAIL OPEN. Both obvious attempts were measured, and neither reports
+// anything at all — no denial, no violation, no counter:
+//
+//   ONE INSTANCE PER TRAIN. Each owns a private FBlockController, so not one bit
+//   of occupancy is shared. Train B's permissive is GRANTED with train A standing
+//   in the destination block, B's Update returns true ("was clear"), the two are
+//   independently confirmed co-resident, and Violations() reads 0 on both. That
+//   is not a weak interlock; it is no interlock. Each train validates against a
+//   private fiction of the circuit.
+//
+//   ONE SHARED INSTANCE, UPDATED BY BOTH. The single tail/nose/occupies triple
+//   below silently re-reads as "wherever the train that called Update LAST is",
+//   and all three of its consumers then fail open. Each train's exit loop walks
+//   the OTHER train's old range and releases it, so a block reads CLEAR with a
+//   train parked in it. CanDispatchInto skips "blocks this train holds" using the
+//   same triple, so asked on behalf of B while the triple describes A it skips
+//   A's blocks as the asker's own and grants entry into an OCCUPIED block. And
+//   the collision entry is SUPPRESSED: bHeldAlready is true, so OnTrainEnter —
+//   the only function in the system that can report a violation — never runs.
+//   The "occupied by me" test becomes a test of call order, not of identity.
+//
+// So multi-train is not a widening of storage. Two of the reads below change
+// MEANING, and one changes from correct to fail-open. Tick gains a contract it
+// never needed: once per FRAME, not once per train, or a 5 s overlap expires in
+// 2.5 s with two trains and nothing says so.
+//
+// Until that work is done, construct exactly one of these. See
+// Docs/PHASE0_FINDINGS.md, "Two trains today means no interlocking at all".
+// ========================================================================
 
 #pragma once
 
@@ -124,9 +157,14 @@ public:
         // polling reader that order is NOT observable — the held-already test
         // below reads the OLD range, so the final state is identical either way,
         // and reversing the two loops does not fail a single assertion in
-        // test_ridesignals.cpp. It is kept because it is the safe order the day
-        // anything watches state mid-update or a second train exists, and it
-        // costs nothing. Do not mistake it for something the suite covers.
+        // test_ridesignals.cpp. It is kept because it costs nothing and is the
+        // safe order if anything ever watches state mid-update. Do not mistake it
+        // for something the suite covers.
+        //
+        // An earlier version of this comment also claimed it was the safe order
+        // "the day a second train exists". That was wrong, and measuring it said
+        // so: with two trains the ordering is not what fails. IDENTITY is, and it
+        // fails long before the ordering could matter — see the class comment.
         for (std::size_t b = NewTail; b <= NewNose; ++b)
         {
             const bool bHeldAlready = bOccupies && b >= TailBlock && b <= NoseBlock;

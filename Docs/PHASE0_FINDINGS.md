@@ -217,6 +217,53 @@ A true helix comes out of this integrator only from yaw and pitch of constant ma
 > `WorldBank` is resolved per sample in `FTrack::Finish` rather than baked in when typed. Until then,
 > `Helix` is authorable as a lone segment and composable only from C++.
 
+**Two trains today means no interlocking at all, and it fails silently (2026-08-03).** `FRideSignals`
+tracks one train. Its own comment said to widen three members to vectors and that "nothing else
+changes" — that is right about the storage and wrong about the meaning. Both obvious ways to run two
+trains were measured and **neither reports anything**: no denial, no violation, no counter.
+
+*One instance per train* gives each a private `FBlockController`, so no occupancy is shared at all.
+Train B's permissive is **granted** with train A standing in the destination, B's `Update` returns
+true ("was clear"), the two are independently confirmed co-resident, and `Violations()` reads **0** on
+both. Each train validates against a private fiction of the circuit.
+
+*One shared instance* is worse, because it looks correct. The single tail/nose/occupies triple
+re-reads as "wherever the train that called `Update` **last** is", and all three consumers fail open:
+each train's exit loop walks the other's old range and releases it, so a block reads CLEAR with a
+train parked in it; `CanDispatchInto` skips "blocks this train holds" using that triple, so asked for
+B while it describes A it skips **A's** blocks as the asker's own and grants entry into an OCCUPIED
+block; and the collision entry is **suppressed** — `bHeldAlready` is true, so `OnTrainEnter`, the only
+function that can report a violation, never runs. "Occupied by me" degrades into a test of call order.
+
+Two corrections fall out. The enters-before-exits ordering was commented as "the safe order the day a
+second train exists" — **it is not what fails**; identity fails first and fails harder. And `Tick`
+acquires a contract it never needed: **once per frame, not once per train**, or a 5 s overlap expires
+in 2.5 s with two trains and nothing says so.
+
+**A block brake holds on a gradient exactly, and the physics needed nothing (2026-08-03).** This was
+an open question on the block-brake card and the answer is a clean one. A brake zone commanded to
+zero holds a train with drift **0.000000000 m over 120 s** at every grade up to −37°, and the
+threshold is exactly `g·sinθ`: at −37° (`g·sin37° = 5.9018`) a bite of 5.850 crept **0.0518 m**, 5.900
+crept **0.0012 m**, and 5.902 and above held **bit-exactly**. Undersizing produces *creep*, not a
+cliff, which is how real hardware presents. The hold is timestep-independent — 1/30, 1/60, 1/120 and
+1/600 s all give exactly zero — because it falls out of the energy formulation rather than a clamp.
+At the actor's fixed 6.0 m/s² grip the maximum holdable grade is **37.72°**.
+
+The asymmetry is the interesting part: **a friction brake can hold but cannot start.** On level track
+a stopped train whose zone was retargeted to 12 m/s moved **0.000 m in 30 s**; on −2° it crawled to
+3.17 m/s and was still short; on −6° it reached exactly 12.000 and trimmed. That is why real level
+mid-course brakes carry drive tyres and gradient ones do not, and the model reproduces it without
+being told to. A released target above what gravity supplies is a number with no effect — on −6°,
+targets of 15 and 25 m/s both produce the same **13.415 m/s** exit.
+
+**Zone membership is the train's CENTRE, not its span, and that must not be quietly changed.** Zones
+test `S0 = DistanceAlong` against `[StartS, EndS]`. Measured with a 15 m train against a block boundary
+and a zone edge both at S = 150 m: the block goes OCCUPIED when the **nose** reaches 150.000 m, but
+the brake first bites when the nose is at **157.517 m** — a 7.517 m disagreement, exactly half a
+train. Signalling occupancy is a span and zone membership is a point, and they legitimately disagree.
+The Phase 2 train-length figures were all measured with centre membership, so changing it silently
+re-tunes every one of them.
+
 ## Known limitations
 
 Deliberate, measured, and written down. A bounded limitation that is recorded is a Phase 0 success, not debt. Shortcuts also carry a `ponytail:` comment in the code naming the ceiling and the upgrade path — `grep -rn "ponytail:" Prototypes/` lists them.
