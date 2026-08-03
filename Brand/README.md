@@ -124,6 +124,32 @@ object. A rebuild fixes all four at once.
 Once both are done, restore the diagram to the README (`## The reference layout`) and to
 `Docs/REFERENCE_LAYOUT.md`, where a note currently explains its absence.
 
+**3. Export the loading screen at a usable size.** There is no PNG of it in the repo at all yet —
+only the `.html`. Two different assets are involved and they are easy to confuse:
+
+| Asset | Where it goes | Size | Format |
+|---|---|---|---|
+| **In-game loading screen** | UMG widget background | **3840×2160** (16:9) | PNG, RGBA |
+| Startup splash | `Content/Splash/Splash.bmp` + `EdSplash.bmp` | **720×370** | 24-bit uncompressed BMP |
+| Window/taskbar icon | `Content/Splash/IconDefault.bmp` + `EdIconDefault.bmp` | **64×64** | 24-bit BMP |
+| Packaged app icon | `Build/Windows/Application.ico` | 16/24/32/48/64/128/256 | multi-res ICO |
+
+Everything except the loading screen already exists at those sizes — do not resize them, Unreal
+expects exactly these.
+
+For the loading screen, capture `loading-screen.html?static=1` at 3840×2160. That is 2× the page's
+own 1920×1080 coordinate space, so text and hairlines stay crisp, and it downsamples cleanly to 1440p
+and 1080p. It is vector, so any integer multiple of 1920×1080 works if 4K is heavier than wanted —
+but do not go below 1920×1080, which is where the 1 px technical-drawing rules start to break up.
+
+On import: Texture Group **UI**, compression **UserInterface2D (RGBA)**, and **turn mipmaps off**.
+The default settings will DXT-compress it and put visible blocking artifacts along exactly the thin
+bright lines the whole design is made of. Non-power-of-two is fine for UI textures.
+
+Longer term the live-UMG route in [Getting it into Unreal](#getting-it-into-unreal) is better than any
+export — the page is data-driven from `TU`, so a UMG rebuild tracks the layout automatically instead
+of going stale the way the artwork above just did.
+
 **Regenerate after any change to `ReferenceLayout()` or to the physics defaults.** This went stale
 within a day the first time. `src/data.js` carries the same warning at the top.
 
