@@ -484,6 +484,27 @@ void ATUCoasterRide::RebuildFromSegments()
 				OpenS = AccS;
 				OpenSpeed = Segments[i].ZoneSpeed;
 			}
+			else if (Open != ETUSegmentZone::None
+				&& !FMath::IsNearlyEqual(Segments[i].ZoneSpeed, OpenSpeed))
+			{
+				// A run is defined by its KIND, so this segment joins the one
+				// already open and its own ZoneSpeed is DISCARDED. Measured: a
+				// brake run at 6 m/s followed immediately by one at 2 m/s becomes
+				// a single zone targeting 6, and the 2 never existed.
+				//
+				// That is a typed number the build throws away, which is exactly
+				// what this project validates against elsewhere. Reported, not
+				// repaired: guessing which speed was meant would be worse, and the
+				// fix an author actually wants is usually a short powered section
+				// between the two — that both splits the run and gives a stopped
+				// train something to move it, since a friction brake can hold a
+				// train but cannot start one.
+				UE_LOG(LogTemp, Warning,
+					TEXT("TrackUnlimited: segment %d continues the run that began at %.1f m, "
+						"so its zone speed %.1f m/s is IGNORED — the run keeps %.1f m/s. "
+						"Separate them with a different zone kind if two devices were meant."),
+					i, OpenS, Segments[i].ZoneSpeed, OpenSpeed);
+			}
 			AccS += SegLength;
 		}
 		Close(AccS);
