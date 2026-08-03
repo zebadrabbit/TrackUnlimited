@@ -157,6 +157,7 @@ For the full engine build, see [`CONTRIBUTING.md`](CONTRIBUTING.md).
 | [`Docs/ARCHITECTURE.md`](Docs/ARCHITECTURE.md) | Track representation, physics model, meshing, rendering, save format — and the constraints that are not up for negotiation |
 | [`Docs/AUTHORING.md`](Docs/AUTHORING.md) | The segment vocabulary, roll vs bank, validation, closure, undo, the file format |
 | [`Docs/SIGNALLING.md`](Docs/SIGNALLING.md) | Block states, buffer/overlap, dispatch permissives, the generated control panel |
+| [`Docs/CONTROL_ARCHITECTURE.md`](Docs/CONTROL_ARCHITECTURE.md) | **Design only, nothing built:** how a scriptable control and show layer could be shaped, and the real standards it would follow |
 | [`Docs/PROTOTYPES.md`](Docs/PROTOTYPES.md) | The five standalone prototypes: what each proves, how to build and run them |
 | [`Docs/ROADMAP.md`](Docs/ROADMAP.md) | Phases, shippable artifacts, current status |
 | [`Docs/REFERENCE_LAYOUT.md`](Docs/REFERENCE_LAYOUT.md) | The canonical measured figures for the reference layout |
