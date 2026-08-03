@@ -35,12 +35,21 @@ What exists now, all of it engine-free and assert-tested under `Prototypes/`, wi
 - **Circuit closure solver** — damped Gauss-Newton over authored parameters. `TrackClose.h`
 - **Undo/redo** — snapshots, with the save format as identity. `TrackHistory.h`
 - **Train physics and the ride profile** — the whole ride measured at edit time. `TrainPhysics/`
-- **Block signalling** — the state machine in `BlockSignal/BlockSignal.h`, and `BlockSignal/RideSignals.h` mapping a train's nose-and-tail arc length onto it. `RideSignals` takes **doubles, not an `FTrain`**; keep it that way, it is why the whole layer is testable without the physics. Nothing in `Source/` constructs either yet.
+- **Block signalling, wired to the ride** — the state machine in `BlockSignal/BlockSignal.h`, and `BlockSignal/RideSignals.h` mapping a train's nose-and-tail arc length onto it. `RideSignals` takes **doubles, not an `FTrain`**; keep it that way, it is why the whole layer is testable without the physics. The actor derives blocks from the contiguous-zone walk it already did, and holds the train at the station until the permissive grants. **It is ONE TRAIN, and two trains currently fail OPEN and silently — read the header banner before touching it.**
 - **NL2 CSV and telemetry** — validation fixtures, not authoring paths. `NL2Csv/`, `NL2Telemetry/`
+- **Starter layouts** — three worked examples of the vocabulary behind a `Preset` dropdown: flat rig, out-and-back, reference. Each was measured before shipping. `ATUCoasterRide::PresetLayout`
+- **The canonical figures, reproducible** — `Prototypes/TrackSpline/reference_figures.cpp` prints everything `Docs/REFERENCE_LAYOUT.md` publishes. Run it before quoting a number from that page.
 
 The editor surface is Unreal's Details panel over `TArray<FTUTrackSegment>`, with a live viewport preview and ride-profile traces. That is not a placeholder for a Slate UI — see the numeric-entry card for why.
 
-**Phase 2's bar is "feels right to an NL2 veteran", and the findings already name the thing most likely to fail it: the train is a point at the heartline and has no length.** A real train is 10–15 m, and its speed over a crest is governed by the whole train's centre of mass — which is exactly why the back car gets thrown over an airtime hill harder than the front. That single omission is also why the fitted `DragK` lands 3.2× above its physically derived value. Start there.
+**Phase 2's bar is "feels right to an NL2 veteran."** The thing this file used to send you at — the train being a point with no length — is **done**: `FTrainConfig::TrainLength`, nine sample points, gravity reading the train's *mean* height. Two claims that went with it have since been measured and were wrong, so do not repeat them. The back car is only thrown harder on an **asymmetric** hill, and on a symmetric one there is no difference at all. And train length does **not** explain the `DragK` fit — the two coefficients were never separable, correlation 0.975, so that split is a free parameter rather than a result.
+
+Two things are actually worth starting on:
+
+1. **Two trains on one circuit.** Not a feature request — the current state is worse than "unbuilt". Both ways of running two trains through `FRideSignals` fail **open** and report nothing: permissives granted into occupied blocks, `Violations()` reading 0, and the collision entry actively *suppressed*. A block brake also cannot demonstrate itself with one train, because nothing is ever ahead of it. The physics side is ready — a brake holds on a gradient to 0.000000000 m over 120 s, and zone retargeting needs about ten lines.
+2. **A fast reference recording from NoLimits 2.** Rolling resistance is calibrated and corrected; drag is not, and cannot be, because the existing recording tops out at 44.5 km/h and drag needs speed to be measured against. This one needs the developer at the keyboard, not an agent.
+
+Before quoting any number from this project, check whether something already measures it — `reference_figures.cpp` for the layout, the assert suites for the models, `PHASE0_FINDINGS.md` for what has already been disproved. Several plausible fixes on that page were measured and rejected, and re-proposing one without saying why yours differs wastes everybody's time.
 
 ## Phase 0 — Prototype (complete)
 
