@@ -71,6 +71,58 @@ wiring signalling to the ride in Phase 3.
 This is the piece that turns a set of state machines into a safety system, and it is why the logic
 lives in C++ rather than Blueprint.
 
+## Holding a train, and where you are allowed to
+
+**A train is held by gating its zone, never by declining to integrate it.** The first version of the
+slice held the train at the station by simply not stepping it, which worked for exactly one train in
+exactly one place; commanding the device under it to zero holds a train anywhere there is a device to
+hold it, and the station stops being a special case.
+
+That makes "where may a train be held" a real question, and it has a two-part answer.
+
+**The device needs both authorities.** A friction or magnetic brake can stop a train and can never
+start one again; a launch can start one and can never stop one. Only a drive-tyre run has both, which
+is why every real block brake is *brakes plus tyres* and why the authored vocabulary has a
+`BlockBrake` kind distinct from `Brake`. `FTrain::FindHoldZoneAt` refuses the other two outright: a
+gated launch is an *aborted* launch, and a train parked on a trim brake stands there for the rest of
+the session with no symptom but a ride that quietly stopped.
+
+**The block needs the length.** Stopping the train it actually receives costs `v²/2a`, and no zone
+kind can change that. On the two-train preset the mid-course brake receives a train at 28.19 m/s and
+would need 66.2 m to stop it inside a 45 m block, so it is authored as a trim and stays one —
+authoring it as a block brake would build a device that closes and is then run straight through, which
+is worse than a trim because it *looks* like an interlock. The three pre-station devices pass the same
+test with room to spare (4.8, 1.5 and 0.9 m needed) and are the ones that hold.
+
+Together these cap how many trains a layout can run: **the number of places that can both hold a train
+and release it**. Four on the two-train preset, one on every other, and asking for more is refused
+with a log line rather than granted onto open course.
+
+Holding devices rest **closed**. A device that opens because nobody is asking is a device that fails
+open, so the resting state is brakes-on and a permissive is what opens one — for the frames it is
+granted, and no longer.
+
+## Two trains, and the three reads that carry identity
+
+`FRideSignals` tracks N trains against one `FBlockController`. Widening the storage was never the
+work; three reads had no notion of *which* train they were about, and each one failed open silently
+until it did:
+
+- **Entry.** "Was I already in this block" silently meant "was the last train to update already in
+  it", so a train rolling into an occupied block matched and the only function that can report a
+  violation never ran. A collision was *suppressed*, not missed.
+- **Exit.** Releasing "the" old range meant one train walked out of another's blocks on its behalf,
+  and a block read CLEAR with a train parked in it. A block is now released only when no *other*
+  train's range covers it.
+- **The permissive.** Skipping "blocks the asking train holds" fired for whichever train updated
+  last, so asked on B's behalf it skipped A's blocks as B's own and granted entry into an occupied
+  one.
+
+`Tick` is **once per frame, not once per train** — overlaps live on blocks, so N calls a frame expire
+a 5 s overlap in 5/N seconds and nothing in the layer can tell. Within a frame the update order is
+observable and **fails closed**: a train not yet updated still reads at its previous span, so a
+following train is reported half a frame early rather than half a frame late.
+
 ## Circuit topology, and what it does not cover yet
 
 The block list is modelled as a closed **circuit**: lookahead wraps past the last block to the first,
@@ -80,11 +132,17 @@ own block, and a train cannot clear itself.
 That is correct for a circuit and **wrong for a shuttle or a transfer spur**, which will need an
 explicit topology when they exist. This is a known limitation, recorded rather than papered over.
 
-Two more, for the same reason. The controller takes **enter/exit events keyed by block index** and
-holds no train identity, so it can say a block is occupied but not by which train — fine for
-interlocking, not enough to drive a panel that labels trains. And the **block count is fixed at
-construction** from the config vector, so re-blocking a layout means building a new controller rather
-than mutating one.
+Two more, for the same reason. `FBlockController` takes **enter/exit events keyed by block index** and
+holds no train identity, deliberately — the identity lives one layer up, in `FRideSignals`, which is
+the only place that knows where each train is. And the **block count is fixed at construction** from
+the config vector, so re-blocking a layout means building a new controller rather than mutating one.
+
+One more that is about the *ride* rather than the signalling: a layout closes in **height** and has
+never been closed in position, heading and roll, so a lap is a **teleport** from the last block back
+to the station rather than a wrap. The signalling sees that jump and interlocks it — the old range
+exits and arms its overlaps, the new range enters, no special case — and the arriving train is held at
+the end of the track until the station is clear. Close a circuit properly and the teleport becomes
+`S -= TotalLength`.
 
 ## Automatic and manual dispatch
 

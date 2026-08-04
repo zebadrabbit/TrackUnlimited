@@ -57,7 +57,26 @@ enum class ETUSegmentZone : uint8
 	None UMETA(DisplayName = "Unpowered"),
 	Lift UMETA(DisplayName = "Lift chain"),
 	Launch UMETA(DisplayName = "Launch"),
-	Brake UMETA(DisplayName = "Brake run"),
+
+	// Friction or magnetic brakes ONLY. Can slow a train to any speed including
+	// a stop, and can never start one again — so it is a TRIM, and a train
+	// commanded to hold here stands for the rest of the session.
+	Brake UMETA(DisplayName = "Brake run (trim only)"),
+
+	// Brakes AND drive tyres, which is what every real block brake is. Identical
+	// in physics to a lift chain: it can hold a train against gravity and push it
+	// away again, which is the pair of authorities a dispatcher needs before it
+	// may stop a train anywhere.
+	//
+	// A separate enumerator rather than a reused Lift because block boundaries
+	// fall where the KIND changes — two holding devices in a row have to stay two
+	// blocks, or the queueing position they exist to provide merges away.
+	//
+	// Whether it can stop the train in the distance available is a LAYOUT
+	// question this cannot answer: v^2/2a against the block length. On the
+	// two-train preset the mid-course brake fails that test by a factor of 1.5,
+	// which is why it is authored Brake and not this.
+	BlockBrake UMETA(DisplayName = "Block brake (brakes + drive tyres)"),
 };
 
 // Starter layouts. Each one is a worked example of the authored vocabulary
@@ -81,11 +100,16 @@ enum class ETUPresetLayout : uint8
 	// Every figure quoted in Docs/REFERENCE_LAYOUT.md comes from this.
 	Reference UMETA(DisplayName = "Reference layout (loop + banked turn)"),
 
-	// The only layout with enough blocks to run two trains. Launched, with a
-	// mid-course block brake and TWO pre-station brakes separated by drive tyres.
-	// Every other preset has three blocks and can therefore hold exactly one
-	// train, because a block boundary only falls where a powered run starts or
-	// ends and they each have just two powered runs.
+	// The only layout that can run two trains. Launched, with a mid-course trim
+	// and TWO pre-station block brakes separated by drive tyres — three places a
+	// train may be held outside the station, so a queue forms there instead of on
+	// the course.
+	//
+	// Every other preset has three blocks and, more to the point, ONE holding
+	// place: a block boundary only falls where a powered run starts or ends, they
+	// each have just two powered runs, and the second is a trim brake, which can
+	// stop a train and never start one again. Set TrainCount above 1 on those and
+	// the extras are refused.
 	TwoTrainCircuit UMETA(DisplayName = "Two-train circuit (launched, 8 blocks)"),
 };
 

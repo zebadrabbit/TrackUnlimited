@@ -18,7 +18,8 @@ clang++ -std=c++17 -Wall -Wextra -O2 -o test_trackspline test_trackspline.cpp &&
 ```
 
 Same shape for each of the others. **Run from inside the prototype's own directory** — the tests
-include their headers by relative path.
+include their headers by relative path. `TrainPhysics` has two suites, `test_trainphysics.cpp` and
+`test_twotrains.cpp`; build them separately.
 
 Tests are plain `assert`s with no framework: add to the existing file and call your function from
 `main`. `BlockSignal` and `TrackSpline` finish in well under a second; `TrainPhysics` takes about six,
@@ -63,13 +64,25 @@ drag is lumped; one zone type covers lift, launch, brake and station.
 
 | File | What it holds |
 |---|---|
-| `TrainPhysics.h` | The motion model, zones, the train's length |
+| `TrainPhysics.h` | The motion model, zones, the train's length, runtime zone retargeting |
 | `RideProfile.h` | The whole ride measured at edit time — speed, three G axes, roll rate, height |
+| `test_twotrains.cpp` | Two trains on the real preset geometry — the only file crossing all three layers |
 
 **Proves:** energy conservation is exact rather than approximate; friction stopping distance matches
 the closed form; drag decays speed exponentially at the predicted rate; a train with length behaves
 differently from a point mass in the direction a designer expects — length softens sharp features and
 steadies inversions.
+
+`test_twotrains.cpp` is the integration check, and it is where a block brake can finally demonstrate
+itself: with one train nothing is ever ahead of it. It transcribes
+`ATUCoasterRide::TwoTrainCircuitLayout()` — the actor cannot be included from here, same precedent as
+`reference_figures.cpp` — and proves the outer pre-station brake **stops a moving train** (7.64 m/s
+down to 0 in 4.7 m), **holds it while the block ahead is occupied** (3.88 s, stopped *and* red, which
+is a different claim from merely stopped), and **releases it** once the train ahead clears. Its last
+test is a line-for-line stand-in for `ATUCoasterRide::Tick`, because that function cannot be compiled
+without Unreal and its dispatch policy has nowhere else to be checked: ten minutes of ride, both
+trains circulating, no deadlock, no shared block, zero violations. **Change the actor's tick order and
+change that test with it.**
 
 ## `BlockSignal/` — signalling
 
@@ -79,12 +92,12 @@ tests. See [`SIGNALLING.md`](SIGNALLING.md) for what the states mean and why the
 | File | What it holds |
 |---|---|
 | `BlockSignal.h` | The per-block state machine and the permissive. Knows about blocks and nothing else |
-| `RideSignals.h` | The mapping layer: arc length → block index, a train's nose-and-tail range, one permissive keyed to the destination |
+| `RideSignals.h` | The mapping layer: arc length → block index, each train's nose-and-tail range, one permissive keyed to the destination |
 
-`RideSignals.h` consumes **doubles, not an `FTrain`** — `RearS`, `FrontS`, `dt`. That keeps it
-independent of the physics, lets the assert suite drive it with bare numbers, and makes the Unreal
-actor a caller like any other. Neither `BlockSignal.h` nor `TrainPhysics.h` was modified to support
-it.
+`RideSignals.h` consumes **doubles and a train index, not an `FTrain`** — `RearS`, `FrontS`, `dt`.
+That keeps it independent of the physics, lets the assert suite drive it with bare numbers, and makes
+the Unreal actor a caller like any other. Neither `BlockSignal.h` nor `TrainPhysics.h` was modified to
+support it.
 
 **Proves:** the permissive denies the cases it should, including the wrap-around case where a
 lookahead spanning the whole circuit would include the asking train's own block; that one range diff
@@ -92,11 +105,24 @@ handles a straddle, a rollback and a lap-end teleport with no special cases; and
 short of the station does *not* deny its own dispatch through a block it is standing in — which it
 would do permanently, since nothing would ever clear it.
 
+**Proves, for two trains,** the three identity failures that used to be silent: that a train entering
+a block another is standing in is *counted* rather than suppressed, that one train moving on does not
+release a block another is parked in, and that a permissive asked on B's behalf is not answered with
+A's blocks. All three were confirmed to bite by mutation — reverting each identity check kills exactly
+one test and no others. The single-argument forms **deny** on a multi-train instance rather than
+aliasing to train 0, so a caller that forgot its index fails closed instead of reproducing the whole
+class of bug.
+
 **Records two limits rather than fixing them**, both asserted so they stay known quantities: a block
 crossed entirely within one `dt` is never entered and never arms its overlap (needs a block under
 0.5 m at 60 Hz and 30 m/s), and the enter-before-exit ordering is *not* observable with a single
 train — reversing the two loops fails no assertion, and the comment says so rather than implying the
 suite covers it.
+
+Two contracts it cannot enforce from the inside, so they are the caller's: `Tick` is **once per
+frame, not once per train** (overlaps live on blocks, and there is no clock in here to notice), and
+update order within a frame is observable — but it **fails closed**, reporting a following train half
+a frame early rather than half a frame late.
 
 ## `NL2Csv/` — validation fixtures
 

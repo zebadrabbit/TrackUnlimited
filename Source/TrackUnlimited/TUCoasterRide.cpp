@@ -236,12 +236,16 @@ TArray<FTUTrackSegment> ATUCoasterRide::TwoTrainCircuitLayout()
 	// brake to the inner one needs powered track either way.
 	//
 	// MEASURED, and every figure re-derived independently before it was written
-	// here: 25 segments, 1072.5 m, 8 blocks, ends -0.0000 m, C2 to 1e-9, closest
-	// self-approach 7.75 m, top 136.8 km/h, vertical -0.35..+3.57 g, lateral
-	// 0.54 g, no block shorter than the 15 m train, zero curvature-step
-	// diagnostics. The train comes to rest at 1044.4 m — inside the inner
-	// pre-station brake, which is where a train waits for the station and is the
-	// correct outcome rather than a stall.
+	// here: 25 segments, 1072.46 m, 8 blocks, ends +0.0000 m, C2 to 1e-9, closest
+	// self-approach 7.75 m, top 136.8 km/h at 160 m, vertical -0.35..+3.57 g,
+	// lateral 0.54 g, 96.5 s, no block shorter than the 15 m train, zero
+	// curvature-step diagnostics. The train completes the course and waits at the
+	// inner pre-station brake for the station to clear.
+	//
+	// Those figures are the ride with every signal GREEN, which is what the ride
+	// profile measures and the right thing for it to measure. Held at a red the
+	// train stops wherever the block brake is, and none of the numbers above move
+	// — a holding device only ever removes energy the layout had already spent.
 	const double Up = Deg(28.0);
 	const double Dn = Deg(-30.0);
 
@@ -282,7 +286,13 @@ TArray<FTUTrackSegment> ATUCoasterRide::TwoTrainCircuitLayout()
 	// leg, which is where the clearance went from 3.33 m to 7.75.
 	AddBankedTurn(Out, 48.0, Pi * 48.0, 34.0, BankDegreesFor(31.5, 48.0));
 
-	AddStraight(Out, 45.0, ETUSegmentZone::Brake, 20.f);      // 4 MID-COURSE BLOCK BRAKE
+	// 4 MID-COURSE TRIM, and a trim is all it can be. MEASURED: the train arrives
+	// here at 28.19 m/s, and stopping that at the 6 m/s^2 every zone gets needs
+	// 66.2 m against the 45 m the block is. Authoring it as a BlockBrake would
+	// build a device that closes and then gets run straight through — worse than a
+	// trim, because it would look like an interlock. Lengthen the block past ~70 m
+	// and it can become one.
+	AddStraight(Out, 45.0, ETUSegmentZone::Brake, 20.f);
 
 	AddEasedPitch(Out, Deg(12.0), 0.010);                     // 5 COURSE back
 	AddEasedPitch(Out, Deg(-12.0), 0.010);
@@ -293,14 +303,19 @@ TArray<FTUTrackSegment> ATUCoasterRide::TwoTrainCircuitLayout()
 	// first is in the station; the inner one holds short of the station and is
 	// what clears the station-entry signal once its train has stopped.
 	//
-	// ponytail: the two pre-station brakes trim to 6 and 2 m/s rather than to a
-	// dead stop, because a zone target cannot be changed at runtime yet — so a
-	// brake commanded to zero would hold its train there forever with nothing
-	// able to release it. Once FTrain can retarget a zone, both become 0 and the
-	// permissive releases them; the geometry does not change.
-	AddStraight(Out, BrakeLen, ETUSegmentZone::Brake, 6.f);       // outer
+	// All three are hold-capable, which is what makes this preset run two trains:
+	// blocks 5, 6 and 7 can each stop a train AND let it go again, so a queue can
+	// form outside the station instead of on the course. Measured arrival speeds
+	// are 7.57, 4.28 and 3.25 m/s, needing 4.8, 1.5 and 0.9 m to stop — every one
+	// of them comfortably inside its own block, unlike the mid-course brake.
+	//
+	// The authored speeds are the RELEASE speeds. A holding device rests closed
+	// and is commanded to these only while its permissive is granted, which is
+	// why the two brakes may sensibly trim to 6 and 2 m/s and still come to a
+	// dead stop when the signal is red.
+	AddStraight(Out, BrakeLen, ETUSegmentZone::BlockBrake, 6.f);  // outer
 	AddStraight(Out, TransferLen, ETUSegmentZone::Lift, 4.f);     // transfer tyres
-	AddStraight(Out, BrakeLen, ETUSegmentZone::Brake, 2.f);       // inner
+	AddStraight(Out, BrakeLen, ETUSegmentZone::BlockBrake, 2.f);  // inner
 	return Out;
 }
 
@@ -490,13 +505,20 @@ void ATUCoasterRide::RebuildFromSegments()
 	if (Track.NumSegments() == 0)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("TrackUnlimited: no usable segments; nothing to ride."));
+		// Dropped rather than left pointing at the track that just failed to
+		// build. An FTrain holds a reference to it, so keeping one would be a
+		// train riding a track with no segments in it.
+		Trains.Reset();
+		StoppedForS.Reset();
+		Signals.Reset();
 		return;
 	}
 
-	FTrainConfig TrainConfig;
-	TrainConfig.TrainLength = TrainLengthM;
-	TrainConfig.bAllowRollback = bAllowRollback;
-	Train = MakeUnique<FTrain>(Track, TrainConfig);
+	// Built once and handed to every train, rather than walked per train: the
+	// zones ARE the track, and a second train that derived its own could disagree
+	// with the first about where the brakes are.
+	TArray<FTrackZone> Zones;
+	ZoneReleaseSpeed.Reset();
 
 	// Zones come from contiguous runs of segments carrying the same kind, so a
 	// lift is however many segments in a row say "Lift" and moving one is an
@@ -529,7 +551,7 @@ void ATUCoasterRide::RebuildFromSegments()
 			}
 		};
 
-		auto Close = [this, &Open, &OpenS, &OpenSpeed](double EndS)
+		auto Close = [this, &Zones, &Open, &OpenS, &OpenSpeed](double EndS)
 		{
 			if (Open == ETUSegmentZone::None || !(EndS > OpenS))
 			{
@@ -540,20 +562,43 @@ void ATUCoasterRide::RebuildFromSegments()
 			// drive; give it a field when something needs a weak chain or a
 			// hard launch, not before.
 			const double Grip = 6.0;
+
+			// Sanitised HERE rather than trusted, because AddZone REFUSES a
+			// malformed zone instead of storing it — and a refusal would leave the
+			// train one zone shorter than ZoneReleaseSpeed, sliding every release
+			// speed after it onto the wrong device. The field is clamped in the
+			// editor, so this only catches a value that never came from the panel;
+			// the point is that the two lists then cannot disagree at all, rather
+			// than disagreeing rarely and silently.
+			const double Speed = FMath::IsFinite(OpenSpeed) && OpenSpeed > 0.f
+				? static_cast<double>(OpenSpeed) : 0.0;
+
 			switch (Open)
 			{
 			case ETUSegmentZone::Lift:
-				Train->AddZone(MakeLift(OpenS, EndS, OpenSpeed, Grip));
+				Zones.Add(MakeLift(OpenS, EndS, Speed, Grip));
 				break;
 			case ETUSegmentZone::Launch:
-				Train->AddZone(MakeLaunch(OpenS, EndS, OpenSpeed, Grip));
+				Zones.Add(MakeLaunch(OpenS, EndS, Speed, Grip));
 				break;
 			case ETUSegmentZone::Brake:
-				Train->AddZone(MakeBrake(OpenS, EndS, OpenSpeed, Grip));
+				Zones.Add(MakeBrake(OpenS, EndS, Speed, Grip));
+				break;
+			case ETUSegmentZone::BlockBrake:
+				// Brakes AND drive tyres, so identical in shape to a lift chain.
+				// The separate enumerator exists for the block boundary and for
+				// the Details panel, not for the physics — what makes it a block
+				// brake is having BOTH authorities, which is exactly what
+				// FTrain::FindHoldZoneAt looks for.
+				Zones.Add(MakeLift(OpenS, EndS, Speed, Grip));
 				break;
 			default:
-				break;
+				return;
 			}
+			// The authored number is the RELEASE speed. A holding device spends
+			// most of its life commanded to zero, so this is the only surviving
+			// record of what it should open to.
+			ZoneReleaseSpeed.Add(Speed);
 		};
 
 		for (int32 i = 0; i < Segments.Num(); ++i)
@@ -605,8 +650,36 @@ void ATUCoasterRide::RebuildFromSegments()
 			UE_LOG(LogTemp, Warning,
 				TEXT("TrackUnlimited: derived block boundaries are malformed; repairing."));
 		}
+		// A train needs somewhere to STAND: a device that can both stop it and
+		// start it again. Drive tyres and block brakes qualify; a trim brake can
+		// hold a train and never release it, and a launch can release one and
+		// never hold it. So the number of trains the layout can run is the number
+		// of hold-capable zones, and asking for more is refused rather than
+		// granted into open course.
+		TArray<double> HoldStartS;
+		HoldZoneIndices.Reset();
+		for (int32 z = 0; z < Zones.Num(); ++z)
+		{
+			if (Zones[z].MaxAccel > 0.0 && Zones[z].MaxDecel > 0.0)
+			{
+				HoldStartS.Add(Zones[z].StartS);
+				HoldZoneIndices.Add(z);
+			}
+		}
+		const int32 Wanted = FMath::Max(1, TrainCount);
+		const int32 Running = FMath::Min(Wanted, FMath::Max(1, HoldStartS.Num()));
+		if (Running < Wanted)
+		{
+			UE_LOG(LogTemp, Warning,
+				TEXT("TrackUnlimited: %d trains asked for, %d run — the layout has %d place(s) "
+					"that can both hold a train and release it. Add a block brake or drive-tyre "
+					"run to park another."),
+				Wanted, Running, HoldStartS.Num());
+		}
+
 		Signals = MakeUnique<FRideSignals>(BlockStarts, BlockBufferSeconds,
-			static_cast<std::size_t>(FMath::Max(1, DispatchLookahead)));
+			static_cast<std::size_t>(FMath::Max(1, DispatchLookahead)),
+			static_cast<std::size_t>(Running));
 
 		{
 			FString Where;
@@ -615,36 +688,57 @@ void ATUCoasterRide::RebuildFromSegments()
 				Where += FString::Printf(TEXT("%.1f  "), S);
 			}
 			UE_LOG(LogTemp, Log, TEXT("TrackUnlimited: %d blocks, boundaries at %sm; "
-				"lookahead %d, overlap %.1f s"),
+				"lookahead %d, overlap %.1f s, %d train(s), %d holding place(s)"),
 				static_cast<int32>(Signals->NumBlocks()), *Where,
-				static_cast<int32>(Signals->Lookahead()), BlockBufferSeconds);
+				static_cast<int32>(Signals->Lookahead()), BlockBufferSeconds,
+				Running, HoldStartS.Num());
+		}
+
+		FTrainConfig TrainConfig;
+		TrainConfig.TrainLength = TrainLengthM;
+		TrainConfig.bAllowRollback = bAllowRollback;
+
+		Trains.Reset();
+		StoppedForS.Init(0.f, Running);
+		for (int32 t = 0; t < Running; ++t)
+		{
+			TUniquePtr<FTrain> New = MakeUnique<FTrain>(Track, TrainConfig);
+			for (const FTrackZone& Z : Zones)
+			{
+				New->AddZone(Z);
+			}
+			// Train 0 starts in the station; the rest stand at the holding places
+			// in track order. A whole train length past each start, so the REAR
+			// clears the boundary — placed on the boundary itself a train
+			// straddles it and holds the block behind as well, which reads as an
+			// occupancy nothing put there.
+			New->Place(t == 0 ? 0.0 : HoldStartS[t] + TrainLengthM, 0.0);
+			Trains.Add(MoveTemp(New));
 		}
 
 		BrakeStartS = AccS;
 		for (int32 i = Segments.Num() - 1; i >= 0; --i)
 		{
-			if (Segments[i].Zone != ETUSegmentZone::Brake)
+			if (Segments[i].Zone != ETUSegmentZone::Brake
+				&& Segments[i].Zone != ETUSegmentZone::BlockBrake)
 			{
 				break;
 			}
 			BrakeStartS -= BuildSegment(Doc.Segments[static_cast<std::size_t>(i)]).Length;
 		}
 	}
-	Train->Place(0.0, 0.0);
 
-	// Seed occupancy from where the train actually is, before anything asks a
+	// Seed occupancy from where the trains actually are, before anything asks a
 	// permissive. Without this the station block reads CLEAR with a train sitting
 	// in it, and the first dispatch is granted against a lie.
 	if (Signals)
 	{
-		Signals->Update(Train->GetRearS(), Train->GetFrontS());
+		for (int32 t = 0; t < Trains.Num(); ++t)
+		{
+			Signals->Update(static_cast<std::size_t>(t), Trains[t]->GetRearS(),
+				Trains[t]->GetFrontS());
+		}
 	}
-
-	// Only hold if there is something to grant the release. Without this, a
-	// layout that somehow produced no signalling would sit in the station
-	// forever waiting on a permissive nothing can ever answer — the ride would
-	// simply never start, and nothing on screen would say why.
-	bAwaitingDispatch = Signals.IsValid();
 
 	// Where the ride's lowest structural point sits relative to the heartline
 	// origin, so ToWorld can lift the whole thing onto the ground.
@@ -697,8 +791,25 @@ void ATUCoasterRide::RebuildFromSegments()
 	// too tall BEFORE watching a train fail to crest it, and the extremes are
 	// worth more with a position attached: "4.25 g" is a number, "4.25 g at
 	// S=310 m" is somewhere to go and look.
-	Profile_ = RunRideProfile(*Train, Track, 1.0);
-	Train->Place(0.0, 0.0);
+	//
+	// Run on train 0 with every holding device still OPEN, which is deliberate:
+	// the profile answers "what does this layout do to a rider", not "what does
+	// the signalling do to a timetable". A profile measured through a red would
+	// report a stall at the first block brake and call the ride broken.
+	Profile_ = RunRideProfile(*Trains[0], Track, 1.0);
+	Trains[0]->Place(0.0, 0.0);
+
+	// NOW shut them, once the profile has been taken. Brakes-on is the resting
+	// state of real ride control, and the alternative — open until a dispatcher
+	// notices — is open for exactly one frame every time, which is one frame of a
+	// train being pushed through a red.
+	for (const TUniquePtr<FTrain>& T : Trains)
+	{
+		for (const int32 Zi : HoldZoneIndices)
+		{
+			T->SetZoneTargetSpeed(static_cast<std::size_t>(Zi), 0.0);
+		}
+	}
 
 	if (!Profile_.bCompleted)
 	{
@@ -979,52 +1090,74 @@ void ATUCoasterRide::DrawRideProfile() const
 	}
 }
 
+void ATUCoasterRide::ServeHolds(std::size_t TrainIndex)
+{
+	// THE DISPATCHER, entire. Everything else in this file is geometry, physics or
+	// drawing; this is the ride control system, and it is four lines because the
+	// two layers underneath it already know what they are doing.
+	//
+	// It asks about the train's CENTRE, because that is what FTrain::Step tests a
+	// zone against, and because zones and blocks fall out of the same walk — so a
+	// zone never straddles a block boundary and "the block my centre is in" is
+	// unambiguous.
+	//
+	// A device with nobody standing at it is left where it was, which is closed:
+	// brakes-on is the resting state, and a device that opens because nobody is
+	// asking is a device that fails open.
+	if (!Signals || TrainIndex >= static_cast<std::size_t>(Trains.Num()))
+	{
+		return;
+	}
+	FTrain& T = *Trains[TrainIndex];
+	const int Z = T.FindHoldZoneAt(T.GetDistance());
+	if (Z < 0)
+	{
+		return;   // not standing at a holding device; nothing to command
+	}
+	const bool bGranted = Signals->CanRelease(TrainIndex, T.GetDistance());
+	T.SetZoneTargetSpeed(static_cast<std::size_t>(Z),
+		bGranted ? ZoneReleaseSpeed[Z] : 0.0);
+}
+
 void ATUCoasterRide::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
-	if (!Train.IsValid())
+	if (Trains.Num() == 0 || !Trains[0].IsValid())
 	{
 		return;
 	}
+	FTrain* const Train = Trains[0].Get();   // the rider's train: camera, readout
 
-	// Overlaps age whether or not the train is moving — that is the entire point
-	// of a time-based overlap, and a held train is exactly when it matters.
+	// Every train, then ONE tick. Overlaps live on blocks rather than on trains,
+	// so ticking per train would age a 5 s overlap in 5/N seconds and nothing
+	// anywhere would say so.
+	//
+	// Holding is done by GATING THE ZONE, not by declining to integrate. The old
+	// version held the train at the station by simply not stepping it, which
+	// worked for exactly one train in exactly one place; a zone commanded to zero
+	// holds a train anywhere there is a device to hold it, and the station stops
+	// being a special case.
+	for (int32 t = 0; t < Trains.Num(); ++t)
+	{
+		ServeHolds(static_cast<std::size_t>(t));
+		Trains[t]->Step(DeltaSeconds);
+
+		// The return is the only record a signalling violation leaves besides the
+		// counter, so it is read rather than discarded. With two trains it is also
+		// the collision report.
+		if (Signals && !Signals->Update(static_cast<std::size_t>(t),
+			Trains[t]->GetRearS(), Trains[t]->GetFrontS()))
+		{
+			UE_LOG(LogTemp, Error,
+				TEXT("TrackUnlimited: SIGNALLING VIOLATION — train %d entered a block that "
+					"was not clear, at %.1f m."),
+				t, Trains[t]->GetDistance());
+		}
+	}
 	if (Signals)
 	{
 		Signals->Tick(DeltaSeconds);
-	}
-
-	if (bAwaitingDispatch && Signals)
-	{
-		// Held. The train is deliberately NOT stepped, because the station is a
-		// Lift zone at 4 m/s and would otherwise pull it straight out from under
-		// the interlock. Holding it by not integrating is honest for a station;
-		// a launch would want the zone itself gated instead.
-		// NumBlocks is never zero — the constructor repairs an empty boundary
-		// list into a single block — so the modulo is safe without a guard.
-		const std::size_t Here = Signals->BlockAt(Train->GetDistance());
-		const std::size_t Next = (Here + 1) % Signals->NumBlocks();
-		if (Signals->CanDispatchInto(Next))
-		{
-			bAwaitingDispatch = false;
-		}
-	}
-	else
-	{
-		Train->Step(DeltaSeconds);
-
-		// The return is the only record a signalling violation leaves besides the
-		// counter, so it is read rather than discarded. On a single-train circuit
-		// this should never fire; if it does, the permissive let something
-		// through and that is worth seeing immediately.
-		if (Signals && !Signals->Update(Train->GetRearS(), Train->GetFrontS()))
-		{
-			UE_LOG(LogTemp, Error,
-				TEXT("TrackUnlimited: SIGNALLING VIOLATION at %.1f m — entered a block "
-					"that was not clear."),
-				Train->GetDistance());
-		}
 	}
 
 	// Where the rider is sitting, which is a real choice now that cars differ.
@@ -1040,24 +1173,29 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 	// O(track length) a call and would be six of those every frame.
 	{
 		const int32 CarCount = Train->NumSamplePoints();
+		const int32 Total = CarCount * Trains.Num();
 		const double CarLength =
 			TrainLengthM > 0.f ? TrainLengthM / CarCount : 2.4;
-		if (Cars->GetInstanceCount() != CarCount)
+		if (Cars->GetInstanceCount() != Total)
 		{
 			Cars->ClearInstances();
-			for (int32 i = 0; i < CarCount; ++i)
+			for (int32 i = 0; i < Total; ++i)
 			{
 				Cars->AddInstance(FTransform::Identity, true);
 			}
 		}
 		const FVector CarScale(CarLength * 0.9, 1.4, 1.0);
-		for (int32 i = 0; i < CarCount; ++i)
+		for (int32 t = 0; t < Trains.Num(); ++t)
 		{
-			const FTrackFrame& CarFrame = Train->GetSamplePoint(i);
-			const FVec3 OnRails = CarFrame.Position - CarFrame.Up * Track.GetHeartlineHeight();
-			Cars->UpdateInstanceTransform(i,
-				FTransform(ToWorldRotation(CarFrame), ToWorld(OnRails), CarScale), true,
-				i == CarCount - 1, true);
+			for (int32 i = 0; i < CarCount; ++i)
+			{
+				const int32 Slot = t * CarCount + i;
+				const FTrackFrame& CarFrame = Trains[t]->GetSamplePoint(i);
+				const FVec3 OnRails = CarFrame.Position - CarFrame.Up * Track.GetHeartlineHeight();
+				Cars->UpdateInstanceTransform(Slot,
+					FTransform(ToWorldRotation(CarFrame), ToWorld(OnRails), CarScale), true,
+					Slot == Total - 1, true);
+			}
 		}
 	}
 
@@ -1175,13 +1313,27 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 				}
 				Row += TEXT("]  ");
 			}
+			// "Held" is now a property of a train standing at a device, not a flag:
+			// a train is held when it is at a holding place and its permissive is
+			// refusing. Reported per train, because with two of them "the ride is
+			// held" is not a fact about the ride.
+			FString HeldRow;
+			for (int32 t = 0; t < Trains.Num(); ++t)
+			{
+				const double At = Trains[t]->GetDistance();
+				if (Trains[t]->FindHoldZoneAt(At) >= 0
+					&& !Signals->CanRelease(static_cast<std::size_t>(t), At))
+				{
+					HeldRow += FString::Printf(TEXT("train %d HELD at %.0f m   "), t, At);
+				}
+			}
 			GEngine->AddOnScreenDebugMessage(8, 0.f,
-				bAwaitingDispatch ? FColor(255, 176, 32) : FColor(120, 200, 140), Row);
+				HeldRow.IsEmpty() ? FColor(120, 200, 140) : FColor(255, 176, 32), Row);
 
-			if (bAwaitingDispatch)
+			if (!HeldRow.IsEmpty())
 			{
 				GEngine->AddOnScreenDebugMessage(9, 0.f, FColor(255, 176, 32),
-					TEXT("HELD — dispatch permissive not satisfied"));
+					HeldRow + TEXT("— dispatch permissive not satisfied"));
 			}
 			if (Signals->Violations() > 0)
 			{
@@ -1221,26 +1373,46 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 
 	MoveForward = MoveRight = MoveUp = LookYaw = LookPitch = 0.f;
 
-	// Send it round again once it has settled in the brakes. The return to the
-	// station is a teleport, and the range diff handles it with no special case:
-	// the brake block exits and arms its overlap, the station block enters. That
-	// overlap is then usually what holds the next dispatch.
-	if (!bAwaitingDispatch && Train->GetSpeed() <= 0.0)
+	// Send it round again once it has settled at the END of the track. The return
+	// to the station is a teleport, and the range diff handles it with no special
+	// case: the last block exits and arms its overlap, the station block enters.
+	//
+	// ponytail: this teleport is the ride's only "lap". The layout closes in
+	// HEIGHT and has never been closed in position, heading and roll, so a train
+	// wrapped across that seam would be faking continuity rather than simulating
+	// it — which is why the seam is a jump the signalling can see rather than a
+	// wrap inside FTrain. Close the circuit properly and this becomes an S -= L.
+	//
+	// TWO GUARDS, both of which only matter with more than one train: it must be
+	// stopped in the LAST block (a train held at a block brake is also stopped,
+	// and teleporting that one would take it out of the queue it is waiting in),
+	// and the station must be empty (or two trains land on each other, which the
+	// interlocking would then correctly and uselessly report as a violation).
+	if (Signals)
 	{
-		StoppedFor += DeltaSeconds;
-		if (StoppedFor >= RestartDelaySeconds)
+		const std::size_t Last = Signals->NumBlocks() - 1;
+		for (int32 t = 0; t < Trains.Num(); ++t)
 		{
-			Train->Place(0.0, 0.0);
-			if (Signals)
+			// "Arrived" is stopped OR at the end of the track, and the second half
+			// is not redundant: the last block is now a block brake that HOLDS its
+			// target, so a train released from it is still doing its release speed
+			// when it runs out of track. Testing speed alone would leave it
+			// pressed against the end at 2 m/s for ever and the ride would hang.
+			const bool bSettled = Signals->BlockAt(Trains[t]->GetDistance()) == Last
+				&& (Trains[t]->GetSpeed() <= 0.0 || Trains[t]->IsAtEnd());
+			if (!bSettled)
 			{
-				Signals->Update(Train->GetRearS(), Train->GetFrontS());
+				StoppedForS[t] = 0.f;
+				continue;
 			}
-			bAwaitingDispatch = true;
-			StoppedFor = 0.f;
+			StoppedForS[t] += DeltaSeconds;
+			if (StoppedForS[t] >= RestartDelaySeconds && !Signals->Occupies(0))
+			{
+				Trains[t]->Place(0.0, 0.0);
+				Signals->Update(static_cast<std::size_t>(t), Trains[t]->GetRearS(),
+					Trains[t]->GetFrontS());
+				StoppedForS[t] = 0.f;
+			}
 		}
-	}
-	else
-	{
-		StoppedFor = 0.f;
 	}
 }

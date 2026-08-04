@@ -231,6 +231,28 @@ Powered track is per segment, so a lift is however many segments in a row say "L
 an edit rather than a recompile. Arc lengths accumulate over the segments the track actually
 *accepted*, so a rejected degenerate segment cannot silently shift every zone boundary after it.
 
+There are four kinds, and they differ only in which authorities the device has:
+
+| Kind | Can push | Can hold | What it is |
+|---|---|---|---|
+| Lift chain | yes | yes | chain or drive tyres; also what a station is |
+| Launch | yes | **no** | tyre or LSM launch. Cannot stop anything |
+| Brake run | **no** | yes | friction or magnetic trim. Cannot start a stopped train |
+| Block brake | yes | yes | brakes *plus* drive tyres — the only mid-course place a train may be held |
+
+A run is defined by its **kind**, so two adjacent runs of the same kind merge into one zone and the
+second's authored speed is discarded (reported, not repaired). That is why `Block brake` exists as a
+kind of its own rather than being spelled "Lift chain": two holding devices in a row have to stay two
+blocks, or the queueing position they exist to provide merges away.
+
+The authored speed is the **release** speed. A device that can hold rests *closed* and is commanded to
+its authored speed only while its permissive is granted, so authoring 6 m/s does not mean a train
+always passes at 6 m/s — it means that is what it leaves at when the signal is green.
+
+Whether a block brake can actually stop the train it receives is a **layout** question the kind cannot
+answer: `v²/2a` against the block length. See [`SIGNALLING.md`](SIGNALLING.md) for the measured case
+where it does not.
+
 Every edit rebuilds and reports total length, C² continuity, height gap and closest self-approach —
 each of which was previously a defect that took *riding* the track to find.
 

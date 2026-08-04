@@ -14,37 +14,44 @@
 //
 // Neither BlockSignal.h nor TrainPhysics.h is modified to support this.
 //
-// ============================ ONE TRAIN ONLY ============================
+// ============================ TRAIN IDENTITY ============================
 //
-// This class tracks ONE train, and there is no way to make it track two that
-// does not FAIL OPEN. Both obvious attempts were measured, and neither reports
-// anything at all — no denial, no violation, no counter:
+// N trains share ONE FBlockController, and each carries an index. That index is
+// the whole design: multi-train was never a widening of storage, it was three
+// reads that had no notion of WHICH train they were about.
 //
-//   ONE INSTANCE PER TRAIN. Each owns a private FBlockController, so not one bit
-//   of occupancy is shared. Train B's permissive is GRANTED with train A standing
-//   in the destination block, B's Update returns true ("was clear"), the two are
-//   independently confirmed co-resident, and Violations() reads 0 on both. That
-//   is not a weak interlock; it is no interlock. Each train validates against a
-//   private fiction of the circuit.
+//   ENTRY. bHeldAlready asks "was I already in this block", and with one shared
+//   tail/nose it silently meant "was the train that called Update LAST already
+//   in it". Train B rolling into a block train A is parked in matched, so
+//   OnTrainEnter — the only function in the system that can report a violation —
+//   never ran. A collision was SUPPRESSED rather than missed. It now reads B's
+//   own previous range, so the entry happens, the block is not clear, and the
+//   violation is counted.
 //
-//   ONE SHARED INSTANCE, UPDATED BY BOTH. The single tail/nose/occupies triple
-//   below silently re-reads as "wherever the train that called Update LAST is",
-//   and all three of its consumers then fail open. Each train's exit loop walks
-//   the OTHER train's old range and releases it, so a block reads CLEAR with a
-//   train parked in it. CanDispatchInto skips "blocks this train holds" using the
-//   same triple, so asked on behalf of B while the triple describes A it skips
-//   A's blocks as the asker's own and grants entry into an OCCUPIED block. And
-//   the collision entry is SUPPRESSED: bHeldAlready is true, so OnTrainEnter —
-//   the only function in the system that can report a violation — never runs.
-//   The "occupied by me" test becomes a test of call order, not of identity.
+//   EXIT. The old loop released every block in "the" old range. Train A moving
+//   on therefore walked out of train B's blocks on B's behalf, and a block read
+//   CLEAR with a train parked in it. A block is now released only when NO other
+//   train's current range covers it.
 //
-// So multi-train is not a widening of storage. Two of the reads below change
-// MEANING, and one changes from correct to fail-open. Tick gains a contract it
-// never needed: once per FRAME, not once per train, or a 5 s overlap expires in
-// 2.5 s with two trains and nothing says so.
+//   PERMISSIVE. CanDispatchInto skips blocks the asking train already holds,
+//   because a train stopped short of the station must not deny its own dispatch.
+//   With one shared range that skip fired for whichever train updated last, so
+//   asked on behalf of B it skipped A's blocks as B's own and granted entry into
+//   an OCCUPIED block. It now skips only the asker's.
 //
-// Until that work is done, construct exactly one of these. See
-// Docs/PHASE0_FINDINGS.md, "Two trains today means no interlocking at all".
+// TICK IS ONCE PER FRAME, NOT ONCE PER TRAIN. Overlaps live on blocks, not on
+// trains, so calling it per train ages a 5 s overlap in 5/N seconds. Nothing can
+// detect that from in here — there is no frame counter and no clock — so it is a
+// caller contract.
+//
+// WITHIN A FRAME, UPDATE ORDER IS OBSERVABLE, AND IT FAILS CLOSED. A train that
+// has not been updated yet this frame still reads at its previous span, so a
+// train entering the block it is about to leave is reported as a violation half
+// a frame early. That is the safe direction, and at any block length worth
+// having, two trains that close ARE the violation.
+//
+// See Docs/PHASE0_FINDINGS.md, "Two trains today means no interlocking at all",
+// for what this replaced and how each failure was measured.
 // ========================================================================
 
 #pragma once
@@ -70,11 +77,17 @@ public:
     // usable object and the alternative — an empty block list — indexes out of
     // range on the first Update. Call IsWellFormed() FIRST if you want to report
     // instead of repair; that is the split the rest of the project uses.
+    //
+    // InNumTrains is clamped to at least one: zero trains would make every
+    // Update and every permissive fail closed, which is a ride that never starts
+    // with nothing anywhere saying why — the same failure the lookahead clamp
+    // below exists to prevent.
     FRideSignals(std::vector<double> InBoundaryS, double InBufferSeconds,
-                 std::size_t InLookahead)
+                 std::size_t InLookahead, std::size_t InNumTrains = 1)
         : Boundary(Repaired(std::move(InBoundaryS)))
         , Blocks(std::vector<FBlockConfig>(Boundary.size(), FBlockConfig{InBufferSeconds}))
         , Look(InLookahead)
+        , Held(InNumTrains < 1 ? 1 : InNumTrains)
     {
         // Clamped, not trusted. FBlockController fails closed at both ends of its
         // range, so an out-of-range lookahead would deny every dispatch for the
@@ -110,6 +123,7 @@ public:
     }
 
     std::size_t NumBlocks() const { return Blocks.NumBlocks(); }
+    std::size_t NumTrains() const { return Held.size(); }
     std::size_t Lookahead() const { return Look; }
     const std::vector<double>& Boundaries() const { return Boundary; }
 
@@ -124,21 +138,34 @@ public:
             : static_cast<std::size_t>(It - Boundary.begin()) - 1;
     }
 
-    // Ages the overlaps. Same dt as FTrain::Step, once per frame, not per block.
+    // Ages the overlaps. Same dt as FTrain::Step, ONCE PER FRAME — not per block
+    // and NOT PER TRAIN. Overlaps belong to blocks, so N calls a frame expire a
+    // 5 s overlap in 5/N seconds and nothing in here can tell.
     //
     // Deliberately does NOT re-guard the timestep: the single !(dt > 0.0) test in
     // FBlockController::Tick already rejects zero, negative and NaN, and a wrapper
     // that clamped or substituted a wall clock would defeat it.
     void Tick(double DeltaSeconds) { Blocks.Tick(DeltaSeconds); }
 
-    // The train's span, after FTrain::Step. Pass GetRearS() and GetFrontS().
+    // One train's span, after its FTrain::Step. Pass GetRearS() and GetFrontS().
     //
     // Returns false if a block was entered that was not CLEAR. That boolean is
     // the ONLY record a signalling violation leaves anywhere in this system
     // besides the counter, so a caller that drops it has silently disabled the
-    // one thing the interlocking exists to tell it.
-    bool Update(double RearS, double FrontS)
+    // one thing the interlocking exists to tell it. With two trains it is also
+    // the collision report, so dropping it means running a circuit with no
+    // interlocking at all and no symptom.
+    //
+    // An out-of-range train index denies rather than growing the list: a train
+    // this instance was not sized for has no occupancy anywhere, so admitting it
+    // would let it run the circuit invisibly.
+    bool Update(std::size_t Train, double RearS, double FrontS)
     {
+        if (Train >= Held.size())
+        {
+            return false;
+        }
+        FHeldRange& Me = Held[Train];
         if (FrontS < RearS)
         {
             std::swap(RearS, FrontS);
@@ -165,26 +192,38 @@ public:
         // "the day a second train exists". That was wrong, and measuring it said
         // so: with two trains the ordering is not what fails. IDENTITY is, and it
         // fails long before the ordering could matter — see the class comment.
+        //
+        // "Already held" is MY range, not the last-updated train's. That one word
+        // is the difference between reporting a collision and suppressing it.
         for (std::size_t b = NewTail; b <= NewNose; ++b)
         {
-            const bool bHeldAlready = bOccupies && b >= TailBlock && b <= NoseBlock;
+            const bool bHeldAlready = Me.bOccupies && b >= Me.Tail && b <= Me.Nose;
             if (!bHeldAlready)
             {
                 const bool bWasClear = Blocks.OnTrainEnter(b);
                 bOk = bOk && bWasClear;
             }
         }
-        if (bOccupies)
+        if (Me.bOccupies)
         {
-            for (std::size_t b = TailBlock; b <= NoseBlock; ++b)
+            for (std::size_t b = Me.Tail; b <= Me.Nose; ++b)
             {
-                if (b < NewTail || b > NewNose)
+                if (b >= NewTail && b <= NewNose)
                 {
-                    // Cannot report exit-without-entry: every block in the old
-                    // range was entered when it became the range. Asserted in the
-                    // test rather than branched on here.
-                    Blocks.OnTrainExit(b);
+                    continue;
                 }
+                // Leaving a block does not mean the block is empty. Another
+                // train standing in it keeps it OCCUPIED — without this test a
+                // train releases blocks it was never inside on another train's
+                // behalf, and one reads CLEAR with a train parked in it.
+                if (HeldByAnother(Train, b))
+                {
+                    continue;
+                }
+                // Cannot report exit-without-entry: every block in the old
+                // range was entered when it became the range. Asserted in the
+                // test rather than branched on here.
+                Blocks.OnTrainExit(b);
             }
         }
 
@@ -192,9 +231,9 @@ public:
         // never arms its overlap. At 60 Hz a 30 m/s train covers 0.5 m a frame,
         // so this needs a block shorter than that to matter. Step the range one
         // block at a time if block lengths ever approach a frame of travel.
-        TailBlock = NewTail;
-        NoseBlock = NewNose;
-        bOccupies = true;
+        Me.Tail = NewTail;
+        Me.Nose = NewNose;
+        Me.bOccupies = true;
         if (!bOk)
         {
             ++ViolationCount;
@@ -207,22 +246,25 @@ public:
     // thing a dispatch needs clear, which is exactly what FBlockController's
     // FromBlock form cannot express.
     //
-    // Blocks this train already holds are SKIPPED. FBlockController has no train
-    // identity and deliberately does not want one, so the exclusion belongs here,
-    // in the one layer that knows where the asking train is. Without it a train
+    // Blocks THE ASKING TRAIN already holds are SKIPPED. FBlockController has no
+    // train identity and deliberately does not want one, so the exclusion belongs
+    // here, in the one layer that knows where each train is. Without it a train
     // stopped short of the station denies its own dispatch through a block it is
     // standing in — and does so permanently, because nothing will ever clear it.
-    bool CanDispatchInto(std::size_t Block) const
+    // Keyed to the wrong train it does the opposite and grants entry into a block
+    // another train is sitting in.
+    bool CanDispatchInto(std::size_t Train, std::size_t Block) const
     {
         const std::size_t N = Blocks.NumBlocks();
-        if (N == 0 || Look == 0 || Look > N || Block >= N)
+        if (N == 0 || Look == 0 || Look > N || Block >= N || Train >= Held.size())
         {
             return false; // fail closed, the same direction as FBlockController
         }
+        const FHeldRange& Me = Held[Train];
         for (std::size_t i = 0; i < Look; ++i)
         {
             const std::size_t B = (Block + i) % N;
-            if (bOccupies && B >= TailBlock && B <= NoseBlock)
+            if (Me.bOccupies && B >= Me.Tail && B <= Me.Nose)
             {
                 continue;
             }
@@ -234,18 +276,76 @@ public:
         return true;
     }
 
+    // May the train standing at arc length S be let go? Its destination is simply
+    // the next block along, which is the two lines every caller was writing for
+    // itself — and the modulo is the one place a circuit is assumed rather than a
+    // point-to-point layout.
+    bool CanRelease(std::size_t Train, double S) const
+    {
+        const std::size_t N = Blocks.NumBlocks();
+        return N != 0 && CanDispatchInto(Train, (BlockAt(S) + 1) % N);
+    }
+
+    // Single-train forms, unchanged in meaning and kept because most of the
+    // project genuinely has one train. They DENY on a multi-train instance rather
+    // than aliasing to train 0 — a two-train caller that forgot its index would
+    // otherwise drive both trains through one slot and see no interlocking at
+    // all, which is precisely the failure this class was rewritten to end.
+    bool Update(double RearS, double FrontS)
+    {
+        return Held.size() == 1 && Update(0, RearS, FrontS);
+    }
+
+    bool CanDispatchInto(std::size_t Block) const
+    {
+        return Held.size() == 1 && CanDispatchInto(std::size_t{0}, Block);
+    }
+
     // Polling surface, for the block diagram and the signal lamps. There is no
     // change notification anywhere in FBlockController and none is added here.
     EBlockState GetState(std::size_t Block) const { return Blocks.GetState(Block); }
     double GetBufferRemaining(std::size_t Block) const { return Blocks.GetBufferRemaining(Block); }
     std::size_t Violations() const { return ViolationCount; }
 
+    // Any train at all. What a block lamp wants: a block does not care which
+    // train is standing in it.
     bool Occupies(std::size_t Block) const
     {
-        return bOccupies && Block >= TailBlock && Block <= NoseBlock;
+        for (std::size_t t = 0; t < Held.size(); ++t)
+        {
+            if (OccupiedBy(t, Block))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // That specific train. What a dispatcher wants, and the distinction the whole
+    // rewrite turns on.
+    bool OccupiedBy(std::size_t Train, std::size_t Block) const
+    {
+        if (Train >= Held.size())
+        {
+            return false;
+        }
+        const FHeldRange& H = Held[Train];
+        return H.bOccupies && Block >= H.Tail && Block <= H.Nose;
     }
 
 private:
+    bool HeldByAnother(std::size_t Train, std::size_t Block) const
+    {
+        for (std::size_t t = 0; t < Held.size(); ++t)
+        {
+            if (t != Train && OccupiedBy(t, Block))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     static std::vector<double> Repaired(std::vector<double> In)
     {
         std::sort(In.begin(), In.end());
@@ -257,15 +357,23 @@ private:
         return In;
     }
 
+    // The blocks one train spans, nose to tail. bOccupies is false only before
+    // that train's first Update — a train that has never been placed holds
+    // nothing, which is why the flag is not merely Tail <= Nose.
+    struct FHeldRange
+    {
+        std::size_t Tail = 0;
+        std::size_t Nose = 0;
+        bool bOccupies = false;
+    };
+
     std::vector<double> Boundary;
     FBlockController Blocks;
     std::size_t Look = 1;
+    std::vector<FHeldRange> Held;
 
-    // One train. Widen these three to vectors and add a train index to Update and
-    // CanDispatchInto the day a second FTrain exists; nothing else changes.
-    std::size_t TailBlock = 0;
-    std::size_t NoseBlock = 0;
-    bool bOccupies = false;
-
+    // Circuit-wide, not per train: a violation is an E-stop condition for the
+    // whole ride, and the pair of trains involved is not a thing either of them
+    // owns. Update's return says which train hit one.
     std::size_t ViolationCount = 0;
 };

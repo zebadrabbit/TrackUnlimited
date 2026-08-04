@@ -241,6 +241,185 @@ void TestKnownLimitBlockSkippedInOneStep()
     assert(S.Violations() == 0);
 }
 
+// Six 100 m blocks. Long enough that a 15 m train sits wholly inside one, so a
+// straddle is something a test asks for rather than something it trips over.
+std::vector<double> Wide() { return {0.0, 100.0, 200.0, 300.0, 400.0, 500.0}; }
+
+void TestTwoTrainsCannotShareABlock()
+{
+    // The case the old single-train version SUPPRESSED. "Already in this block"
+    // matched on the last train to call Update, so OnTrainEnter — the only
+    // function that can report a violation — never ran, and Violations() read 0
+    // with two trains confirmed co-resident.
+    FRideSignals S(Wide(), 0.0, 1, 2);
+    assert(S.NumTrains() == 2);
+
+    assert(S.Update(0, 210.0, 225.0));    // A wholly inside block 2
+    assert(S.GetState(2) == EBlockState::Occupied);
+
+    assert(!S.Update(1, 205.0, 220.0));   // B rolls in on top of it
+    assert(S.Violations() == 1);
+
+    // Physical truth still wins, exactly as with one train: the block reads
+    // OCCUPIED because trains really are inside it.
+    assert(S.GetState(2) == EBlockState::Occupied);
+    assert(S.OccupiedBy(0, 2));
+    assert(S.OccupiedBy(1, 2));
+}
+
+void TestATrainDoesNotReleaseAnothersBlock()
+{
+    // Co-residency needs a violation to set up — that is what co-residency IS.
+    // What is under test is the block state AFTERWARDS: the old exit loop walked
+    // "the" old range, so one train moving on released blocks it had never been
+    // in, and a block read CLEAR with a train parked in it.
+    FRideSignals S(Wide(), 0.0, 1, 2);
+
+    assert(S.Update(0, 290.0, 305.0));    // A straddles 2|3
+    assert(!S.Update(1, 310.0, 325.0));   // B into 3, which A holds
+    assert(S.Violations() == 1);
+
+    assert(S.Update(0, 250.0, 265.0));    // A backs off wholly into block 2
+    assert(S.GetState(3) == EBlockState::Occupied);   // B is still standing in it
+    assert(S.GetState(2) == EBlockState::Occupied);
+
+    // And it does release once the last train genuinely leaves.
+    assert(S.Update(1, 410.0, 425.0));
+    assert(S.GetState(3) == EBlockState::Clear);
+    assert(S.Violations() == 1);          // no new violation from either move
+}
+
+void TestPermissiveIsKeyedToTheAskingTrain()
+{
+    FRideSignals S(Wide(), 0.0, 1, 2);
+
+    assert(S.Update(1, 5.0, 20.0));       // B in the station, block 0
+    assert(S.Update(0, 105.0, 120.0));    // A ahead in block 1 — and A updated LAST
+
+    // THE FAIL-OPEN THIS REPLACED. With one shared range, "skip blocks the asking
+    // train holds" read as "skip blocks the LAST train to update holds", so asked
+    // on B's behalf it skipped A's block as B's own and GRANTED B entry into a
+    // block A was standing in.
+    assert(!S.CanDispatchInto(1, 1));
+    assert(!S.CanRelease(1, 15.0));
+
+    // And the exclusion still does its real job: A must not be denied its own
+    // dispatch by the block A is standing in, or nothing ever clears it.
+    assert(S.CanDispatchInto(0, 1));
+    assert(S.CanRelease(0, 112.0));       // into block 2, which is clear
+
+    // Once A moves on, B goes.
+    assert(S.Update(0, 210.0, 225.0));
+    assert(S.CanRelease(1, 15.0));
+    assert(S.Violations() == 0);
+}
+
+void TestCanReleaseWrapsTheCircuit()
+{
+    // The one place a circuit is assumed rather than a point-to-point layout:
+    // a train in the last block is released into the first.
+    FRideSignals S(Wide(), 0.0, 1, 2);
+    assert(S.Update(0, 510.0, 525.0));    // A in the last block, 5
+    assert(S.CanRelease(0, 515.0));       // -> block 0, clear
+
+    assert(S.Update(1, 5.0, 20.0));       // B now sitting in block 0
+    assert(!S.CanRelease(0, 515.0));
+    assert(S.Violations() == 0);
+}
+
+void TestSingleTrainFormsDenyRatherThanAlias()
+{
+    // A two-train caller that forgets its index would otherwise drive both trains
+    // through slot 0 and see no interlocking at all — the exact failure this class
+    // was rewritten to end. Deny instead, and change nothing while denying.
+    FRideSignals S(Wide(), 0.0, 1, 2);
+    assert(!S.Update(0.0, 15.0));
+    assert(!S.CanDispatchInto(1));
+    assert(S.GetState(0) == EBlockState::Clear);
+    assert(!S.Occupies(0));
+    assert(S.Violations() == 0);          // a denial is not a signalling violation
+
+    // On a one-train instance they are the three-argument calls, unchanged. Every
+    // other test in this file is that assertion.
+    FRideSignals One(Wide(), 0.0, 1);
+    assert(One.NumTrains() == 1);
+    assert(One.Update(0.0, 15.0));
+    assert(One.CanDispatchInto(1));
+}
+
+void TestUnknownTrainDenies()
+{
+    // A train this instance was not sized for has occupancy nowhere, so admitting
+    // it would let it run the circuit invisibly. Fail closed, like everything else.
+    FRideSignals S(Wide(), 0.0, 1, 2);
+    assert(!S.Update(2, 0.0, 15.0));
+    assert(!S.CanDispatchInto(2, 1));
+    assert(!S.CanRelease(2, 15.0));
+    assert(!S.OccupiedBy(2, 0));
+    assert(S.GetState(0) == EBlockState::Clear);
+
+    // Zero trains would deny every update and every permissive for the life of
+    // the ride, with nothing anywhere saying why.
+    const FRideSignals Zero(Wide(), 0.0, 1, 0);
+    assert(Zero.NumTrains() == 1);
+}
+
+void TestOccupiesIsPerBlockAndPerTrain()
+{
+    FRideSignals S(Wide(), 0.0, 1, 2);
+    assert(S.Update(0, 105.0, 120.0));
+    assert(S.Update(1, 310.0, 325.0));
+
+    // A lamp asks about the block; a dispatcher asks about the train.
+    assert(S.Occupies(1) && S.Occupies(3));
+    assert(!S.Occupies(2));
+    assert(S.OccupiedBy(0, 1) && !S.OccupiedBy(1, 1));
+    assert(S.OccupiedBy(1, 3) && !S.OccupiedBy(0, 3));
+}
+
+void TestTwoTrainsRoundACircuitCleanly()
+{
+    // The whole point: two trains, a lap each, one block apart, and nothing to
+    // report. Trains only move when their own permissive grants, which is the
+    // policy a dispatcher implements — asserted here on bare numbers so it is
+    // pinned without FTrain.
+    FRideSignals S(Wide(), 0.0, 2, 2);
+    const double Len = 15.0, Total = 600.0, Step = 30.0;
+    double At[2] = {0.0, 540.0};          // B one block behind A, on its heels
+    int Holds = 0, Moves = 0;
+
+    for (int Frame = 0; Frame < 400; ++Frame)
+    {
+        for (std::size_t t = 0; t < 2; ++t)
+        {
+            double Next = At[t] + Step;
+            if (Next >= Total)
+            {
+                Next -= Total;            // the lap seam, tail and all
+            }
+            // A quarter of a block a step, so nothing is ever skipped whole, and
+            // a train asks only when its nose is about to change block.
+            const std::size_t Ahead = S.BlockAt(Next + Len);
+            if (Ahead != S.BlockAt(At[t] + Len) && !S.CanDispatchInto(t, Ahead))
+            {
+                ++Holds;
+                continue;
+            }
+            At[t] = Next;
+            assert(S.Update(t, At[t], At[t] + Len));
+            ++Moves;
+        }
+        S.Tick(1.0);                      // once per FRAME, not once per train
+    }
+
+    // Not vacuous: B really was held at a signal, repeatedly, and both trains
+    // really did keep running. A version that granted everything would still
+    // report zero violations here, so the hold count is the assertion that bites.
+    assert(S.Violations() == 0);
+    assert(Holds > 0);
+    assert(Moves > 600);
+}
+
 } // namespace
 
 int main()
@@ -256,6 +435,15 @@ int main()
     TestDispatchPermissive();
     TestDispatchFailsClosed();
     TestKnownLimitBlockSkippedInOneStep();
+
+    TestTwoTrainsCannotShareABlock();
+    TestATrainDoesNotReleaseAnothersBlock();
+    TestPermissiveIsKeyedToTheAskingTrain();
+    TestCanReleaseWrapsTheCircuit();
+    TestSingleTrainFormsDenyRatherThanAlias();
+    TestUnknownTrainDenies();
+    TestOccupiesIsPerBlockAndPerTrain();
+    TestTwoTrainsRoundACircuitCleanly();
 
     std::printf("test_ridesignals: all assertions passed\n");
     return 0;

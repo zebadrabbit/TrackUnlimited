@@ -191,6 +191,22 @@ public:
 	float TrainLengthM = 15.f;
 
 	/**
+	 * How many trains to run.
+	 *
+	 * CLAMPED BY THE LAYOUT, not by this number: a train needs somewhere to stand
+	 * that can both stop it and start it again, so the ceiling is the count of
+	 * hold-capable zones — drive tyres and block brakes, never trim brakes. Ask
+	 * for more than the track can park and the extras are refused, with a log line
+	 * saying so, because the alternative is a train materialising on open course
+	 * with nothing able to hold it.
+	 *
+	 * Only the two-train preset has more than one. The other three have a station
+	 * and a trim brake, which is one place to stand.
+	 */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited", meta = (ClampMin = "1", UIMax = "4"))
+	int32 TrainCount = 1;
+
+	/**
 	 * Let a train that runs out of energy roll BACK down the hill instead of
 	 * stopping dead where it ran out.
 	 *
@@ -240,17 +256,30 @@ private:
 
 	// Not UPROPERTYs: plain C++ with no reflection needed, and deliberately so.
 	FTrack Track;
-	TUniquePtr<FTrain> Train;
 
-	// Rebuilt wholesale alongside Train, for the same reason: block boundaries
-	// come off the segment list, so an edit to the track is an edit to the
-	// blocks. Null only if the track failed to build at all.
+	// Index 0 is the RIDER'S train — the one the camera rides and the readout
+	// describes. Every other train is simulated identically and drawn, but nothing
+	// on screen reports it.
+	TArray<TUniquePtr<FTrain>> Trains;
+
+	// Rebuilt wholesale alongside the trains, for the same reason: block
+	// boundaries come off the segment list, so an edit to the track is an edit to
+	// the blocks. Null only if the track failed to build at all.
 	TUniquePtr<FRideSignals> Signals;
 
-	// Held at the station until the permissive says otherwise. This is the ONE
-	// place the interlock actually bites in the slice: while it is set the train
-	// is not stepped at all, so the station zone cannot pull it away.
-	bool bAwaitingDispatch = true;
+	// The AUTHORED target of each zone, by zone index, kept because a holding
+	// device's live target is overwritten to zero whenever its signal is red — so
+	// this is the only remaining record of what it should release at.
+	TArray<double> ZoneReleaseSpeed;
+
+	// Which of those zones can HOLD a train — both push and hold, so drive tyres
+	// and block brakes, never a trim brake or a launch. Also the list of places a
+	// train may be parked, which is what caps how many trains the layout runs.
+	TArray<int32> HoldZoneIndices;
+
+	// Seconds each train has been at rest in the last block, for the teleport back
+	// to the station. Per train, because they arrive at different times.
+	TArray<float> StoppedForS;
 
 	// Generic track cross-section: gauge, rail and spine dimensions, tie
 	// spacing. Defaults sit mid-range for real steel coaster track. Model a
@@ -265,7 +294,11 @@ private:
 	// track on the ground instead of half through it. Computed on rebuild,
 	// because it depends on the whole layout.
 	double GroundOffsetM = 0.0;
-	float StoppedFor = 0.f;
+
+	// Commands every holding device under a train: open to its authored release
+	// speed while the permissive grants, closed to zero otherwise. Brakes-on is
+	// the resting state, so a device that nobody serves stays shut.
+	void ServeHolds(std::size_t TrainIndex);
 
 	// Chase camera state. Smoothed in world space rather than recomputed from
 	// the track, so it lags the way a following camera should and needs no

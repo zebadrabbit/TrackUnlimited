@@ -217,8 +217,20 @@ A true helix comes out of this integrator only from yaw and pitch of constant ma
 > `WorldBank` is resolved per sample in `FTrack::Finish` rather than baked in when typed. Until then,
 > `Helix` is authorable as a lone segment and composable only from C++.
 
-**Two trains today means no interlocking at all, and it fails silently (2026-08-03).** `FRideSignals`
-tracks one train. Its own comment said to widen three members to vectors and that "nothing else
+**Two trains meant no interlocking at all, and it failed silently — FIXED 2026-08-03.** Kept in full
+because the three failures below are what the fix is *shaped by*, and any future change to
+`FRideSignals` has to keep clearing them. Each is now a named test in `test_ridesignals.cpp`, and all
+three were confirmed to bite by mutation: reverting the identity check in the exit loop, in the entry
+test, or in the permissive each kills exactly one test and no others.
+
+The fix is a train index on `Update` and `CanDispatchInto`, a per-train held range, and one new rule —
+**a block is released only when no OTHER train's range covers it**. The single-argument forms survive
+for the layouts that genuinely run one train, and they *deny* on a multi-train instance rather than
+aliasing to train 0, because a two-train caller that forgot its index would otherwise drive both
+trains through one slot and reproduce the whole failure. What follows is what it replaced.
+
+`FRideSignals`
+tracked one train. Its own comment said to widen three members to vectors and that "nothing else
 changes" — that is right about the storage and wrong about the meaning. Both obvious ways to run two
 trains were measured and **neither reports anything**: no denial, no violation, no counter.
 
@@ -239,6 +251,37 @@ Two corrections fall out. The enters-before-exits ordering was commented as "the
 second train exists" — **it is not what fails**; identity fails first and fails harder. And `Tick`
 acquires a contract it never needed: **once per frame, not once per train**, or a 5 s overlap expires
 in 2.5 s with two trains and nothing says so.
+
+**A holding device needs BOTH authorities, and the mid-course brake has neither the length nor the
+tyres (2026-08-03).** Two separate facts, both measured, and together they decide where a train may be
+parked on the two-train preset.
+
+First, the device. `MakeBrake` has `MaxAccel = 0` and `MakeLaunch` has `MaxDecel = 0`, so a friction
+brake can stop a train and never release it, and a launch can release one and never stop it. Only a
+drive-tyre run — `MakeLift`'s shape — has both. `FTrain::FindHoldZoneAt` therefore requires both and
+returns −1 for the other two, which is why gating a launch mid-launch (an *aborted* launch, the
+opposite of an interlock) and parking a train on a trim brake (a permanent stop with no symptom) are
+both unreachable rather than merely discouraged. The actor gained `ETUSegmentZone::BlockBrake` for
+this: identical physics to a lift chain, separate enumerator because block boundaries fall where the
+*kind* changes and two holding devices in a row must stay two blocks.
+
+Second, the length, which no zone kind can fix. A block brake must stop the train in the block it
+occupies: `v²/2a` against the block length. On the two-train preset, measured per block at the fixed
+6 m/s² grip —
+
+| block | device | length | arrives | needs to stop | verdict |
+|---|---|---|---|---|---|
+| 3 | mid-course | 45.00 m | 28.19 m/s | **66.2 m** | trim only |
+| 5 | outer pre-station | 37.50 m | 7.57 m/s | 4.8 m | holds |
+| 6 | transfer tyres | 27.00 m | 4.28 m/s | 1.5 m | holds |
+| 7 | inner pre-station | 37.50 m | 3.25 m/s | 0.9 m | holds |
+
+So the mid-course brake is authored `Brake` and stays a trim. Making it a `BlockBrake` would build a
+device that closes and is then run straight through — **worse than a trim, because it would look like
+an interlock.** Lengthening the block past ~70 m is what would make it one, and that is a layout
+change with its own re-measurement, not an enum change. This is also the cap on train count: the
+number of trains a layout can run is the number of places that can both hold a train and release it,
+which is four here and one on every other preset.
 
 **A block brake holds on a gradient exactly, and the physics needed nothing (2026-08-03).** This was
 an open question on the block-brake card and the answer is a clean one. A brake zone commanded to

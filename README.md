@@ -78,11 +78,15 @@ Not "train present / absent". Each block is a state machine that withholds CLEAR
 safety overlap after a train has physically left it — the real-railway *overlap* concept. A train
 occupies a *range* of blocks, nose to tail, so it holds two while it straddles a boundary.
 
-That is wired to the ride, not just to a test: the station will not release until the permissive
-grants, and on the reference layout it visibly holds for the five seconds the brake block takes to
-give up its overlap. Manual dispatch is designed but not built — the interlocks are meant to apply
-identically whichever way the timing is decided, which is precisely why manual is not a second code
-path.
+**Two trains run one circuit, interlocked.** A train is held by commanding the device under it to
+zero, never by declining to simulate it — so a station is not a special case, and a block brake holds
+a train mid-course while the block ahead is occupied and releases it when it clears. Where a train may
+be held is itself checked: a friction brake can stop a train and never start one, a launch can start
+one and never stop one, and a block that is too short to stop what it receives is a trim brake
+whatever it is labelled.
+
+Manual dispatch is designed but not built — the interlocks are meant to apply identically whichever
+way the timing is decided, which is precisely why manual is not a second code path.
 
 → [`Docs/SIGNALLING.md`](Docs/SIGNALLING.md)
 
@@ -122,7 +126,8 @@ actor over the top:
 | Undo / redo | snapshots, with the save format as identity |
 | Train physics | energy-exact motion, zones, a train with length |
 | Ride profile | the whole ride measured at edit time |
-| Block signalling | state machine, overlap, permissives — and a running train that trips them |
+| Block signalling | state machine, overlap, permissives — and **two** running trains that trip them |
+| Block brakes | hold, and release on a permissive — with the layout checked for whether it *can* stop a train there |
 | NL2 interop | CSV and live telemetry — validation fixtures, not an authoring path |
 | Starter layouts | four worked examples of the vocabulary, each measured before shipping |
 | In-engine slice | builds against UE 5.8, rides, reads out speed, G and block state |

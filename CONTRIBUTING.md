@@ -23,7 +23,7 @@ cd Prototypes/BlockSignal
 clang++ -std=c++17 -Wall -Wextra -o test_blocksignal test_blocksignal.cpp && ./test_blocksignal
 ```
 
-Same shape for `Prototypes/TrackSpline` and `Prototypes/TrainPhysics`. Run from inside the prototype's own directory — the tests include their headers by relative path. Tests are plain `assert`s with no framework; add to the existing file and call your function from `main`.
+Same shape for `Prototypes/TrackSpline` and `Prototypes/TrainPhysics`. Run from inside the prototype's own directory — the tests include their headers by relative path. Tests are plain `assert`s with no framework; add to the existing file and call your function from `main`. `BlockSignal` and `TrainPhysics` each hold two suites (`test_blocksignal`/`test_ridesignals`, `test_trainphysics`/`test_twotrains`); build them separately.
 
 `BlockSignal` and `TrackSpline` finish in well under a second. `TrainPhysics` takes about 6, because it simulates tens of thousands of ticks and each one evaluates the track — pass `-O2` if you are iterating on it.
 

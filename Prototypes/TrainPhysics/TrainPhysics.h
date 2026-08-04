@@ -169,6 +169,66 @@ public:
         return true;
     }
 
+    // Retarget a zone while the ride is running. This is the whole difference
+    // between a fixed trim brake and a BLOCK brake: a block brake holds at zero
+    // until the signalling grants a permissive, then releases.
+    //
+    // Validated on the same term AddZone validates, so a NaN cannot arrive
+    // through the back door and land in the energy accounting — where it would
+    // spread to speed, distance and every frame after it.
+    bool SetZoneTargetSpeed(std::size_t Index, double Speed)
+    {
+        if (Index >= Zones.size() || !(Speed >= 0.0))
+        {
+            return false;
+        }
+        Zones[Index].TargetSpeed = Speed;
+        return true;
+    }
+
+    // Its current target, or negative if there is no such zone — so a dispatcher
+    // can stash the authored speed it is about to overwrite without a second
+    // bounds check, and put it back on release.
+    double GetZoneTargetSpeed(std::size_t Index) const
+    {
+        return Index < Zones.size() ? Zones[Index].TargetSpeed : -1.0;
+    }
+
+    // The zone at S that can both STOP a train and START it again — brakes with
+    // drive tyres, which is what a real block brake is. -1 if there is none.
+    //
+    // BOTH authorities are required, and each exclusion is the point of the
+    // function rather than a detail of it:
+    //
+    //   MaxDecel 0 is a LAUNCH. It can push and cannot hold, so commanding it to
+    //   zero does not stop a train — it only declines to push one that is already
+    //   moving. Gating a launch mid-launch aborts it, which is the opposite of an
+    //   interlock.
+    //
+    //   MaxAccel 0 is a FRICTION BRAKE. It can stop a train and can NEVER release
+    //   it. Park a train there and it stands for the rest of the session, with no
+    //   symptom but a ride that quietly stopped.
+    //
+    // So a dispatcher asks this rather than "which zone is S in": a trim brake is
+    // not somewhere you may hold a train, however convenient its arc length looks.
+    //
+    // Whether the device can stop the train in the length available is a separate
+    // question, and one only the layout can answer — v^2/2a against the block
+    // length. On the two-train preset the mid-course brake fails it (28.19 m/s
+    // arriving, 66.2 m needed, 45 m available) and is a trim, not a block brake.
+    int FindHoldZoneAt(double S) const
+    {
+        for (std::size_t i = 0; i < Zones.size(); ++i)
+        {
+            if (S >= Zones[i].StartS && S <= Zones[i].EndS
+                && Zones[i].MaxAccel > 0.0 && Zones[i].MaxDecel > 0.0)
+            {
+                return static_cast<int>(i);
+            }
+        }
+        return -1;
+    }
+
     void Place(double S, double Speed)
     {
         DistanceAlong = std::max(0.0, std::min(Track.TotalLength(), S));
