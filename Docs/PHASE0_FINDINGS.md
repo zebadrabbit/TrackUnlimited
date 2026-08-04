@@ -394,11 +394,31 @@ Two things worth stating plainly, because they are what a ride designer would re
 - **What counts as a block here is narrow.** A launch cannot stop a train; a trim brake cannot release
   one. Neither is a boundary for capacity however much hardware is bolted to it. Only drive-tyre runs
   and block brakes.
-- **Sections buy trains, and trains buy capacity.** That is why a real high-throughput ride is carved
-  into *many* block sections rather than given longer trains — a layout with dozens of them can run a
-  lot of small vehicles at short headway. It also says exactly how to raise this circuit's capacity:
-  every block brake added is one more train, and the geometry already has 696 m and 184 m of free run
-  with nothing in them.
+- **Sections buy trains, and trains buy capacity.** That is why a high-throughput ride is carved into
+  *more* block sections rather than given longer trains. It also says exactly how to raise this
+  circuit's capacity: every block brake added is one more train, and the geometry already has 696 m
+  and 184 m of free run with nothing in them.
+
+**But do not read a real ride's brake count as its block count (2026-08-04).** Three different things
+sit on the track and all of them look like "a brake":
+
+| | What it is for | Bounds a block? |
+|---|---|---|
+| **Block brake** | Interlocking: stop, hold, release on a permissive | **yes**, and only this one |
+| **Evacuation zone** | Getting *riders off* — needs walkway, access, an egress route | no |
+| **Safety catch** | Rollback or a defect; passive, fails closed | no |
+
+A large ride can have on the order of **25 evacuation zones** and a handful of catch brakes while
+running far fewer trains than that. Those counts answer *"can everyone get off safely"* and *"what
+happens when something fails"*, not *"how many trains fit"*. Only the first row feeds the formula
+above, and an earlier version of this page implied otherwise.
+
+**None of the other two is modelled.** `FTrackZone` describes powered track and nothing else — no
+evacuation zone, no walkway, no anti-rollback device. The gap that bites first is the catch:
+`FTrainConfig::bAllowRollback` simulates a train running backwards and **nothing catches it**, because
+a catch is hardware the vocabulary cannot describe. A rollback is reported by `FRideProfile` and then
+simply continues, which is the honest behaviour for a model with no such device in it — but it means
+the one failure mode the physics *can* produce has no safety system standing in front of it.
 
 **A closed circuit reports its own seam as a self-intersection (2026-08-04).** `AnalyseSelfClearance`
 skips sample pairs close together *along* the track, measured linearly. On a circuit the first and

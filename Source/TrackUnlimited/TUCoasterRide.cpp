@@ -237,12 +237,19 @@ TArray<FTUTrackSegment> ATUCoasterRide::TwoTrainCircuitLayout()
 	// drives it on bare numbers because capacity is a signalling property with
 	// nothing to do with geometry.
 	//
-	// It is also why a high-throughput ride is built with MANY block sections
-	// rather than a longer train: sections buy trains, and trains buy capacity. A
-	// ride with dozens of them runs a lot of small vehicles at short headway. This
-	// preset has five and runs four; every other one has a station and a trim
+	// It is also why a high-throughput ride is built with MORE block sections
+	// rather than a longer train: sections buy trains, and trains buy capacity.
+	// This preset has five and runs four; every other one has a station and a trim
 	// brake — and a trim cannot let a train go again — so they have ONE, and one
 	// place is one train, always.
+	//
+	// Do NOT read a real ride's brake count as its block count. Three different
+	// things sit on the track and all look like a brake: BLOCK BRAKES, which are
+	// these; EVACUATION ZONES, which are about getting riders off and need a
+	// walkway rather than just a way to stop; and SAFETY CATCHES for rollback or a
+	// defect. A large ride can have ~25 of the second and a handful of the third
+	// while running far fewer trains than either count. Only block brakes feed the
+	// formula, and neither of the other two is modelled at all — see SIGNALLING.md.
 	//
 	// The approach is TWO brake blocks with drive tyres between, not one long
 	// brake, and both halves of that matter. Two adjacent Brake runs MERGE into a

@@ -427,10 +427,15 @@ void TestCapacityIsHoldingBlocksMinusOne()
     // go again. One has to stay empty, or every train is standing exactly where
     // the train behind it needs to go and the ring cannot rotate.
     //
-    // It is the reason a high-throughput ride is built with MANY block sections
+    // It is the reason a high-throughput ride is built with MORE block sections
     // rather than a longer train: sections are what buy trains, and trains are
-    // what buy capacity. A ride with forty of them can run a lot of small
-    // vehicles at short headway; this circuit has five and runs four.
+    // what buy capacity. This circuit has five and runs four.
+    //
+    // Careful with a real ride's numbers, though: its brake count is usually not
+    // its block count. Evacuation zones (getting riders OFF, which needs a
+    // walkway) and safety catches (rollback, defects) are separate things that
+    // also look like brakes, and a large ride can have ~25 of the former while
+    // running far fewer trains. Only block brakes count here.
     //
     // Driven on bare numbers, because capacity is a signalling property and has
     // nothing to do with geometry or physics — the same rule has to hold for a

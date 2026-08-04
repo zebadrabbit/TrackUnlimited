@@ -128,14 +128,35 @@ Note what counts. A **launch** cannot stop a train and a **trim brake** cannot r
 is a block boundary for this purpose however much hardware is bolted to it. Only drive-tyre runs and
 block brakes count.
 
-That is also the reason real high-throughput rides are built with **many block sections** rather than
-longer trains: sections buy trains, and trains buy capacity. A ride carved into dozens of them can run
-a lot of small vehicles at short headway, which is exactly the trade a low-payload high-frequency
-layout wants. The two-train preset has five holding blocks and runs four; the other three presets have
-a station and a trim brake, so they have one, and one place is one train.
+That is also the reason a high-throughput ride is built with **more block sections** rather than
+longer trains: sections buy trains, and trains buy capacity. The two-train preset has five holding
+blocks and runs four; the other three presets have a station and a trim brake, so they have one, and
+one place is one train.
 
-Asking for more than the layout can carry is refused with a log line rather than granted onto open
-course.
+## Three different things that all look like "a brake on the track"
+
+Worth separating, because the count a real ride quotes is usually **not** its block count, and
+conflating them makes a layout look like it should carry far more trains than it can.
+
+| | What it is for | Does it bound a block? |
+|---|---|---|
+| **Block brake** | Interlocking. Stop a train, hold it, release it on a permissive. | **Yes** — this is the only one that does |
+| **Evacuation zone** | Getting *riders off*. Needs walkway, access, egress route — not just a way to stop. | No |
+| **Safety catch** | Rollback, or a defect. Passive, and fails closed. | No |
+
+A large ride can have on the order of **25 evacuation zones** and a handful of catch brakes while
+running far fewer trains than that, because those counts answer *"can everyone get off safely"* and
+*"what happens when something fails"*, not *"how many trains fit"*. Only the first row feeds the
+capacity formula.
+
+**None of this is modelled yet.** `FTrackZone` describes powered track and nothing else: there is no
+evacuation zone, no walkway, no anti-rollback device. The gap that bites first is the third row —
+`FTrainConfig::bAllowRollback` simulates a train running backwards, and **nothing anywhere catches
+it**, because a catch is hardware the vocabulary cannot describe. Today a rollback is reported by the
+ride profile and then simply continues.
+
+Asking for more trains than the layout can carry is refused with a log line rather than granted onto
+open course.
 
 Holding devices rest **closed**. A device that opens because nobody is asking is a device that fails
 open, so the resting state is brakes-on and a permissive is what opens one — for the frames it is
