@@ -910,6 +910,41 @@ int main()
     TestTheCircuitCarriesFourTrains();
     TestTheActorsOwnLoopRunsTwoTrains();
 
-    std::printf("test_twotrains: all assertions passed\n");
+    // The canonical figures, printed rather than only asserted, because the docs
+    // quote them and CLAUDE.md's rule is that a number should come from running
+    // something. Same job reference_figures.cpp does for the reference layout.
+    {
+        const FCircuit C = BuildCircuit(nullptr);
+        const FTrack T = BuildTrack(C.Doc);
+        const double Total = T.TotalLength();
+        FTrainConfig Cfg;
+        Cfg.TrainLength = TrainLen;
+        FTrain Tr(T, Cfg);
+        BuildCircuit(&Tr);
+        const FRideProfile P = RunRideProfile(Tr, T, 1.0);
+        const FTrackProfile Cross;
+        const FClearanceReport Cl = AnalyseSelfClearance(T, Cross, 0.5, 12.0, true);
+        const FTrackFrame A = T.EvaluateAt(0.0);
+        const FTrackFrame B = T.EvaluateAt(Total);
+
+        double Crest = 0.0;
+        for (const FRideSample& S : P.Samples) { Crest = std::max(Crest, S.Height); }
+
+        std::printf("\nTWO-TRAIN CIRCUIT, measured from the layout above\n");
+        std::printf("  %zu segments, %.2f m, C2 %s\n", T.NumSegments(), Total,
+                    T.IsCurvatureContinuous(1e-9) ? "yes" : "NO");
+        std::printf("  seam %.6f m, %.6f deg heading, %.6f deg roll\n",
+                    Length(B.Position - A.Position),
+                    std::acos(std::min(1.0, Dot(B.Tangent, A.Tangent))) * 180.0 / Pi,
+                    std::fabs(B.Roll - A.Roll) * 180.0 / Pi);
+        std::printf("  top %.1f km/h   vertical %+.2f .. %+.2f   lateral %.2f\n",
+                    P.TopSpeed * 3.6, P.MinVerticalG, P.MaxVerticalG, P.MaxAbsLateralG);
+        std::printf("  crest %.1f m   clearance %.2f m   peak roll rate %.1f deg/s   %.0f s\n",
+                    Crest, Cl.ClosestApproach, P.MaxAbsRollRate, P.Duration);
+        std::printf("  %zu blocks, %zu of them able to hold a train, so %zu trains\n",
+                    C.Boundaries.size(), C.HoldMidS.size(), C.HoldMidS.size() - 1);
+    }
+
+    std::printf("\ntest_twotrains: all assertions passed\n");
     return 0;
 }

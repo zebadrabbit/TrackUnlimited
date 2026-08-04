@@ -57,7 +57,7 @@ What is actually worth starting on:
 
 **A circuit closes by SHAPE, not by solver, and the shape is load-bearing.** An oval closes analytically when both turns are the same way, exactly 180°, same radius, same easement; the only condition left is that the return leg's horizontal extent equals the two collinear outbound legs'. That condition means **every metre spent outbound is paid for twice**, which is why the turnaround sits at the top of the hill rather than at each end — measured, the obvious layout came to 1717 m and stalled in every variant. See `PHASE0_FINDINGS.md`.
 
-Before quoting any number from this project, check whether something already measures it — `reference_figures.cpp` for the layout, the assert suites for the models, `PHASE0_FINDINGS.md` for what has already been disproved. Several plausible fixes on that page were measured and rejected, and re-proposing one without saying why yours differs wastes everybody's time.
+Before quoting any number from this project, check whether something already measures it — `reference_figures.cpp` for the reference layout, `test_twotrains.cpp` for the closed circuit (it prints its canonical figures on the way out), the assert suites for the models, `PHASE0_FINDINGS.md` for what has already been disproved. Several plausible fixes on that page were measured and rejected, and re-proposing one without saying why yours differs wastes everybody's time.
 
 ## Phase 0 — Prototype (complete)
 

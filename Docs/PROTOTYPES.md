@@ -90,6 +90,18 @@ compiled without Unreal and its dispatch policy has nowhere else to be checked: 
 both trains circulating through the seam under their own power, no deadlock, no shared block, zero
 violations. **Change the actor's tick order and change that test with it.**
 
+It also **prints the circuit's canonical figures** on the way out, the same job
+`reference_figures.cpp` does for the reference layout — so a number quoted anywhere about this preset
+can be checked by running one thing:
+
+```
+30 segments, 1288.02 m, C2 yes
+seam 0.000000 m, 0.000084 deg heading, 0.000000 deg roll
+top 136.8 km/h   vertical -0.53 .. +3.08   lateral 0.15
+crest 48.5 m   clearance 11.68 m   peak roll rate 17.4 deg/s   105 s
+8 blocks, 5 of them able to hold a train, so 4 trains
+```
+
 ## `BlockSignal/` — signalling
 
 The `CLEAR → OCCUPIED → BUFFER(x) → CLEAR` state machine and the dispatch permissive logic, with unit
