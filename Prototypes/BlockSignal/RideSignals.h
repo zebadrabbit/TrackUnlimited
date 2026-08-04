@@ -112,6 +112,28 @@ public:
         }
     }
 
+    // Which blocks contain a device that can bring a train to a STOP and let it go
+    // again — the drive-tyre runs and block brakes, one bool per block, in block
+    // order. Optional: without it the permissive falls back to the fixed lookahead
+    // count, which is what every caller did before this existed.
+    //
+    // THIS IS THE BRAKING-DISTANCE RULE, finally expressed. A train let into a
+    // block with no device in it is COMMITTED — there is nothing in there to stop
+    // it — so the permissive has to guarantee clearance all the way to the next
+    // block that can hold it, however many that is. A fixed count cannot say that:
+    // it is a guess at a distance, and on a layout whose free run is 696 m and
+    // whose next is 184 m, no single number is right for both.
+    //
+    // MEASURED on the two-train circuit: with a fixed lookahead, four trains
+    // collide (14 violations at lookahead 1, 18 at lookahead 2) because a train is
+    // granted a free block and finds the one beyond it occupied on arrival. With
+    // this, the same four run clean.
+    void SetHoldingBlocks(std::vector<bool> InCanHold)
+    {
+        CanHold = std::move(InCanHold);
+        CanHold.resize(Blocks.NumBlocks(), false);
+    }
+
     // Ascending, unique, starting at 0.0, at least one entry. Free to call before
     // constructing, so a caller can surface bad input rather than have it quietly
     // repaired underneath them.
@@ -286,19 +308,28 @@ public:
             return false; // fail closed, the same direction as FBlockController
         }
         const FHeldRange& Me = Held[Train];
-        for (std::size_t i = 0; i < Look; ++i)
+
+        // Every block from the destination up to and including the first one that
+        // can HOLD the train, and never fewer than Lookahead. Without a holding
+        // list this is exactly the old fixed count.
+        for (std::size_t i = 0; i < N; ++i)
         {
             const std::size_t B = (Block + i) % N;
-            if (Covers(Me, B))
-            {
-                continue;
-            }
-            if (Blocks.GetState(B) != EBlockState::Clear)
+            if (!Covers(Me, B) && Blocks.GetState(B) != EBlockState::Clear)
             {
                 return false;
             }
+            const bool bFarEnough = i + 1 >= Look;
+            const bool bCanStopHere = CanHold.empty() || CanHold[B];
+            if (bFarEnough && bCanStopHere)
+            {
+                return true;
+            }
         }
-        return true;
+        // Walked the whole circuit without finding anywhere to stop. A layout with
+        // no holding device at all can only ever run one train, and it is the
+        // train already on it, so deny.
+        return false;
     }
 
     // May the train standing at arc length S be let go? Its destination is simply
@@ -432,6 +463,11 @@ private:
     std::size_t Look = 1;
     std::vector<FHeldRange> Held;
     bool bCircuit = false;
+
+    // Empty means "not told", and the permissive then uses the fixed lookahead
+    // alone. Not defaulted to all-false, because that would mean "nowhere can hold
+    // a train" and deny every dispatch for ever.
+    std::vector<bool> CanHold;
 
     // Circuit-wide, not per train: a violation is an E-stop condition for the
     // whole ride, and the pair of trains involved is not a thing either of them

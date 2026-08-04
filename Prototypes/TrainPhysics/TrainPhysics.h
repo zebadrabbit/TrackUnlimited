@@ -204,6 +204,14 @@ public:
         return Index < Zones.size() ? Zones[Index].TargetSpeed : -1.0;
     }
 
+    // The zone itself, by value, with a degenerate one for a bad index rather than
+    // a reference into the vector — a dispatcher wants its span to work out WHERE
+    // to stop a train, and a dangling reference is a poor reward for asking.
+    FTrackZone GetZone(std::size_t Index) const
+    {
+        return Index < Zones.size() ? Zones[Index] : FTrackZone{};
+    }
+
     // The zone at S that can both STOP a train and START it again — brakes with
     // drive tyres, which is what a real block brake is. -1 if there is none.
     //

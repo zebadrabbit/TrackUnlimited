@@ -161,16 +161,22 @@ public:
 	float BlockBufferSeconds = 5.f;
 
 	/**
-	 * How many blocks must be clear ahead before the station releases.
+	 * EXTRA headway, in whole blocks, on top of the braking requirement.
 	 *
-	 * This is the braking-distance requirement expressed in whole blocks, which
-	 * is the only form of it that exists — nothing here computes a stopping
-	 * distance. Clamped internally to one less than the block count, since a
-	 * full-circuit lookahead would include the asking train's own block.
+	 * It used to BE the braking requirement — "clear N blocks ahead" as a stand-in
+	 * for a stopping distance nothing computed. That is now derived instead: the
+	 * signalling is told which blocks hold a device that can stop a train, and a
+	 * permissive clears all the way to the next one, because a train let into a
+	 * block with nothing in it is committed until it reaches somewhere it can stop.
+	 *
+	 * So 1 is the right default now, and larger values buy separation rather than
+	 * safety. MEASURED on the two-train circuit: at 1 it carries four trains clean;
+	 * at 2 the same four spend their time held, because the extra block demands the
+	 * stopping margin twice on a ring this tight.
 	 */
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Signalling",
 		meta = (ClampMin = "1", UIMax = "6"))
-	int32 DispatchLookahead = 2;
+	int32 DispatchLookahead = 1;
 
 	/**
 	 * Metres, nose to tail. Zero is a point mass at the heartline.

@@ -320,12 +320,54 @@ Measured on the closed preset: two trains, ten minutes, **4 and 5 laps**, zero v
 shared block, and ~24,000 frames apiece spent genuinely straddling the seam rather than stepping over
 it in one tick.
 
-**A train stopped in the station straddles the seam, and that is correct rather than convenient.** The
-station is the first block, so its start *is* the seam; a train held there at 2 m/s stops within about
-0.3 m of it and hangs its back half into the last block. Physically true, correctly interlocked, and
-it costs a block of capacity while dwelling. A real station stops a train at a marked platform
-position, which the zone model cannot express — it says *target speed*, not *stop here*. Recorded
-rather than fixed.
+**A train stopped in the station straddled the seam, and it was NOT cosmetic — it deadlocked the
+circuit at three trains (2026-08-04).** Recorded first as a realism nit, then measured and found to be
+the thing standing between three trains and a stuck ride.
+
+The station is the first block, so its start *is* the seam. A zone says *reach this speed*, and zero
+is reachable at once, so a train commanded to hold stopped within **0.3 m of the zone's start** and
+hung its back half into the **last** block. A dwelling train therefore held two blocks. With three
+trains on this ring that is exactly enough to close the loop of denials:
+
+```
+train0 centre    0.0  rear 1280.5   holds 7 and 0     wants 1,2,3 — train1 in 3
+train1 centre  887.1                holds 3           wants 4,5   — train2 in 5
+train2 centre 1226.4  rear 1218.9   holds 5 and 6     wants 7     — train0's TAIL
+```
+
+Nothing moves, nothing is reported, and `Violations()` reads 0. A circuit of fail-closed rules doing
+exactly what it was told.
+
+**The fix needed no new authored concept.** The dispatcher already commands the target every frame, so
+it brakes to a *position* instead of switching to zero: `sqrt(2·a·d)` is the fastest a train may be
+travelling and still stop in `d`, so commanding that as the target eases it down and parks it
+mid-device. A 15 m train centred in a 26 m station spans 5.5–20.5 m — wholly inside its own block, and
+the ring gets its slack back. Asserted directly rather than via the deadlock.
+
+Still open, and now only a preference: mid-device is right for a station and arbitrary for a 130 m
+block brake. An authored stop offset is the next step if anyone wants the platform marked elsewhere.
+
+**A fixed lookahead cannot express a braking distance, and four trains proved it (2026-08-04).**
+`CanDispatch(FromBlock, Lookahead)` clears a *count* of blocks. That is a guess at a distance, and on
+a layout whose free runs are **696 m and 184 m** no single count is right for both. Measured on the
+closed circuit with the count rule:
+
+| trains | lookahead 1 | lookahead 2 |
+|---|---|---|
+| 1–3 | clean | clean |
+| 4 | **14 violations**, shared blocks | **18 violations**, shared blocks |
+
+The failure is always the same shape: a train is granted a block with no device in it, is therefore
+committed, and finds the block beyond it occupied on arrival.
+
+`FRideSignals::SetHoldingBlocks` supplies one bool per block — can a device here stop a train *and*
+let it go — and the permissive then clears **from the destination to the next block that can hold the
+train**, however many that is. With it, all four run clean. It stays optional: without the list the
+old fixed count is used unchanged, which is what every caller did before.
+
+One consequence worth knowing: the two rules then stack. `DispatchLookahead` is now *extra headway*
+rather than the safety requirement, its default drops from 2 to **1**, and at 2 the same four trains
+spend their time held — the ring is too tight to demand the stopping margin twice.
 
 **A closed circuit reports its own seam as a self-intersection (2026-08-04).** `AnalyseSelfClearance`
 skips sample pairs close together *along* the track, measured linearly. On a circuit the first and

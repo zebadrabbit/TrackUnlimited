@@ -62,11 +62,30 @@ CLEAR — and for high-speed sections, further ahead than that. The rule being e
 **braking-distance** one: a launch that can put a train at 100 km/h into a block it cannot stop short
 of should not be permitted to fire, regardless of what the block immediately ahead says.
 
-What the prototype implements is the *count*. `CanDispatch(FromBlock, Lookahead)` requires the next
-`Lookahead` blocks to report CLEAR, and `Lookahead > 1` is how a braking-distance requirement is
-expressed today. **Deriving that number from an actual braking distance is not implemented** — it
-needs train speed and position, which `FBlockController` deliberately cannot see, and it belongs to
-wiring signalling to the ride in Phase 3.
+`FBlockController` implements the *count*: `CanDispatch(FromBlock, Lookahead)` requires the next
+`Lookahead` blocks to report CLEAR. That was the whole of it for a while, and it is a **guess at a
+distance** — which is fine until a layout has free runs of 696 m and 184 m, where no single count is
+right for both.
+
+`FRideSignals` now derives it instead. `SetHoldingBlocks` supplies one bool per block — does a device
+here exist that can stop a train *and* let it go — and the permissive clears **from the destination to
+the next block that can hold the train**, however many that is. The reasoning is one sentence: a train
+let into a block with nothing in it is **committed**, because there is nothing in there to stop it, so
+everything up to its next chance to stop has to be clear before it may go.
+
+Measured on the closed two-train circuit, which has 8 blocks of which 5 can hold:
+
+| trains | fixed count | derived |
+|---|---|---|
+| 1–3 | clean | clean |
+| 4 | **14 violations** at lookahead 1, 18 at lookahead 2 | clean |
+
+The failure is always the same shape: granted a free block, committed, and the block beyond it
+occupied on arrival.
+
+The list is optional — without it the fixed count is used unchanged. And the two rules stack, so
+`DispatchLookahead` is now **extra headway rather than the safety requirement**; its default is 1, and
+raising it on a tight ring buys separation at the cost of throughput.
 
 This is the piece that turns a set of state machines into a safety system, and it is why the logic
 lives in C++ rather than Blueprint.
@@ -101,6 +120,14 @@ with a log line rather than granted onto open course.
 Holding devices rest **closed**. A device that opens because nobody is asking is a device that fails
 open, so the resting state is brakes-on and a permissive is what opens one — for the frames it is
 granted, and no longer.
+
+And a held train is braked to a **position**, not to zero wherever it happens to be. A zone says
+*reach this speed*, and zero is reachable immediately, so a train commanded to hold stops within about
+0.3 m of where the zone starts. In the station — whose start is the seam of the circuit — that leaves
+the back half of the train in the *last* block, so a dwelling train holds two. On a tight ring that is
+enough to deadlock three trains, each denied by the tail of the one in front, with nothing reported.
+Commanding `sqrt(2·a·d)` instead eases the train down and parks it mid-device, which needs no new
+authored concept because the dispatcher was already setting the target every frame.
 
 ## Two trains, and the three reads that carry identity
 

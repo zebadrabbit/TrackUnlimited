@@ -35,6 +35,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstdio>
+#include <memory>
 #include <vector>
 
 namespace
@@ -262,9 +263,27 @@ void ServeHolds(FTrain& Tr, const FRideSignals& Sig, std::size_t Id,
     {
         return;   // not standing at a holding device; nothing to command
     }
-    const bool bGranted = Sig.CanRelease(Id, Tr.GetDistance());
-    Tr.SetZoneTargetSpeed(static_cast<std::size_t>(Z),
-                          bGranted ? Authored[static_cast<std::size_t>(Z)] : 0.0);
+    const std::size_t Zi = static_cast<std::size_t>(Z);
+    if (Sig.CanRelease(Id, Tr.GetDistance()))
+    {
+        Tr.SetZoneTargetSpeed(Zi, Authored[Zi]);
+        return;
+    }
+
+    // Held. Brake to a POSITION, not to zero-wherever-you-are: sqrt(2*a*d) is the
+    // fastest a train may be travelling and still stop in d, so commanding that as
+    // the target eases it down and parks it at StopS.
+    //
+    // Why it matters, measured: commanded to plain zero, a train stops within
+    // ~0.3 m of the zone's start. In the station, whose start IS the seam, that
+    // leaves its back half in the LAST block — so a dwelling train holds two
+    // blocks, and on a ring that tight, three trains deadlock: each is denied by
+    // the tail of the one in front. Stopping mid-zone gives the block back.
+    const FTrackZone Zone = Tr.GetZone(Zi);
+    const double StopS = 0.5 * (Zone.StartS + Zone.EndS);
+    const double Remaining = StopS - Tr.GetDistance();
+    const double Curve = Remaining > 0.0 ? std::sqrt(2.0 * Grip * Remaining) : 0.0;
+    Tr.SetZoneTargetSpeed(Zi, std::min(Authored[Zi], Curve));
 }
 
 // Brakes on, before anyone asks. A holding device that starts at its authored
@@ -610,6 +629,144 @@ void TestTwoTrainsQueueBeforeTheStation()
     assert(Sig.Violations() == 0);
 }
 
+// Which blocks contain a device that can stop a train AND let it go again. This
+// is what turns the fixed lookahead into a real braking-distance rule: a train
+// let into a block with nothing in it is committed until the next one that can
+// hold it.
+std::vector<bool> HoldingBlocks(const FTrain& Tr, const FCircuit& C, double Total)
+{
+    std::vector<bool> Out(C.Boundaries.size(), false);
+    for (std::size_t b = 0; b < C.Boundaries.size(); ++b)
+    {
+        const double End = (b + 1 < C.Boundaries.size()) ? C.Boundaries[b + 1] : Total;
+        Out[b] = Tr.FindHoldZoneAt(0.5 * (C.Boundaries[b] + End)) >= 0;
+    }
+    return Out;
+}
+
+struct FRunResult
+{
+    std::vector<int> Laps;
+    std::size_t Violations = 0;
+    bool bShared = false;
+    int SeamFrames = 0;
+    double ClosestToStationStart = 1e9;   // how far a dwelling train parks past the seam
+};
+
+// The actor's tick, N trains, for Seconds of ride. One place, because the only
+// way to trust a capacity number is for the capacity test and the two-train test
+// to be running the SAME policy.
+FRunResult RunTrains(std::size_t N, std::size_t Lookahead, double Seconds)
+{
+    const FCircuit Shape = BuildCircuit(nullptr);
+    const FTrack T = BuildTrack(Shape.Doc);
+    FTrainConfig Cfg;
+    Cfg.TrainLength = TrainLen;
+
+    std::vector<std::unique_ptr<FTrain>> Owned;
+    FCircuit C;
+    for (std::size_t t = 0; t < N; ++t)
+    {
+        Owned.push_back(std::unique_ptr<FTrain>(new FTrain(T, Cfg)));
+        C = BuildCircuit(Owned.back().get());
+    }
+
+    FRideSignals Sig(C.Boundaries, 5.0, Lookahead, N, true);
+    Sig.SetHoldingBlocks(HoldingBlocks(*Owned[0], C, T.TotalLength()));
+
+    for (std::size_t t = 0; t < N; ++t)
+    {
+        CloseAllHolds(*Owned[t], C.Boundaries, T.TotalLength());
+        Owned[t]->SetCircuit(true);
+        Owned[t]->Place(t == 0 ? 0.0 : C.HoldStartS[t] + TrainLen, 0.0);
+        Sig.Update(t, Owned[t]->GetRearS(), Owned[t]->GetFrontS());
+    }
+
+    FRunResult R;
+    R.Laps.assign(N, 0);
+    std::vector<double> Prev(N);
+    for (std::size_t t = 0; t < N; ++t) { Prev[t] = Owned[t]->GetDistance(); }
+
+    const double Dt = 1.0 / 240.0;
+    for (int F = 0; F < static_cast<int>(240.0 * Seconds); ++F)
+    {
+        for (std::size_t t = 0; t < N; ++t)
+        {
+            ServeHolds(*Owned[t], Sig, t, C.Authored);
+            Owned[t]->Step(Dt);
+            Sig.Update(t, Owned[t]->GetRearS(), Owned[t]->GetFrontS());
+
+            const double Now = Owned[t]->GetDistance();
+            if (Now + 100.0 < Prev[t]) { ++R.Laps[t]; }
+            Prev[t] = Now;
+            if (Owned[t]->GetFrontS() < Owned[t]->GetRearS()) { ++R.SeamFrames; }
+
+            // Where a train actually comes to rest in the station: the number that
+            // decides whether a dwelling train costs one block or two.
+            if (Owned[t]->GetSpeed() <= 0.0 && Sig.BlockAt(Now) == 0)
+            {
+                R.ClosestToStationStart = std::min(R.ClosestToStationStart, Now);
+            }
+        }
+        Sig.Tick(Dt);
+        for (std::size_t a = 0; a < N; ++a)
+        {
+            for (std::size_t b = a + 1; b < N; ++b)
+            {
+                for (std::size_t k = 0; k < Sig.NumBlocks(); ++k)
+                {
+                    if (Sig.OccupiedBy(a, k) && Sig.OccupiedBy(b, k)) { R.bShared = true; }
+                }
+            }
+        }
+    }
+    R.Violations = Sig.Violations();
+    return R;
+}
+
+void TestAHeldTrainParksInsideItsBlock()
+{
+    // Commanded to plain zero, a holding device stops the train within ~0.3 m of
+    // where the ZONE starts, because a zone says "reach this speed" and zero is
+    // reachable at once. In the station, whose start IS the seam, that leaves the
+    // back half of the train in the LAST block — so a dwelling train holds two
+    // blocks. Measured consequence: three trains DEADLOCK, each denied by the tail
+    // of the one in front, with no violation and nothing moving.
+    //
+    // The dispatcher therefore brakes to a POSITION — sqrt(2*a*d) is the fastest a
+    // train may travel and still stop in d — and parks mid-zone. No new authored
+    // concept: SetZoneTargetSpeed was already being commanded every frame.
+    const FRunResult R = RunTrains(2, 1, 240.0);
+    assert(R.ClosestToStationStart < 1e8);          // somebody did dwell there
+
+    // Mid-station is 13 m, and a 15 m train centred there spans 5.5..20.5 — wholly
+    // inside the 26 m station block, with nothing hanging back over the seam.
+    assert(R.ClosestToStationStart > TrainLen * 0.5);
+    assert(R.ClosestToStationStart < 26.0 - TrainLen * 0.5);
+}
+
+void TestTheCircuitCarriesFourTrains()
+{
+    // CAPACITY, measured rather than assumed. The old fixed-lookahead permissive
+    // let four trains collide — 14 violations at lookahead 1, 18 at lookahead 2 —
+    // because a train was granted a block with no device in it and found the one
+    // beyond it occupied on arrival. A count of blocks cannot express "far enough
+    // to stop" when one free run is 696 m and the next is 184.
+    //
+    // With the holding list supplied, the permissive clears all the way to the
+    // next block that can hold the train, and all four run.
+    for (std::size_t N = 1; N <= 4; ++N)
+    {
+        const FRunResult R = RunTrains(N, 1, 420.0);
+        assert(R.Violations == 0);
+        assert(!R.bShared);
+        for (std::size_t t = 0; t < N; ++t)
+        {
+            assert(R.Laps[t] >= 1);   // nobody starved, nobody deadlocked
+        }
+    }
+}
+
 void TestTheActorsOwnLoopRunsTwoTrains()
 {
     // A LINE-FOR-LINE STAND-IN FOR ATUCoasterRide::Tick, because that function
@@ -727,6 +884,8 @@ int main()
     TestClearanceMustBeMeasuredTheShortWayRound();
     TestEveryHoldingBlockCanActuallyStopWhatArrives();
     TestTwoTrainsQueueBeforeTheStation();
+    TestAHeldTrainParksInsideItsBlock();
+    TestTheCircuitCarriesFourTrains();
     TestTheActorsOwnLoopRunsTwoTrains();
 
     std::printf("test_twotrains: all assertions passed\n");
