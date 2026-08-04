@@ -420,6 +420,80 @@ void TestTwoTrainsRoundACircuitCleanly()
     assert(Moves > 600);
 }
 
+void TestCapacityIsHoldingBlocksMinusOne()
+{
+    // THE RULE, stated rather than measured on one layout: a circuit carries one
+    // fewer train than it has blocks that can bring a train to a stop and let it
+    // go again. One has to stay empty, or every train is standing exactly where
+    // the train behind it needs to go and the ring cannot rotate.
+    //
+    // It is the reason a high-throughput ride is built with MANY block sections
+    // rather than a longer train: sections are what buy trains, and trains are
+    // what buy capacity. A ride with forty of them can run a lot of small
+    // vehicles at short headway; this circuit has five and runs four.
+    //
+    // Driven on bare numbers, because capacity is a signalling property and has
+    // nothing to do with geometry or physics — the same rule has to hold for a
+    // ring of three blocks and a ring of eight.
+    for (std::size_t N = 3; N <= 8; ++N)
+    {
+        std::vector<double> Bounds;
+        for (std::size_t i = 0; i < N; ++i)
+        {
+            Bounds.push_back(static_cast<double>(i) * 100.0);
+        }
+
+        // Every block can hold, so blocks and holding places are the same count.
+        for (std::size_t Trains = N - 1; Trains <= N; ++Trains)
+        {
+            FRideSignals S(Bounds, 0.0, 1, Trains, true);
+            S.SetHoldingBlocks(std::vector<bool>(N, true));
+
+            // One train per block, each parked in the middle of its own.
+            std::vector<std::size_t> At(Trains);
+            for (std::size_t t = 0; t < Trains; ++t)
+            {
+                At[t] = t;
+                const double Mid = static_cast<double>(t) * 100.0 + 50.0;
+                assert(S.Update(t, Mid - 5.0, Mid + 5.0));
+            }
+
+            int Moves = 0;
+            std::vector<int> Each(Trains, 0);
+            for (int Step = 0; Step < 200; ++Step)
+            {
+                for (std::size_t t = 0; t < Trains; ++t)
+                {
+                    const std::size_t Next = (At[t] + 1) % N;
+                    if (!S.CanDispatchInto(t, Next))
+                    {
+                        continue;
+                    }
+                    At[t] = Next;
+                    const double Mid = static_cast<double>(Next) * 100.0 + 50.0;
+                    assert(S.Update(t, Mid - 5.0, Mid + 5.0));
+                    ++Moves;
+                    ++Each[t];
+                }
+            }
+
+            if (Trains == N)
+            {
+                assert(Moves == 0);        // full: the ring cannot rotate at all
+            }
+            else
+            {
+                assert(Moves > 0);
+                for (std::size_t t = 0; t < Trains; ++t)
+                {
+                    assert(Each[t] > 0);   // and NOBODY starves while others run
+                }
+            }
+            assert(S.Violations() == 0);   // neither case is ever a collision
+        }
+    }
+}
+
 void TestASeamStraddleHoldsTwoBlocksNotTheWholeRing()
 {
     // On a circuit a train really can have its tail in the last block and its
@@ -496,6 +570,7 @@ int main()
     TestUnknownTrainDenies();
     TestOccupiesIsPerBlockAndPerTrain();
     TestTwoTrainsRoundACircuitCleanly();
+    TestCapacityIsHoldingBlocksMinusOne();
     TestASeamStraddleHoldsTwoBlocksNotTheWholeRing();
     TestASeamStraddleStillCollidesAndStillDenies();
     TestWithoutCircuitAReversedPairIsStillSorted();

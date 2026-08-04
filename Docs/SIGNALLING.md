@@ -113,9 +113,29 @@ authoring it as a block brake would build a device that closes and is then run s
 is worse than a trim because it *looks* like an interlock. The three pre-station devices pass the same
 test with room to spare (4.8, 1.5 and 0.9 m needed) and are the ones that hold.
 
-Together these cap how many trains a layout can run: **the number of places that can both hold a train
-and release it**. Four on the two-train preset, one on every other, and asking for more is refused
-with a log line rather than granted onto open course.
+## How many trains a circuit carries
+
+There is a formula, and it is short:
+
+> **trains = (blocks that can stop a train and let it go again) − 1**
+
+The minus one is the whole thing. One block has to stay empty, or every train is standing exactly
+where the train behind it needs to go and the ring cannot rotate — no violation, no crash, just a ride
+that never moves again. Asserted for rings of three to eight blocks in `test_ridesignals.cpp`, driven
+on bare numbers because capacity is a property of the signalling and has nothing to do with geometry.
+
+Note what counts. A **launch** cannot stop a train and a **trim brake** cannot release one, so neither
+is a block boundary for this purpose however much hardware is bolted to it. Only drive-tyre runs and
+block brakes count.
+
+That is also the reason real high-throughput rides are built with **many block sections** rather than
+longer trains: sections buy trains, and trains buy capacity. A ride carved into dozens of them can run
+a lot of small vehicles at short headway, which is exactly the trade a low-payload high-frequency
+layout wants. The two-train preset has five holding blocks and runs four; the other three presets have
+a station and a trim brake, so they have one, and one place is one train.
+
+Asking for more than the layout can carry is refused with a log line rather than granted onto open
+course.
 
 Holding devices rest **closed**. A device that opens because nobody is asking is a device that fails
 open, so the resting state is brakes-on and a permissive is what opens one — for the frames it is

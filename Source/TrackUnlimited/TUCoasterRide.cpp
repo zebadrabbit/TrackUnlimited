@@ -222,10 +222,27 @@ TArray<FTUTrackSegment> ATUCoasterRide::TwoTrainCircuitLayout()
 	// The only preset with enough blocks to run more than one train.
 	//
 	// Blocks are DERIVED: a boundary falls where a powered run starts or ends,
-	// because that is the only place a device exists that can hold a train. Every
-	// other preset has two powered runs and therefore three blocks, and capacity
-	// is blocks/(1 + lookahead) — so three blocks is one train, always. This has
-	// eight, which is four trains at lookahead 1 and two at lookahead 2.
+	// because that is the only place a device exists that can hold a train.
+	//
+	// CAPACITY IS NOT blocks/(1 + lookahead), which an earlier version of this
+	// comment claimed and which is neither necessary nor sufficient — it allows
+	// four trains at lookahead 1, where they collided, and forbids three at
+	// lookahead 2, which run. The rule is
+	//
+	//     trains = (blocks that can STOP a train and LET IT GO) - 1
+	//
+	// and the minus one is the whole thing: one has to stay empty or every train
+	// is standing exactly where the train behind it needs to go and the ring
+	// cannot rotate. Asserted for rings of 3 to 8 in test_ridesignals.cpp, which
+	// drives it on bare numbers because capacity is a signalling property with
+	// nothing to do with geometry.
+	//
+	// It is also why a high-throughput ride is built with MANY block sections
+	// rather than a longer train: sections buy trains, and trains buy capacity. A
+	// ride with dozens of them runs a lot of small vehicles at short headway. This
+	// preset has five and runs four; every other one has a station and a trim
+	// brake — and a trim cannot let a train go again — so they have ONE, and one
+	// place is one train, always.
 	//
 	// The approach is TWO brake blocks with drive tyres between, not one long
 	// brake, and both halves of that matter. Two adjacent Brake runs MERGE into a

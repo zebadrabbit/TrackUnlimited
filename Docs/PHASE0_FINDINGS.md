@@ -369,7 +369,7 @@ One consequence worth knowing: the two rules then stack. `DispatchLookahead` is 
 rather than the safety requirement, its default drops from 2 to **1**, and at 2 the same four trains
 spend their time held — the ring is too tight to demand the stopping margin twice.
 
-**A layout carries one fewer train than it has places to stand (2026-08-04).** With five holding
+**A layout carries one fewer train than it has places to stand — and that is THE formula, not an observation about one layout (2026-08-04).** With five holding
 places, four trains run clean and **five never move at all** — every train is parked exactly where the
 train behind it needs to go. No violation, no deadlock in the code; the ride is simply full. So the
 cap is `holding places − 1`, which is what the actor now applies, rather than the number of places
@@ -382,6 +382,23 @@ station straddle deadlocked three: placed at its zone's *start*, a 15 m train ha
 boundary, and for the station — whose start is the seam — that means overlapping whatever stands in
 the last block. Trains are now placed **mid-device**, which is both where the dispatcher parks them
 and the only placement that fits a whole train inside one block.
+
+**Since generalised.** It is not a fact about this circuit; it is the rule, and it now has a test that
+says so — rings of three to eight blocks, `N−1` trains circulating with nobody starving, `N` trains
+moving not at all, and neither case ever a violation. Driven on bare numbers in
+`test_ridesignals.cpp`, because capacity is a property of the signalling with nothing to do with
+geometry or physics.
+
+Two things worth stating plainly, because they are what a ride designer would reach for:
+
+- **What counts as a block here is narrow.** A launch cannot stop a train; a trim brake cannot release
+  one. Neither is a boundary for capacity however much hardware is bolted to it. Only drive-tyre runs
+  and block brakes.
+- **Sections buy trains, and trains buy capacity.** That is why a real high-throughput ride is carved
+  into *many* block sections rather than given longer trains — a layout with dozens of them can run a
+  lot of small vehicles at short headway. It also says exactly how to raise this circuit's capacity:
+  every block brake added is one more train, and the geometry already has 696 m and 184 m of free run
+  with nothing in them.
 
 **A closed circuit reports its own seam as a self-intersection (2026-08-04).** `AnalyseSelfClearance`
 skips sample pairs close together *along* the track, measured linearly. On a circuit the first and
