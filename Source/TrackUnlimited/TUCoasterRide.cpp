@@ -50,9 +50,10 @@ TArray<FTUTrackSegment> ATUCoasterRide::PresetLayout(ETUPresetLayout Which)
 {
 	switch (Which)
 	{
-	case ETUPresetLayout::FlatRig:    return FlatRigLayout();
-	case ETUPresetLayout::OutAndBack: return OutAndBackLayout();
-	default:                          return ReferenceLayout();
+	case ETUPresetLayout::FlatRig:         return FlatRigLayout();
+	case ETUPresetLayout::OutAndBack:      return OutAndBackLayout();
+	case ETUPresetLayout::TwoTrainCircuit: return TwoTrainCircuitLayout();
+	default:                               return ReferenceLayout();
 	}
 }
 
@@ -213,6 +214,93 @@ TArray<FTUTrackSegment> ATUCoasterRide::OutAndBackLayout()
 
 	AddStraight(Out, 40.0);
 	AddStraight(Out, 60.0, ETUSegmentZone::Brake, 0.f);        // brake run
+	return Out;
+}
+
+TArray<FTUTrackSegment> ATUCoasterRide::TwoTrainCircuitLayout()
+{
+	// The only preset with enough blocks to run more than one train.
+	//
+	// Blocks are DERIVED: a boundary falls where a powered run starts or ends,
+	// because that is the only place a device exists that can hold a train. Every
+	// other preset has two powered runs and therefore three blocks, and capacity
+	// is blocks/(1 + lookahead) — so three blocks is one train, always. This has
+	// eight, which is four trains at lookahead 1 and two at lookahead 2.
+	//
+	// The approach is TWO brake blocks with drive tyres between, not one long
+	// brake, and both halves of that matter. Two adjacent Brake runs MERGE into a
+	// single block, so "one long brake" holds exactly one train — and worse, the
+	// second run's authored ZoneSpeed is silently discarded (measured: 6 m/s then
+	// 2 m/s becomes one zone at 6). And a friction brake can hold a train but
+	// cannot start one, also measured, so moving a stopped train from the outer
+	// brake to the inner one needs powered track either way.
+	//
+	// MEASURED, and every figure re-derived independently before it was written
+	// here: 25 segments, 1072.5 m, 8 blocks, ends -0.0000 m, C2 to 1e-9, closest
+	// self-approach 7.75 m, top 136.8 km/h, vertical -0.35..+3.57 g, lateral
+	// 0.54 g, no block shorter than the 15 m train, zero curvature-step
+	// diagnostics. The train comes to rest at 1044.4 m — inside the inner
+	// pre-station brake, which is where a train waits for the station and is the
+	// correct outcome rather than a stall.
+	const double Up = Deg(28.0);
+	const double Dn = Deg(-30.0);
+
+	// Solved, not eyeballed: the climb that brings the circuit back to station
+	// height. It is the right lever because more climb ends higher monotonically,
+	// where the drop is not — even a minimum-length drop overshoots downward,
+	// since the eases and the return carry most of the descent.
+	const double Climb = 41.7685;
+
+	// A brake block must hold a whole train with room to stop, not just to sit.
+	const double BrakeLen = 37.5;      // 2.5 train lengths
+	const double TransferLen = 27.0;   // 1.8 train lengths
+
+	TArray<FTUTrackSegment> Out;
+
+	AddStraight(Out, 26.0, ETUSegmentZone::Lift, 1.5f);       // 1 STATION, drive tyres
+	AddStraight(Out, 150.0, ETUSegmentZone::Launch, 38.f);    // 2 LAUNCH
+
+	// Launch length matters more than the target: at the fixed 6 m/s^2 grip a
+	// launch caps at sqrt(2*grip*length) whatever is asked for, so 70 m could
+	// never exceed 29 m/s and three different targets all produced the same top
+	// speed. 150 m is what makes 38 m/s actually reachable.
+
+	// 3 COURSE: up, over, down. NO INVERSION deliberately — a planar loop's two
+	// legs pass 0.19 m apart, which is the reference layout's known defect, and
+	// this preset exists to demonstrate blocks rather than to show off.
+	AddEasedPitch(Out, Up, 0.0195);       // the +Gz peak lives HERE, not in the
+	AddStraight(Out, Climb);              // valley: it is the highest-v^2 curvature
+	AddEasedPitch(Out, Dn - Up, 0.0300);  // on the track. 0.030 -> 0.0195 took the
+	AddStraight(Out, 34.0);               // peak from +5.00 g to +3.57.
+	AddEasedPitch(Out, -Dn, 0.012);
+
+	// Turn 1, banked for the 31.5 m/s the train ACTUALLY carries rather than a
+	// guessed 24. In a banked turn the felt magnitude is sqrt(1 + (v^2/gR)^2)
+	// however well it is banked — bank only splits that between vertical and
+	// lateral — so RADIUS is the only lever that lowers both, and 30 -> 48 m is
+	// what took lateral from 1.34 g to 0.54. Widening it also opened the return
+	// leg, which is where the clearance went from 3.33 m to 7.75.
+	AddBankedTurn(Out, 48.0, Pi * 48.0, 34.0, BankDegreesFor(31.5, 48.0));
+
+	AddStraight(Out, 45.0, ETUSegmentZone::Brake, 20.f);      // 4 MID-COURSE BLOCK BRAKE
+
+	AddEasedPitch(Out, Deg(12.0), 0.010);                     // 5 COURSE back
+	AddEasedPitch(Out, Deg(-12.0), 0.010);
+	AddBankedTurn(Out, 30.0, Pi * 30.0, 24.0, BankDegreesFor(10.6, 30.0));
+	AddStraight(Out, 24.0);
+
+	// 6/7/8 THE APPROACH. The outer brake is where a second train waits while the
+	// first is in the station; the inner one holds short of the station and is
+	// what clears the station-entry signal once its train has stopped.
+	//
+	// ponytail: the two pre-station brakes trim to 6 and 2 m/s rather than to a
+	// dead stop, because a zone target cannot be changed at runtime yet — so a
+	// brake commanded to zero would hold its train there forever with nothing
+	// able to release it. Once FTrain can retarget a zone, both become 0 and the
+	// permissive releases them; the geometry does not change.
+	AddStraight(Out, BrakeLen, ETUSegmentZone::Brake, 6.f);       // outer
+	AddStraight(Out, TransferLen, ETUSegmentZone::Lift, 4.f);     // transfer tyres
+	AddStraight(Out, BrakeLen, ETUSegmentZone::Brake, 2.f);       // inner
 	return Out;
 }
 

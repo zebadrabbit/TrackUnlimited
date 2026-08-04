@@ -80,6 +80,13 @@ enum class ETUPresetLayout : uint8
 	// The full thing: eased lift, 34 degree drop, teardrop loop, banked turn.
 	// Every figure quoted in Docs/REFERENCE_LAYOUT.md comes from this.
 	Reference UMETA(DisplayName = "Reference layout (loop + banked turn)"),
+
+	// The only layout with enough blocks to run two trains. Launched, with a
+	// mid-course block brake and TWO pre-station brakes separated by drive tyres.
+	// Every other preset has three blocks and can therefore hold exactly one
+	// train, because a block boundary only falls where a powered run starts or
+	// ends and they each have just two powered runs.
+	TwoTrainCircuit UMETA(DisplayName = "Two-train circuit (launched, 8 blocks)"),
 };
 
 UENUM(BlueprintType)

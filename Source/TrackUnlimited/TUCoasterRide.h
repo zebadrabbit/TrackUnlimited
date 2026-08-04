@@ -74,6 +74,9 @@ public:
 	/** Lift, drop, asymmetric airtime hill, banked turnaround, brakes. No inversion. */
 	static TArray<FTUTrackSegment> OutAndBackLayout();
 
+	/** Launched, eight blocks. The only preset that can hold more than one train. */
+	static TArray<FTUTrackSegment> TwoTrainCircuitLayout();
+
 	/** Where to watch from. */
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Camera")
 	ETUCameraMode CameraMode = ETUCameraMode::Rider;

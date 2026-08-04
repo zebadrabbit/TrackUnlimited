@@ -124,7 +124,7 @@ actor over the top:
 | Ride profile | the whole ride measured at edit time |
 | Block signalling | state machine, overlap, permissives — and a running train that trips them |
 | NL2 interop | CSV and live telemetry — validation fixtures, not an authoring path |
-| Starter layouts | three worked examples of the vocabulary, each measured before shipping |
+| Starter layouts | four worked examples of the vocabulary, each measured before shipping |
 | In-engine slice | builds against UE 5.8, rides, reads out speed, G and block state |
 
 → [`Docs/ROADMAP.md`](Docs/ROADMAP.md) for what each phase ships and what is left.
