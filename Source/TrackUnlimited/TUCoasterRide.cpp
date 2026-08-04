@@ -784,7 +784,7 @@ void ATUCoasterRide::RebuildFromSegments()
 				"lookahead %d, overlap %.1f s, %d train(s), %d holding place(s)"),
 				static_cast<int32>(Signals->NumBlocks()), *Where,
 				static_cast<int32>(Signals->Lookahead()), BlockBufferSeconds,
-				Running, HoldStartS.Num());
+				Running, HoldMidS.Num());
 		}
 
 		FTrainConfig TrainConfig;
@@ -1231,10 +1231,14 @@ void ATUCoasterRide::ServeHolds(std::size_t TrainIndex)
 	const FTrackZone Zone = T.GetZone(Zi);
 	const double StopS = 0.5 * (Zone.StartS + Zone.EndS);
 	const double Remaining = StopS - T.GetDistance();
+	// The device's OWN authority, not a repeat of the grip constant — if a zone is
+	// ever given a weaker brake, the curve has to weaken with it or the dispatcher
+	// would be promising a stop the hardware cannot make.
+	const double Curve = Remaining > 0.0 && Zone.MaxDecel > 0.0
+		? FMath::Sqrt(2.0 * Zone.MaxDecel * Remaining) : 0.0;
 	// ponytail: mid-device, which is right for a station and arbitrary for a long
 	// block brake. Give a holding zone an authored stop offset when somebody wants
 	// a platform marked somewhere other than the middle.
-	const double Curve = Remaining > 0.0 ? FMath::Sqrt(2.0 * 6.0 * Remaining) : 0.0;
 	T.SetZoneTargetSpeed(Zi, FMath::Min(ZoneReleaseSpeed[Z], Curve));
 }
 

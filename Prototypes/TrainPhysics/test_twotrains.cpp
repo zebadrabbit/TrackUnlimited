@@ -282,7 +282,11 @@ void ServeHolds(FTrain& Tr, const FRideSignals& Sig, std::size_t Id,
     const FTrackZone Zone = Tr.GetZone(Zi);
     const double StopS = 0.5 * (Zone.StartS + Zone.EndS);
     const double Remaining = StopS - Tr.GetDistance();
-    const double Curve = Remaining > 0.0 ? std::sqrt(2.0 * Grip * Remaining) : 0.0;
+    // The device's OWN authority, not a repeat of the grip constant: a weaker
+    // brake has to get a gentler curve, or the dispatcher promises a stop the
+    // hardware cannot make.
+    const double Curve = Remaining > 0.0 && Zone.MaxDecel > 0.0
+        ? std::sqrt(2.0 * Zone.MaxDecel * Remaining) : 0.0;
     Tr.SetZoneTargetSpeed(Zi, std::min(Authored[Zi], Curve));
 }
 

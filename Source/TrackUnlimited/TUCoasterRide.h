@@ -199,15 +199,20 @@ public:
 	/**
 	 * How many trains to run.
 	 *
-	 * CLAMPED BY THE LAYOUT, not by this number: a train needs somewhere to stand
-	 * that can both stop it and start it again, so the ceiling is the count of
-	 * hold-capable zones — drive tyres and block brakes, never trim brakes. Ask
-	 * for more than the track can park and the extras are refused, with a log line
-	 * saying so, because the alternative is a train materialising on open course
-	 * with nothing able to hold it.
+	 * CLAMPED BY THE LAYOUT, not by this number. A train needs somewhere to stand
+	 * that can both stop it and start it again — drive tyres and block brakes,
+	 * never trim brakes — and ONE of those has to stay free, or every train is
+	 * parked exactly where the train behind it needs to go and the ride gridlocks
+	 * without a single violation to show for it. So the ceiling is
+	 * `hold-capable zones - 1`, measured on the closed circuit: it has five, four
+	 * trains run clean, and five never move at all.
 	 *
-	 * Only the two-train preset has more than one. The other three have a station
-	 * and a trim brake, which is one place to stand.
+	 * Ask for more and the extras are refused with a log line, because the
+	 * alternative is a train materialising on open course with nothing able to
+	 * hold it.
+	 *
+	 * Only the two-train preset can exceed one. The other three have a station and
+	 * a trim brake, which is one place to stand and therefore one train.
 	 */
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited", meta = (ClampMin = "1", UIMax = "4"))
 	int32 TrainCount = 1;
