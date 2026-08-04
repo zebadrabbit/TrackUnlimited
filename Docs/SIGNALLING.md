@@ -164,18 +164,24 @@ holds no train identity, deliberately — the identity lives one layer up, in `F
 the only place that knows where each train is. And the **block count is fixed at construction** from
 the config vector, so re-blocking a layout means building a new controller rather than mutating one.
 
-One more that is about the *ride* rather than the signalling. The two-train preset is a genuinely
-closed circuit — 0.000000 m of position, 0.000084° of heading, 0.000000° of roll — but `FTrain` still
-clamps at the end of the track, so a lap is a **teleport** from the last block back to the station
-rather than a wrap. The signalling sees that jump and interlocks it with no special case: the old
-range exits and arms its overlaps, the new range enters, and the arriving train is held at the end of
-the track until the station is clear. Because the seam closes to zero, the teleport is now invisible.
+One more that is about the *ride* rather than the signalling, and it is now **done** rather than
+limited. The two-train preset is a genuinely closed circuit — 0.000000 m of position, 0.000084° of
+heading, 0.000000° of roll — and trains **lap** it, driving through the seam into the station under
+their own power. `FTrainConfig::bCircuit` wraps arc length instead of clamping, and the actor sets it
+by *measuring* the seam on every rebuild rather than by being told: a layout whose ends are hundreds
+of metres apart still returns its trains to the station by teleport, which is the honest thing to do
+with track that does not meet.
 
-Making it a real wrap is `S -= TotalLength` **plus** one thing that belongs in this document:
-`FRideSignals::Update` swaps a rear/front pair that arrives reversed, and on a circuit a reversed pair
-is not an error — it means the train **straddles the seam**, holding the last block and the first. The
-swap would instead claim every block between them, which is the whole ring. That is a range that has
-to wrap, not a range that has to be sorted.
+The part of that which belongs in this document is what a **reversed rear/front pair means**. On a
+point-to-point layout it is a caller passing its arguments the wrong way round, and gets sorted. On a
+circuit it is a train **straddling the seam**, holding the last block and the first — and sorting it
+claims every block *between* them, which is the whole ring, from one train, with nothing reported.
+`FRideSignals` therefore walks a possibly-wrapped range through a single helper, so the entry test,
+the exit release and the occupancy query cannot disagree about what "the range" is.
+
+The seam is also where a **dwelling train** used to cost a second block, because the station's start
+*is* the join — see the holding section above for why that deadlocked three trains and what replaced
+it.
 
 ## Automatic and manual dispatch
 

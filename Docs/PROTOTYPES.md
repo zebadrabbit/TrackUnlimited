@@ -78,11 +78,17 @@ itself: with one train nothing is ever ahead of it. It transcribes
 `ATUCoasterRide::TwoTrainCircuitLayout()` — the actor cannot be included from here, same precedent as
 `reference_figures.cpp` — and proves the outer pre-station brake **stops a moving train** (7.64 m/s
 down to 0 in 4.7 m), **holds it while the block ahead is occupied** (3.88 s, stopped *and* red, which
-is a different claim from merely stopped), and **releases it** once the train ahead clears. Its last
-test is a line-for-line stand-in for `ATUCoasterRide::Tick`, because that function cannot be compiled
-without Unreal and its dispatch policy has nowhere else to be checked: ten minutes of ride, both
-trains circulating, no deadlock, no shared block, zero violations. **Change the actor's tick order and
-change that test with it.**
+is a different claim from merely stopped), and **releases it** once the train ahead clears.
+
+It also proves the layout is a **closed circuit** — position, heading and roll at the seam, plus the
+total turning being one lap rather than the 446° it used to be — that a **held train parks inside its
+own block** instead of straddling the seam, and that the circuit **carries four trains**: 1 through 4,
+seven minutes each, every train lapping, zero violations, never a shared block.
+
+Its last test is a line-for-line stand-in for `ATUCoasterRide::Tick`, because that function cannot be
+compiled without Unreal and its dispatch policy has nowhere else to be checked: ten minutes of ride,
+both trains circulating through the seam under their own power, no deadlock, no shared block, zero
+violations. **Change the actor's tick order and change that test with it.**
 
 ## `BlockSignal/` — signalling
 
@@ -112,6 +118,18 @@ A's blocks. All three were confirmed to bite by mutation — reverting each iden
 one test and no others. The single-argument forms **deny** on a multi-train instance rather than
 aliasing to train 0, so a caller that forgot its index fails closed instead of reproducing the whole
 class of bug.
+
+**Proves, for a circuit,** that a reversed rear/front pair is read as a **seam straddle** — the train
+holding the last block and the first — rather than sorted into a claim on the entire ring; that the
+seam is not a hiding place, so a train arriving across it still collides with and is still denied by
+one parked in the first block; and that a point-to-point layout's reversed pair is still sorted,
+because a strip has no seam. Three more mutations, three more kills.
+
+**The permissive derives its braking distance** when `SetHoldingBlocks` is supplied: it clears from
+the destination to the next block that can *hold* a train, because a train let into a block with no
+device in it is committed until it reaches somewhere it can stop. A fixed count cannot say that — on
+the closed circuit, whose free runs are 696 m and 184 m, the count rule let **four trains collide**
+(14 violations at lookahead 1, 18 at lookahead 2) and the derived rule runs all four clean.
 
 **Records two limits rather than fixing them**, both asserted so they stay known quantities: a block
 crossed entirely within one `dt` is never entered and never arms its overlap (needs a block under

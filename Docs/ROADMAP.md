@@ -14,7 +14,7 @@ ambition. The staging below is the defence.
 | **0 — Prototype** | Prove the core feel: a hand-authored spline, a train that follows it with real physics, a camera. | A single layout you can ride, with correct-feeling G-forces. | ✅ **Complete** |
 | **1 — Track Editor MVP** | Numeric segment-list editor, banking control, undo/redo from day one, live G graph, circuit closure solver. | Build an arbitrary coaster from scratch in-editor. | ✅ **Complete** |
 | **2 — Physics & Ride Feel** | Friction and drag tuning, lift hills, launches, block brakes, heartline camera polish. | A ride-through that feels right to a NoLimits 2 veteran. | 🔶 **In progress** |
-| **3 — Ride Control System** | Block state machine wired to the ride, dispatch permissives, auto/manual modes, generated 2D control panel with VFD visualisation. | Watch — or run — a coaster dispatch itself safely from a real generated panel. | Planned |
+| **3 — Ride Control System** | Block state machine wired to the ride, dispatch permissives, auto/manual modes, generated 2D control panel with VFD visualisation. | Watch — or run — a coaster dispatch itself safely from a real generated panel. | 🔶 **Half met early** — the coaster dispatches itself safely, with up to four interlocked trains lapping a closed circuit. The generated panel and manual mode are not built, and they are the differentiator. |
 | **4 — Track Meshing & Supports** | Procedural rail/tie/support generation, at least one visual track style. | A coaster that looks like a real structure, not a spline in space. | Planned |
 | **5 — Scenery & Park Layer** | Terrain sculpting, static scenery placement, basic landscaping. | A small themed area around the coaster. | Planned |
 | **6 — Sharing & OSS Launch** | Save/load, export format documentation, public repo, first public build. | A public 0.1 release and an announcement devlog. | Planned |
@@ -70,6 +70,19 @@ polyurethane wheels on steel; three recordings converge on 0.022–0.026 against
 default moved to **0.024**. The residual of 0.0005 m/s² says the model's shape was right all along.
 The reference layout was re-tuned around it: a deeper drop to restore the loop apex, and a longer lift
 purely to close the ride back to station level.
+
+Also landed, and it took Phase 3's headline with it: **a closed circuit carrying four interlocked
+trains that run real laps.** The two-train preset closes to 0.000000 m of position, 0.000084° of
+heading and 0.000000° of roll — by *shape* rather than by solver, an oval whose two exactly-180°
+turns cancel — and `FTrain` wraps arc length rather than clamping, so a train drives through the seam
+into the station under its own power. Block brakes hold and release on a permissive, and the
+permissive now **derives its braking distance** from the layout instead of clearing a fixed count of
+blocks. Measured: 1 to 4 trains, every train lapping, zero violations, never two in a block.
+
+Two defects on the way there were only findable by running more trains than anyone had: a fixed
+lookahead let four trains collide, and a held train parking at the *start* of its device deadlocked
+three. Both are in [`PHASE0_FINDINGS.md`](PHASE0_FINDINGS.md), both are now asserted directly rather
+than via the symptom.
 
 Still ahead, and worth starting next: the consequences of train length are only partly worked through.
 It was *hypothesised* that the same omission explains the fitted `DragK` landing 3.2× above its
