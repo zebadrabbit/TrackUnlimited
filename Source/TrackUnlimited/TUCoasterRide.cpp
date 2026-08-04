@@ -235,32 +235,53 @@ TArray<FTUTrackSegment> ATUCoasterRide::TwoTrainCircuitLayout()
 	// cannot start one, also measured, so moving a stopped train from the outer
 	// brake to the inner one needs powered track either way.
 	//
-	// MEASURED, and every figure re-derived independently before it was written
-	// here: 25 segments, 1072.46 m, 8 blocks, ends +0.0000 m, C2 to 1e-9, closest
-	// self-approach 7.75 m, top 136.8 km/h at 160 m, vertical -0.35..+3.57 g,
-	// lateral 0.54 g, 96.5 s, no block shorter than the 15 m train, zero
-	// curvature-step diagnostics. The train completes the course and waits at the
-	// inner pre-station brake for the station to clear.
+	// ---- IT IS A CLOSED CIRCUIT, AND THE SHAPE IS WHY ----
+	//
+	// An OVAL closes analytically, with no solver: both turns the same way, each
+	// EXACTLY 180 degrees, same radius, same easement. Then the two lateral
+	// displacements (+2R, -2R) cancel, the along-track ones cancel, heading sums to
+	// 360, and one scalar condition is left — the return leg's horizontal extent
+	// must equal the two collinear outbound legs'. A 180 degree turn with easements
+	// of length E needs arc = pi*R - E, because each easement turns E/(2R).
+	//
+	// The turnaround sits at the TOP of the hill, and that is not decoration. The
+	// closure condition means every metre in the outbound leg is paid for TWICE, so
+	// the first attempt — whole hill outbound, turnarounds at each end — came to
+	// 1717 m and every variant of it STALLED, because softening the crest to tame
+	// the G lengthens it (crest length is angle/curvature), which lengthens the
+	// circuit, which costs more energy than a longer launch buys. Splitting the
+	// hill across the turn is cheaper in three currencies at once: the train is
+	// slowest at the top so the turn costs least lateral G, a small radius will do,
+	// and the drop's horizontal extent lands in the return leg where it is needed.
+	//
+	// MEASURED, every figure re-derived through the authored path: 30 segments,
+	// 1288.00 m, 8 blocks, C2 to 1e-9, closest self-approach 11.68 m, top
+	// 136.8 km/h, vertical -0.53..+3.08 g, lateral 0.15 g, crest 48.5 m, 105 s,
+	// peak roll rate 17.4 deg/s, ZERO curvature-step and ZERO roll-rate
+	// diagnostics. The seam closes to 0.000000 m, 0.000084 degrees of heading and
+	// 0.000000 degrees of roll.
 	//
 	// Those figures are the ride with every signal GREEN, which is what the ride
 	// profile measures and the right thing for it to measure. Held at a red the
 	// train stops wherever the block brake is, and none of the numbers above move
 	// — a holding device only ever removes energy the layout had already spent.
-	const double Up = Deg(28.0);
-	const double Dn = Deg(-30.0);
+	const double Up = Deg(26.0);       // pull-up out of the launch
+	const double Dn = Deg(32.0);       // the drop out of the turnaround
 
-	// Solved, not eyeballed: the climb that brings the circuit back to station
-	// height. It is the right lever because more climb ends higher monotonically,
-	// where the drop is not — even a minimum-length drop overshoots downward,
-	// since the eases and the return carry most of the descent.
-	const double Climb = 41.7685;
+	// The turn. Both are this, exactly, or the circuit does not close.
+	const double R = 35.0;
+	const double Ease = 50.0;          // 50, not 26: roll rate 34.0 -> 17.4 deg/s
+	const double Arc = Pi * R - Ease;  // exactly 180 degrees, easements included
 
-	// A brake block must hold a whole train with room to stop, not just to sit.
-	const double BrakeLen = 37.5;      // 2.5 train lengths
-	const double TransferLen = 27.0;   // 1.8 train lengths
+	// SOLVED, not eyeballed. The drop straight is the height lever — more of it
+	// ends lower, monotonically — and the fill is then the horizontal one, which
+	// cannot disturb the height because it is level.
+	const double DropLen = 15.6847323;
+	const double FillLen = 75.5024975;
 
 	TArray<FTUTrackSegment> Out;
 
+	// ---- LEG A, outbound. Station, launch, and the climb to the turnaround.
 	AddStraight(Out, 26.0, ETUSegmentZone::Lift, 1.5f);       // 1 STATION, drive tyres
 	AddStraight(Out, 150.0, ETUSegmentZone::Launch, 38.f);    // 2 LAUNCH
 
@@ -268,35 +289,39 @@ TArray<FTUTrackSegment> ATUCoasterRide::TwoTrainCircuitLayout()
 	// launch caps at sqrt(2*grip*length) whatever is asked for, so 70 m could
 	// never exceed 29 m/s and three different targets all produced the same top
 	// speed. 150 m is what makes 38 m/s actually reachable.
+	AddEasedPitch(Out, Up, 0.0130);    // the +Gz peak lives HERE — highest v^2
+	AddStraight(Out, 40.0);            // curvature on the track. 0.0130 holds it
+	AddEasedPitch(Out, -Up, 0.0130);   // to +3.08 g. Levels off 48.5 m up.
 
-	// 3 COURSE: up, over, down. NO INVERSION deliberately — a planar loop's two
-	// legs pass 0.19 m apart, which is the reference layout's known defect, and
-	// this preset exists to demonstrate blocks rather than to show off.
-	AddEasedPitch(Out, Up, 0.0195);       // the +Gz peak lives HERE, not in the
-	AddStraight(Out, Climb);              // valley: it is the highest-v^2 curvature
-	AddEasedPitch(Out, Dn - Up, 0.0300);  // on the track. 0.030 -> 0.0195 took the
-	AddStraight(Out, 34.0);               // peak from +5.00 g to +3.57.
-	AddEasedPitch(Out, -Dn, 0.012);
+	// ---- TURN 1, level, at the top, taken at 12.1 m/s. Being slow here is the
+	// whole point of putting it at the top: a turnaround at launch speed would
+	// need R ~ 119 m to stay under 2 g, and that radius doubles into the circuit.
+	AddBankedTurn(Out, R, Arc, Ease, BankDegreesFor(14.2, R));
 
-	// Turn 1, banked for the 31.5 m/s the train ACTUALLY carries rather than a
-	// guessed 24. In a banked turn the felt magnitude is sqrt(1 + (v^2/gR)^2)
-	// however well it is banked — bank only splits that between vertical and
-	// lateral — so RADIUS is the only lever that lowers both, and 30 -> 48 m is
-	// what took lateral from 1.34 g to 0.54. Widening it also opened the return
-	// leg, which is where the clearance went from 3.33 m to 7.75.
-	AddBankedTurn(Out, 48.0, Pi * 48.0, 34.0, BankDegreesFor(31.5, 48.0));
+	// ---- LEG B, the return. Drop, airtime, then the mid-course block brake.
+	AddEasedPitch(Out, -Dn, 0.0150);
+	AddStraight(Out, DropLen);
+	AddEasedPitch(Out, Dn, 0.0150);
 
-	// 4 MID-COURSE TRIM, and a trim is all it can be. MEASURED: the train arrives
-	// here at 28.19 m/s, and stopping that at the 6 m/s^2 every zone gets needs
-	// 66.2 m against the 45 m the block is. Authoring it as a BlockBrake would
-	// build a device that closes and then gets run straight through — worse than a
-	// trim, because it would look like an interlock. Lengthen the block past ~70 m
-	// and it can become one.
-	AddStraight(Out, 45.0, ETUSegmentZone::Brake, 20.f);
+	// One airtime hill, which is where the -0.53 g comes from. Symmetric, so it
+	// returns to the height and the pitch it started at: up, over, level out.
+	AddEasedPitch(Out, Deg(20.0), 0.024);
+	AddEasedPitch(Out, Deg(-40.0), 0.024);
+	AddEasedPitch(Out, Deg(20.0), 0.024);
 
-	AddEasedPitch(Out, Deg(12.0), 0.010);                     // 5 COURSE back
-	AddEasedPitch(Out, Deg(-12.0), 0.010);
-	AddBankedTurn(Out, 30.0, Pi * 30.0, 24.0, BankDegreesFor(10.6, 30.0));
+	AddStraight(Out, FillLen);
+
+	// 4 MID-COURSE BLOCK BRAKE, and closing the circuit is what made it one. It
+	// takes the train at 26.40 m/s and stopping that at 6 m/s^2 needs 58.1 m — so
+	// the 45 m it used to have could only ever trim, and 130 m can HOLD. That is a
+	// third queueing position, on the far side of the circuit from the station.
+	AddStraight(Out, 130.0, ETUSegmentZone::BlockBrake, 20.f);
+
+	// ---- TURN 2, level, at station height, taken at 18.1 m/s.
+	AddBankedTurn(Out, R, Arc, Ease, BankDegreesFor(18.1, R));
+
+	// ---- LEG C, the approach. Collinear with leg A and ending exactly where the
+	// station begins, which is what closes the circuit.
 	AddStraight(Out, 24.0);
 
 	// 6/7/8 THE APPROACH. The outer brake is where a second train waits while the
@@ -306,16 +331,16 @@ TArray<FTUTrackSegment> ATUCoasterRide::TwoTrainCircuitLayout()
 	// All three are hold-capable, which is what makes this preset run two trains:
 	// blocks 5, 6 and 7 can each stop a train AND let it go again, so a queue can
 	// form outside the station instead of on the course. Measured arrival speeds
-	// are 7.57, 4.28 and 3.25 m/s, needing 4.8, 1.5 and 0.9 m to stop — every one
-	// of them comfortably inside its own block, unlike the mid-course brake.
+	// are 15.50, 5.77 and 2.80 m/s, needing 20.0, 2.8 and 0.7 m to stop — every one
+	// inside its own block, and now so is the mid-course brake.
 	//
 	// The authored speeds are the RELEASE speeds. A holding device rests closed
 	// and is commanded to these only while its permissive is granted, which is
 	// why the two brakes may sensibly trim to 6 and 2 m/s and still come to a
 	// dead stop when the signal is red.
-	AddStraight(Out, BrakeLen, ETUSegmentZone::BlockBrake, 6.f);  // outer
-	AddStraight(Out, TransferLen, ETUSegmentZone::Lift, 4.f);     // transfer tyres
-	AddStraight(Out, BrakeLen, ETUSegmentZone::BlockBrake, 2.f);  // inner
+	AddStraight(Out, 37.5, ETUSegmentZone::BlockBrake, 6.f);  // outer
+	AddStraight(Out, 27.0, ETUSegmentZone::Lift, 4.f);        // transfer tyres
+	AddStraight(Out, 37.5, ETUSegmentZone::BlockBrake, 2.f);  // inner
 	return Out;
 }
 

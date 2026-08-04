@@ -122,14 +122,14 @@ actor over the top:
 | Track geometry | curvature profile over arc length; straight, arc, clothoid, helix |
 | Authored data model | typed segment list, diffable JSON, exact round trip |
 | Validation | reports, never repairs — including self-clearance |
-| Circuit closure | damped Gauss-Newton over the parameters you free |
+| Circuit closure | damped Gauss-Newton over the parameters you free — and one layout that closes by shape instead, exactly |
 | Undo / redo | snapshots, with the save format as identity |
 | Train physics | energy-exact motion, zones, a train with length |
 | Ride profile | the whole ride measured at edit time |
 | Block signalling | state machine, overlap, permissives — and **two** running trains that trip them |
 | Block brakes | hold, and release on a permissive — with the layout checked for whether it *can* stop a train there |
 | NL2 interop | CSV and live telemetry — validation fixtures, not an authoring path |
-| Starter layouts | four worked examples of the vocabulary, each measured before shipping |
+| Starter layouts | four worked examples of the vocabulary, each measured before shipping — one of them a closed circuit |
 | In-engine slice | builds against UE 5.8, rides, reads out speed, G and block state |
 
 → [`Docs/ROADMAP.md`](Docs/ROADMAP.md) for what each phase ships and what is left.

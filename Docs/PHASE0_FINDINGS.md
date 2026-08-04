@@ -252,8 +252,63 @@ second train exists" — **it is not what fails**; identity fails first and fail
 acquires a contract it never needed: **once per frame, not once per train**, or a 5 s overlap expires
 in 2.5 s with two trains and nothing says so.
 
+**A circuit closes by SHAPE, not by solver — and the shape decides the whole ride (2026-08-04).** The
+two-train layout closed in *height* and nothing else: it ended **373.794 m** from the station pointing
+**86.421°** wrong, because its two turns summed to **446.42°** where a circuit needs 360. The train ran
+off the end and was teleported back, which is what the developer saw first time they opened it.
+
+An **oval closes analytically**. Both turns the same way, each exactly 180°, same radius, same
+easement — then the lateral displacements (+2R, −2R) cancel, the along-track ones cancel, heading sums
+to 360, and one scalar condition is left: *the return leg's horizontal extent equals the two collinear
+outbound legs'*. A 180° turn with easements of length E needs `arc = πR − E`, since each easement turns
+`E/2R`. No Gauss-Newton, no freedoms, no residual. Measured seam: **0.000000 m, 0.000084°, 0.000000°**.
+
+The interesting part is what that condition *costs*. Because the return leg must match the outbound
+legs, **every metre spent outbound is paid for twice.** The obvious layout — whole hill outbound,
+turnarounds at each end — came to 1717 m, and it could not be rescued: softening the launch crest to
+tame the G *lengthens* it (crest length is angle ÷ peak curvature), which lengthens the circuit, which
+costs more energy than a longer launch buys. Every variant stalled, at 914, 930, 954, 1470, 1574 m.
+
+The fix is to **split the hill across the turn** — a top-hat turnaround, which is what real launched
+coasters do — and it is cheaper in three currencies at once: the train is slowest at the top so the
+turn costs least lateral G, a small radius suffices there, and the drop's horizontal extent lands in
+the return leg where the closure condition needs it. That took the circuit to **1288 m** and it gets
+round with margin.
+
+Closing it improved almost everything, because the constraints pulled in the same direction:
+
+| | open | closed |
+|---|---|---|
+| seam | 373.794 m, 86.421° | **0.000000 m, 0.000084°** |
+| length | 1072.5 m | 1288.0 m |
+| top speed | 136.8 km/h | 136.8 km/h |
+| vertical G | −0.35 .. +3.57 | −0.53 .. +3.08 |
+| lateral G | 0.54 | **0.15** |
+| self-clearance | 7.75 m | **11.68 m** |
+| roll-rate diagnostics | 4 | **0** (peak 17.4 °/s) |
+| blocks that can hold | 3 | **5** |
+
+Two numbers had to be *hunted* rather than solved. Speed over the top: the first closed layout that
+completed crawled the turnaround at **2.70 m/s**, a 37-second dead spot, fixed by lowering the crest
+from 57.3 m to 48.5 m for **12.14 m/s**. And roll rate, which scales cleanly with easement length —
+34.0, 25.8, 20.8, 17.4 °/s at easements of 26, 34, 42, 50 m — so the easement is 50, landing on the
+17.1 °/s target the `AUTHORING.md` mitigation table already set.
+
+**A closed circuit reports its own seam as a self-intersection (2026-08-04).** `AnalyseSelfClearance`
+skips sample pairs close together *along* the track, measured linearly. On a circuit the first and
+last samples are the same piece of track, so a linear separation calls them `TotalLength` apart, never
+skips them, and reports **0.00 m at S=0.0 against S=1717.0** with nothing wrong anywhere. The fix is a
+`bCircuit` flag that measures that separation the short way round; it is off by default, because a
+point-to-point layout's two ends genuinely are far apart and hiding that would be the opposite error.
+Both behaviours are asserted, so neither can quietly become the other.
+
 **A holding device needs BOTH authorities, and the mid-course brake has neither the length nor the
-tyres (2026-08-03).** Two separate facts, both measured, and together they decide where a train may be
+tyres (2026-08-03; the length half was FIXED by closing the circuit, 2026-08-04).** The device rule
+below still stands unchanged. The length verdict does not: the return leg had to grow to satisfy the
+closure condition, that spare length went into the mid-course brake rather than into dead straight,
+and at **130 m against the 58.1 m** it needs to stop a 26.40 m/s train it is now a real block brake.
+The circuit gained a queueing position on the far side from the station. The table below is the
+measurement on the **open** layout, kept because it is what the rule was derived from. Two separate facts, both measured, and together they decide where a train may be
 parked on the two-train preset.
 
 First, the device. `MakeBrake` has `MaxAccel = 0` and `MakeLaunch` has `MaxDecel = 0`, so a friction

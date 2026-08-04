@@ -490,8 +490,17 @@ struct FClearanceReport
 // IgnoreWithinM skips pairs of samples close together ALONG the track, which are
 // trivially near each other in space and are not what this is looking for. It
 // has to exceed the tightest turn's diameter or a hairpin reports itself.
+//
+// bCircuit measures that separation THE SHORT WAY ROUND. On a closed circuit the
+// last sample and the first are the same piece of track, so a linear separation
+// calls them TotalLength apart, never skips them, and reports the closure itself
+// as a 0.00 m self-intersection — the one place a circuit is guaranteed to touch.
+// Measured on the closed two-train layout: 0.00 m at S=0.0 against S=1717.0, with
+// nothing wrong anywhere. Off by default, because a point-to-point layout's two
+// ends genuinely are far apart and hiding that would be the opposite error.
 inline FClearanceReport AnalyseSelfClearance(const FTrack& Track, const FTrackProfile& Profile,
-                                             double StepM = 0.5, double IgnoreWithinM = 12.0)
+                                             double StepM = 0.5, double IgnoreWithinM = 12.0,
+                                             bool bCircuit = false)
 {
     FClearanceReport R;
     const double Total = Track.TotalLength();
@@ -526,7 +535,10 @@ inline FClearanceReport AnalyseSelfClearance(const FTrack& Track, const FTrackPr
     {
         for (std::size_t j = i + 1; j < Rail.size(); ++j)
         {
-            if (Arc[j] - Arc[i] < IgnoreWithinM)
+            const double Along = bCircuit
+                ? std::min(Arc[j] - Arc[i], Total - (Arc[j] - Arc[i]))
+                : Arc[j] - Arc[i];
+            if (Along < IgnoreWithinM)
             {
                 continue;
             }

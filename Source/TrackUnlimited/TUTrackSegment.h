@@ -100,17 +100,20 @@ enum class ETUPresetLayout : uint8
 	// Every figure quoted in Docs/REFERENCE_LAYOUT.md comes from this.
 	Reference UMETA(DisplayName = "Reference layout (loop + banked turn)"),
 
-	// The only layout that can run two trains. Launched, with a mid-course trim
-	// and TWO pre-station block brakes separated by drive tyres — three places a
-	// train may be held outside the station, so a queue forms there instead of on
-	// the course.
+	// The only layout that can run two trains, and the only CLOSED one — it comes
+	// back to the station in position, heading and roll, not merely in height, so
+	// a lap is a lap rather than a jump. An oval: launch and climb out, level
+	// turnaround at the top of the hill, drop and airtime back, turnaround at
+	// station height, in.
 	//
-	// Every other preset has three blocks and, more to the point, ONE holding
-	// place: a block boundary only falls where a powered run starts or ends, they
-	// each have just two powered runs, and the second is a trim brake, which can
-	// stop a train and never start one again. Set TrainCount above 1 on those and
-	// the extras are refused.
-	TwoTrainCircuit UMETA(DisplayName = "Two-train circuit (launched, 8 blocks)"),
+	// FIVE places a train may be held — station, mid-course, and three across the
+	// pre-station approach — so a queue forms outside the station rather than on
+	// open course. Every other preset has three blocks and ONE holding place: a
+	// block boundary only falls where a powered run starts or ends, they each have
+	// just two powered runs, and the second is a trim brake, which can stop a train
+	// and never start one again. Set TrainCount above 1 on those and the extras are
+	// refused.
+	TwoTrainCircuit UMETA(DisplayName = "Two-train circuit (closed, 8 blocks)"),
 };
 
 UENUM(BlueprintType)

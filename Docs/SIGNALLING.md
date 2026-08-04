@@ -137,12 +137,18 @@ holds no train identity, deliberately — the identity lives one layer up, in `F
 the only place that knows where each train is. And the **block count is fixed at construction** from
 the config vector, so re-blocking a layout means building a new controller rather than mutating one.
 
-One more that is about the *ride* rather than the signalling: a layout closes in **height** and has
-never been closed in position, heading and roll, so a lap is a **teleport** from the last block back
-to the station rather than a wrap. The signalling sees that jump and interlocks it — the old range
-exits and arms its overlaps, the new range enters, no special case — and the arriving train is held at
-the end of the track until the station is clear. Close a circuit properly and the teleport becomes
-`S -= TotalLength`.
+One more that is about the *ride* rather than the signalling. The two-train preset is a genuinely
+closed circuit — 0.000000 m of position, 0.000084° of heading, 0.000000° of roll — but `FTrain` still
+clamps at the end of the track, so a lap is a **teleport** from the last block back to the station
+rather than a wrap. The signalling sees that jump and interlocks it with no special case: the old
+range exits and arms its overlaps, the new range enters, and the arriving train is held at the end of
+the track until the station is clear. Because the seam closes to zero, the teleport is now invisible.
+
+Making it a real wrap is `S -= TotalLength` **plus** one thing that belongs in this document:
+`FRideSignals::Update` swaps a rear/front pair that arrives reversed, and on a circuit a reversed pair
+is not an error — it means the train **straddles the seam**, holding the last block and the first. The
+swap would instead claim every block between them, which is the whole ring. That is a range that has
+to wrap, not a range that has to be sorted.
 
 ## Automatic and manual dispatch
 

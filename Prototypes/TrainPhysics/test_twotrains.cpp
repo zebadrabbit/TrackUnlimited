@@ -9,16 +9,26 @@
 // TrackSpline/reference_figures.cpp. If the preset is edited, edit this too — the
 // block lengths asserted below are the thing that would notice.
 //
-// WHAT THIS DOES NOT DO: there is no lap. FTrain clamps at the end of the track,
-// so a train finishing the course stops in the last block rather than arriving
-// back in the station. That is honest — the layout closes in HEIGHT but has never
-// been closed in position, heading and roll, and wrapping a train across a seam
-// that does not meet would fake continuity rather than simulate it. What is
-// tested here is one full pre-station queueing cycle, which is where the
-// interlocking actually does its work.
+// THE LAYOUT IS A CLOSED CIRCUIT, to 0.000000 m of position, 0.000084 degrees of
+// heading and 0.000000 degrees of roll. It did not used to be: it closed in
+// HEIGHT only, ending 373.794 m from the station pointing 86.421 degrees wrong,
+// because its two turns summed to 446.42 degrees where a circuit needs 360.
+//
+// What closed it is a SHAPE, not a solver. An oval closes analytically when both
+// turns are the same way, exactly 180 degrees, the same radius and the same
+// easement — the lateral displacements cancel, the along-track ones cancel,
+// heading sums to 360, and one scalar condition is left over.
+//
+// WHAT THIS STILL DOES NOT DO: FTrain has no lap. It clamps at the end of the
+// track, so the actor returns a train to the station by teleporting it. With the
+// seam closed to zero that teleport is now INVISIBLE — the two points are the
+// same place — so it is a tidiness problem rather than a visible one, and the
+// real fix is S -= TotalLength once FTrack can say it is a circuit.
 
 #include "../BlockSignal/RideSignals.h"
 #include "../TrackSpline/TrackIO.h"
+#include "../TrackSpline/TrackProfile.h"
+#include "../TrackSpline/TrackValidate.h"
 #include "RideProfile.h"
 #include "TrainPhysics.h"
 
@@ -112,29 +122,39 @@ double BankDegreesFor(double V, double R)
 
 std::vector<FItem> Layout()
 {
-    const double Up = Deg(28.0);
-    const double Dn = Deg(-30.0);
-    const double Climb = 41.7685;      // solved so the ride ends at station height
-    const double BrakeLen = 37.5;      // 2.5 train lengths
-    const double TransferLen = 27.0;   // 1.8 train lengths
+    const double Up = Deg(26.0);       // pull-up out of the launch
+    const double Dn = Deg(32.0);       // the drop out of the turnaround
+    const double R = 35.0;
+    const double Ease = 50.0;
+    const double Arc = Pi * R - Ease;  // exactly 180 degrees, easements included
+    const double DropLen = 15.6847323;    // solved: height returns to station level
+    const double FillLen = 75.5024975;    // solved: horizontal extents balance
 
     std::vector<FItem> Out;
+    // LEG A, outbound.
     AddStraight(Out, 26.0, EZone::Lift, 1.5);              // 0 STATION, drive tyres
     AddStraight(Out, 150.0, EZone::Launch, 38.0);          // 1 LAUNCH
-    AddEasedPitch(Out, Up, 0.0195);
-    AddStraight(Out, Climb);
-    AddEasedPitch(Out, Dn - Up, 0.0300);
-    AddStraight(Out, 34.0);
-    AddEasedPitch(Out, -Dn, 0.012);
-    AddBankedTurn(Out, 48.0, Pi * 48.0, 34.0, BankDegreesFor(31.5, 48.0));
-    AddStraight(Out, 45.0, EZone::Brake, 20.0);            // 3 MID-COURSE TRIM
-    AddEasedPitch(Out, Deg(12.0), 0.010);
-    AddEasedPitch(Out, Deg(-12.0), 0.010);
-    AddBankedTurn(Out, 30.0, Pi * 30.0, 24.0, BankDegreesFor(10.6, 30.0));
+    AddEasedPitch(Out, Up, 0.0130);
+    AddStraight(Out, 40.0);
+    AddEasedPitch(Out, -Up, 0.0130);
+    // TURN 1, level, at the top of the hill and taken slowly.
+    AddBankedTurn(Out, R, Arc, Ease, BankDegreesFor(14.2, R));
+    // LEG B, the return.
+    AddEasedPitch(Out, -Dn, 0.0150);
+    AddStraight(Out, DropLen);
+    AddEasedPitch(Out, Dn, 0.0150);
+    AddEasedPitch(Out, Deg(20.0), 0.024);                  // airtime hill
+    AddEasedPitch(Out, Deg(-40.0), 0.024);
+    AddEasedPitch(Out, Deg(20.0), 0.024);
+    AddStraight(Out, FillLen);
+    AddStraight(Out, 130.0, EZone::BlockBrake, 20.0);      // 3 MID-COURSE, holds
+    // TURN 2, level, at station height.
+    AddBankedTurn(Out, R, Arc, Ease, BankDegreesFor(18.1, R));
+    // LEG C, the approach, collinear with leg A and closing onto the station.
     AddStraight(Out, 24.0);
-    AddStraight(Out, BrakeLen, EZone::BlockBrake, 6.0);    // 5 OUTER, holds
-    AddStraight(Out, TransferLen, EZone::Lift, 4.0);       // 6 TRANSFER tyres, holds
-    AddStraight(Out, BrakeLen, EZone::BlockBrake, 2.0);    // 7 INNER, holds
+    AddStraight(Out, 37.5, EZone::BlockBrake, 6.0);        // 5 OUTER, holds
+    AddStraight(Out, 27.0, EZone::Lift, 4.0);              // 6 TRANSFER tyres, holds
+    AddStraight(Out, 37.5, EZone::BlockBrake, 2.0);        // 7 INNER, holds
     return Out;
 }
 
@@ -329,34 +349,109 @@ void TestTheCircuitIsTheOneTheActorBuilds()
     const FCircuit C = BuildCircuit(nullptr);
     const FTrack T = BuildTrack(C.Doc);
 
-    assert(T.NumSegments() == 25);
-    assert(std::fabs(T.TotalLength() - 1072.46) < 0.1);
+    assert(T.NumSegments() == 30);
+    assert(std::fabs(T.TotalLength() - 1288.00) < 0.1);
     assert(T.IsCurvatureContinuous(1e-9));
-    assert(std::fabs(T.EvaluateAt(T.TotalLength()).Position.Z) < 1e-6);
 
     assert(C.Boundaries.size() == 8);
-    assert(C.Authored.size() == 6);   // station, launch, trim, outer, transfer, inner
+    assert(C.Authored.size() == 6);   // station, launch, mid-course, outer, transfer, inner
 
     // Eight blocks is what makes this the only preset that can hold two trains.
     // Every other one has three, because a boundary falls only where a powered run
     // starts or ends and they each have just two powered runs.
-    const double Want[8] = {0.0, 26.0, 176.0, 675.44, 720.44, 970.46, 1007.96, 1034.96};
+    const double Want[8] = {0.0, 26.0, 176.0, 872.06, 1002.06, 1186.02, 1223.52, 1250.52};
     for (std::size_t i = 0; i < 8; ++i)
     {
         assert(std::fabs(C.Boundaries[i] - Want[i]) < 0.05);
     }
 }
 
-void TestTheMidCourseBrakeCannotHoldAndSaysSo()
+void TestTheCircuitActuallyCloses()
 {
-    // RECORDED, NOT FIXED, and the reason the holds are where they are. A block
-    // brake has to stop the train in the length it has: 28.19 m/s arrives at
-    // 675.44 m and 6 m/s^2 needs 66.2 m, against the 45 m the block is. Making it
-    // a BlockBrake would produce a device that closes and gets run straight
-    // through — worse than a trim, because it would look like an interlock.
+    // THE THING THAT MAKES IT A CIRCUIT RATHER THAN A STRIP. The layout used to
+    // close in HEIGHT only: it ended 373.794 m from the station pointing 86.421
+    // degrees wrong, because the two turns summed to 446.42 degrees where a
+    // circuit needs 360. The train ran off the end and was teleported back.
     //
-    // If this ever fails because the block was lengthened, delete it and move the
-    // hold there; that is a better circuit, not a broken test.
+    // The fix is a shape, not a solver. An oval closes ANALYTICALLY when both
+    // turns are the same way, exactly 180 degrees, same radius, same easement:
+    // the lateral displacements (+2R, -2R) cancel, the along-track ones cancel,
+    // heading sums to 360, and one scalar condition remains — the return leg's
+    // horizontal extent equals the two collinear outbound legs'.
+    //
+    // These tolerances are deliberately brutal. A seam that closes to a
+    // millimetre is a seam a rider cannot see, and anything looser would let the
+    // shape drift back into "nearly closed", which is what this replaced.
+    const FCircuit C = BuildCircuit(nullptr);
+    const FTrack T = BuildTrack(C.Doc);
+    const double Total = T.TotalLength();
+
+    const FTrackFrame Start = T.EvaluateAt(0.0);
+    const FTrackFrame End = T.EvaluateAt(Total);
+
+    const FVec3 Gap = End.Position - Start.Position;
+    assert(Length(Gap) < 1e-3);                       // position, all three axes
+    assert(std::fabs(End.Position.Z) < 1e-6);         // and height exactly
+
+    const double HeadingDot = Dot(End.Tangent, Start.Tangent);
+    assert(HeadingDot > 0.0);                         // same way round, not reversed
+    assert(std::acos(std::min(1.0, HeadingDot)) < 1e-4);
+    assert(std::fabs(End.Roll - Start.Roll) < 1e-9);  // and not rolled at the seam
+
+    // Total turning is one lap, not two and not none. Measured by unwrapping the
+    // heading, because the angle between two tangents cannot tell 360+86 from
+    // 360-86 and the whole defect lived in that ambiguity.
+    double Turn = 0.0;
+    double Prev = std::atan2(Start.Tangent.Y, Start.Tangent.X);
+    FTrackFrame W = Start;
+    for (double S = 0.0; S < Total; )
+    {
+        const double Next = std::min(S + 0.5, Total);
+        W = T.AdvanceFrom(W, S, Next);
+        const double Now = std::atan2(W.Tangent.Y, W.Tangent.X);
+        double D = Now - Prev;
+        while (D > Pi) { D -= 2.0 * Pi; }
+        while (D < -Pi) { D += 2.0 * Pi; }
+        Turn += D;
+        Prev = Now;
+        S = Next;
+    }
+    assert(std::fabs(std::fabs(Turn) - 2.0 * Pi) < 1e-3);
+}
+
+void TestClearanceMustBeMeasuredTheShortWayRound()
+{
+    // A closed circuit's first and last samples ARE the same piece of track, so a
+    // clearance check that measures separation linearly calls them TotalLength
+    // apart, never skips them, and reports the closure as a 0.00 m
+    // self-intersection. That is not a near miss to fix; it is the one place a
+    // circuit is guaranteed to touch.
+    const FCircuit C = BuildCircuit(nullptr);
+    const FTrack T = BuildTrack(C.Doc);
+    const FTrackProfile Cross;
+
+    const FClearanceReport Linear = AnalyseSelfClearance(T, Cross, 0.5, 12.0, false);
+    assert(Linear.ClosestApproach < 0.01);            // the seam, reported as a fault
+    assert(Linear.AtS < 0.6);
+    assert(Linear.AndS > T.TotalLength() - 0.6);
+
+    const FClearanceReport Circular = AnalyseSelfClearance(T, Cross, 0.5, 12.0, true);
+    assert(Circular.ClosestApproach > 10.0);          // and the truth: 11.68 m
+    assert(!Circular.bStructureOverlaps);
+}
+
+void TestEveryHoldingBlockCanActuallyStopWhatArrives()
+{
+    // A block brake is only a block brake if it can stop the train it RECEIVES,
+    // in the block it has: v^2/2a against the length. That is a layout question
+    // no zone kind can answer, and on the open version of this layout the
+    // mid-course brake failed it — 28.19 m/s arriving, 66.2 m needed, 45 m
+    // available — so it was authored as a plain trim and recorded as one.
+    //
+    // Closing the circuit is what fixed it. The return leg had to grow to balance
+    // the outbound legs, and that spare length went into the mid-course brake
+    // rather than into dead straight: 130 m against the 58.1 m it needs. The
+    // circuit gained a third queueing position on the far side from the station.
     const FCircuit Shape = BuildCircuit(nullptr);
     const FTrack T = BuildTrack(Shape.Doc);
     FTrainConfig Cfg;
@@ -364,24 +459,43 @@ void TestTheMidCourseBrakeCannotHoldAndSaysSo()
     FTrain Tr(T, Cfg);
     BuildCircuit(&Tr);
     const FRideProfile P = RunRideProfile(Tr, T, 1.0);
+    assert(P.bCompleted);
 
-    const double Arrives = SpeedAt(P, 675.44);
-    const double Needs = Arrives * Arrives / (2.0 * Grip);
-    assert(Arrives > 28.0 && Arrives < 28.4);
-    assert(Needs > 45.0);                       // longer than the block itself
-
-    // So it is authored as a plain Brake, and FindHoldZoneAt refuses it.
-    assert(Tr.FindHoldZoneAt(700.0) < 0);
-
-    // The three pre-station devices all pass the same test, which is why they are
-    // the ones that hold.
-    const double Where[3] = {970.46, 1007.96, 1034.96};
-    for (double S : Where)
+    // Every boundary that opens a hold-capable zone, checked against the block it
+    // opens. Driven off the derived boundaries rather than typed positions, so
+    // moving a device cannot quietly skip the check for it.
+    const double Total = T.TotalLength();
+    int Holds = 0;
+    for (std::size_t b = 0; b < Shape.Boundaries.size(); ++b)
     {
-        const double V = SpeedAt(P, S);
-        assert(V * V / (2.0 * Grip) < 10.0);
-        assert(Tr.FindHoldZoneAt(S + 5.0) >= 0);
+        const double Start = Shape.Boundaries[b];
+        const double End = (b + 1 < Shape.Boundaries.size()) ? Shape.Boundaries[b + 1] : Total;
+        if (Tr.FindHoldZoneAt(0.5 * (Start + End)) < 0)
+        {
+            continue;   // free course or the launch: nothing to hold with
+        }
+        ++Holds;
+        const double V = SpeedAt(P, Start);
+        assert(V * V / (2.0 * Grip) <= End - Start);
     }
+    assert(Holds == 5);   // station, mid-course, outer, transfer, inner
+
+    // The mid-course one specifically, because it is the one that changed.
+    assert(Tr.FindHoldZoneAt(900.0) >= 0);
+    const double Mid = SpeedAt(P, 872.06);
+    assert(Mid > 26.0 && Mid < 27.0);
+    assert(Mid * Mid / (2.0 * Grip) < 130.0);
+
+    // And the train is not crawling over the top. A turnaround entered at walking
+    // pace is a stall waiting to happen and a very dull thirty seconds; the first
+    // closed layout that worked did exactly that at 2.70 m/s, which is why the
+    // crest is 48.5 m and not 57.3.
+    double Slowest = 1e9;
+    for (const FRideSample& Sm : P.Samples)
+    {
+        if (Sm.S > 200.0 && Sm.S < 560.0) { Slowest = std::min(Slowest, Sm.Speed); }
+    }
+    assert(Slowest > 10.0);
 }
 
 void TestTwoTrainsQueueBeforeTheStation()
@@ -403,7 +517,7 @@ void TestTwoTrainsQueueBeforeTheStation()
     // Speeds come from the ride profile rather than being typed, so B arrives at
     // whatever the layout actually delivers.
     const FRideProfile P = RunRideProfile(A, T, 1.0);
-    const double StartB = 950.0;
+    const double StartB = 1150.0;   // block 4, free course, closing on the outer brake
 
     // Lookahead ONE here, not the two the launch wants. Two is the
     // braking-distance rule for high-speed sections; in a slow pre-station queue
@@ -419,7 +533,7 @@ void TestTwoTrainsQueueBeforeTheStation()
     CloseAllHolds(A, C.Boundaries, T.TotalLength());
     CloseAllHolds(B, C.Boundaries, T.TotalLength());
 
-    A.Place(1020.0, 0.0);                       // standing at the transfer tyres
+    A.Place(1237.0, 0.0);                       // standing at the transfer tyres
     B.Place(StartB, SpeedAt(P, StartB));        // still on the course, closing
     assert(Sig.Update(0, A.GetRearS(), A.GetFrontS()));
     assert(Sig.Update(1, B.GetRearS(), B.GetFrontS()));
@@ -483,7 +597,7 @@ void TestTwoTrainsQueueBeforeTheStation()
     //    vacated. Without SetZoneTargetSpeed this is the assertion that could not
     //    pass — a friction brake at zero never lets go.
     assert(Sig.BlockAt(B.GetDistance()) > 5);
-    assert(B.GetDistance() > 1007.96);
+    assert(B.GetDistance() > 1223.52);
 
     // 4. A ran on ahead and B never caught it.
     assert(A.GetDistance() > B.GetDistance());
@@ -520,7 +634,10 @@ void TestTheActorsOwnLoopRunsTwoTrains()
     BuildCircuit(&B);
     FTrain* Trains[2] = {&A, &B};
 
-    assert(C.HoldStartS.size() == 4);   // station, outer, transfer, inner
+    // Five places a train may stand: station, mid-course, outer, transfer, inner.
+    // The mid-course one is new, and it is there because closing the circuit made
+    // the return leg long enough for a brake that can stop what arrives.
+    assert(C.HoldStartS.size() == 5);
     assert(C.HoldStartS[0] == 0.0);
 
     // The actor's defaults: 5 s overlap, lookahead 2, 3 s dwell before restart.
@@ -601,7 +718,9 @@ int main()
     TestRetargetingIsValidated();
     TestOnlyDriveTyresCountAsHolds();
     TestTheCircuitIsTheOneTheActorBuilds();
-    TestTheMidCourseBrakeCannotHoldAndSaysSo();
+    TestTheCircuitActuallyCloses();
+    TestClearanceMustBeMeasuredTheShortWayRound();
+    TestEveryHoldingBlockCanActuallyStopWhatArrives();
     TestTwoTrainsQueueBeforeTheStation();
     TestTheActorsOwnLoopRunsTwoTrains();
 
