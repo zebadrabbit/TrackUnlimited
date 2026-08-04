@@ -167,7 +167,7 @@ struct FCircuit
     FTrackDocument Doc;
     std::vector<double> Boundaries;
     std::vector<double> Authored;    // per zone, the speed it releases at
-    std::vector<double> HoldStartS;  // where a train may stand: drive tyres only
+    std::vector<double> HoldMidS;    // where a train may stand: mid-device
 };
 
 // Tr is optional so the shape can be asked for without a train to hang zones on
@@ -217,7 +217,7 @@ FCircuit BuildCircuit(FTrain* Tr)
         C.Authored.push_back(OpenSpeed);
         if (Open == EZone::Lift || Open == EZone::BlockBrake)
         {
-            C.HoldStartS.push_back(OpenS);
+            C.HoldMidS.push_back(0.5 * (OpenS + EndS));
         }
     };
 
@@ -678,7 +678,7 @@ FRunResult RunTrains(std::size_t N, std::size_t Lookahead, double Seconds)
     {
         CloseAllHolds(*Owned[t], C.Boundaries, T.TotalLength());
         Owned[t]->SetCircuit(true);
-        Owned[t]->Place(t == 0 ? 0.0 : C.HoldStartS[t] + TrainLen, 0.0);
+        Owned[t]->Place(C.HoldMidS[t], 0.0);
         Sig.Update(t, Owned[t]->GetRearS(), Owned[t]->GetFrontS());
     }
 
@@ -765,6 +765,20 @@ void TestTheCircuitCarriesFourTrains()
             assert(R.Laps[t] >= 1);   // nobody starved, nobody deadlocked
         }
     }
+
+    // AND FOUR IS THE CEILING, for a reason that is about the layout rather than
+    // the signalling: the circuit has FIVE places a train can stand, and one has
+    // to stay free or every train is parked where the train behind it needs to go.
+    // Five trains never move at all — no violation, no deadlock in the code, just
+    // a ride that is full. The actor caps at holding places minus one because of
+    // this, so it is a log line rather than a puzzle.
+    const FRunResult Full = RunTrains(5, 1, 420.0);
+    int Moving = 0;
+    for (std::size_t t = 0; t < 5; ++t)
+    {
+        if (Full.Laps[t] > 0) { ++Moving; }
+    }
+    assert(Moving == 0);
 }
 
 void TestTheActorsOwnLoopRunsTwoTrains()
@@ -797,8 +811,12 @@ void TestTheActorsOwnLoopRunsTwoTrains()
     // Five places a train may stand: station, mid-course, outer, transfer, inner.
     // The mid-course one is new, and it is there because closing the circuit made
     // the return leg long enough for a brake that can stop what arrives.
-    assert(C.HoldStartS.size() == 5);
-    assert(C.HoldStartS[0] == 0.0);
+    assert(C.HoldMidS.size() == 5);
+    // The station's MIDDLE, not its start. Placed at the start, a 15 m train hangs
+    // back over the seam into the last block and collides with anything standing
+    // there — which is exactly how the fifth train used to arrive already in
+    // violation, before it had moved a metre.
+    assert(std::fabs(C.HoldMidS[0] - 13.0) < 1e-9);
 
     // The actor's defaults: 5 s overlap, lookahead 2. Circuit mode on both layers,
     // which the actor sets from the same measurement TestTheCircuitActuallyCloses
@@ -813,8 +831,8 @@ void TestTheActorsOwnLoopRunsTwoTrains()
     assert(!A.IsAtEnd());   // a circuit has no end to be at, ever
 
     // Train 0 in the station; the rest at the holding places in track order.
-    A.Place(0.0, 0.0);
-    B.Place(C.HoldStartS[1] + TrainLen, 0.0);
+    A.Place(C.HoldMidS[0], 0.0);
+    B.Place(C.HoldMidS[1], 0.0);
     Sig.Update(0, A.GetRearS(), A.GetFrontS());
     Sig.Update(1, B.GetRearS(), B.GetFrontS());
 

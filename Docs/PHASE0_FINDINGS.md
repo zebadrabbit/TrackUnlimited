@@ -369,6 +369,20 @@ One consequence worth knowing: the two rules then stack. `DispatchLookahead` is 
 rather than the safety requirement, its default drops from 2 to **1**, and at 2 the same four trains
 spend their time held — the ring is too tight to demand the stopping margin twice.
 
+**A layout carries one fewer train than it has places to stand (2026-08-04).** With five holding
+places, four trains run clean and **five never move at all** — every train is parked exactly where the
+train behind it needs to go. No violation, no deadlock in the code; the ride is simply full. So the
+cap is `holding places − 1`, which is what the actor now applies, rather than the number of places
+(which permitted the gridlock) or `blocks/(1 + lookahead)` (which is neither necessary nor sufficient
+here: it allows 4 at lookahead 1, where the count rule collided, and forbids 3 at lookahead 2, which
+runs).
+
+The fifth train also arrived **already in violation**, before moving a metre, for the same reason the
+station straddle deadlocked three: placed at its zone's *start*, a 15 m train hangs back over the
+boundary, and for the station — whose start is the seam — that means overlapping whatever stands in
+the last block. Trains are now placed **mid-device**, which is both where the dispatcher parks them
+and the only placement that fits a whole train inside one block.
+
 **A closed circuit reports its own seam as a self-intersection (2026-08-04).** `AnalyseSelfClearance`
 skips sample pairs close together *along* the track, measured linearly. On a circuit the first and
 last samples are the same piece of track, so a linear separation calls them `TotalLength` apart, never

@@ -681,25 +681,35 @@ void ATUCoasterRide::RebuildFromSegments()
 		// never hold it. So the number of trains the layout can run is the number
 		// of hold-capable zones, and asking for more is refused rather than
 		// granted into open course.
-		TArray<double> HoldStartS;
+		TArray<double> HoldMidS;
 		HoldZoneIndices.Reset();
 		for (int32 z = 0; z < Zones.Num(); ++z)
 		{
 			if (Zones[z].MaxAccel > 0.0 && Zones[z].MaxDecel > 0.0)
 			{
-				HoldStartS.Add(Zones[z].StartS);
+				// The MIDDLE, because that is where the dispatcher parks a held
+				// train and where a whole train fits inside one block. Placed at a
+				// zone's start instead, a 15 m train hangs back over the boundary —
+				// and for the station, whose start is the seam, that means a train
+				// placed there collides with one placed in the LAST block.
+				HoldMidS.Add(0.5 * (Zones[z].StartS + Zones[z].EndS));
 				HoldZoneIndices.Add(z);
 			}
 		}
+
+		// ONE HOLDING PLACE MUST STAY FREE, or nothing can ever move: every train
+		// is standing where the train behind it needs to go, and the ride gridlocks
+		// without a single violation to show for it. MEASURED on this circuit,
+		// which has five: four trains run clean and five never move at all.
 		const int32 Wanted = FMath::Max(1, TrainCount);
-		const int32 Running = FMath::Min(Wanted, FMath::Max(1, HoldStartS.Num()));
+		const int32 Running = FMath::Min(Wanted, FMath::Max(1, HoldMidS.Num() - 1));
 		if (Running < Wanted)
 		{
 			UE_LOG(LogTemp, Warning,
 				TEXT("TrackUnlimited: %d trains asked for, %d run — the layout has %d place(s) "
-					"that can both hold a train and release it. Add a block brake or drive-tyre "
-					"run to park another."),
-				Wanted, Running, HoldStartS.Num());
+					"that can both hold a train and release it, and one has to stay free for "
+					"anything to move. Add a block brake or drive-tyre run to park another."),
+				Wanted, Running, HoldMidS.Num());
 		}
 
 		// MEASURED, not authored. A layout either comes back to where it started
@@ -790,12 +800,10 @@ void ATUCoasterRide::RebuildFromSegments()
 			{
 				New->AddZone(Z);
 			}
-			// Train 0 starts in the station; the rest stand at the holding places
-			// in track order. A whole train length past each start, so the REAR
-			// clears the boundary — placed on the boundary itself a train
-			// straddles it and holds the block behind as well, which reads as an
-			// occupancy nothing put there.
-			New->Place(t == 0 ? 0.0 : HoldStartS[t] + TrainLengthM, 0.0);
+			// Mid-device, every one of them including the station — the same place
+			// the dispatcher parks a held train, and the only placement that puts
+			// a whole train inside a single block.
+			New->Place(HoldMidS[t], 0.0);
 			Trains.Add(MoveTemp(New));
 		}
 
