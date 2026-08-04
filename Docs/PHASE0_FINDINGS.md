@@ -294,6 +294,39 @@ from 57.3 m to 48.5 m for **12.14 m/s**. And roll rate, which scales cleanly wit
 34.0, 25.8, 20.8, 17.4 °/s at easements of 26, 34, 42, 50 m — so the easement is 50, landing on the
 17.1 °/s target the `AUTHORING.md` mitigation table already set.
 
+**A lap is four changes, and only one of them is `S -= L` (2026-08-04).** With the circuit closed, the
+train can wrap instead of stopping at the end — but the wrap is the easy part. `FTrainConfig::bCircuit`
+turns it on, and it is measured rather than authored: the actor checks position, heading **and** roll
+at the seam and only wraps a layout that passes, because wrapping an open one invents continuity
+across whatever gap is there. The other three:
+
+- **Distance travelled cannot be read back off the position.** `Travelled = S1 - S0` is negative by a
+  whole lap on the step that crosses the seam, which would reverse the gravity and resistance work for
+  that step. On a circuit the advance *is* the distance.
+- **`AdvanceFrom` walks backwards across the seam.** The wrapped target is behind the cached frame, so
+  the incremental walk would traverse the entire track the wrong way. Crossing samples re-evaluate
+  from the start instead — O(track length), but nine calls per lap against the ~33 integrator steps a
+  frame the cache exists to avoid. That is why the seam must close in heading and roll and not merely
+  in position: a residual there is a pop, once a lap, in the same place every time.
+- **A reversed rear/front pair changes meaning.** On a strip it is a caller mistake and gets sorted.
+  On a circuit it is a train **straddling the seam**, holding the last block and the first — and
+  sorting it claims every block *between* them, which is the whole ring, from one train, silently.
+  `FRideSignals` now walks a possibly-wrapped range through one helper, so the entry test, the exit
+  release and the occupancy query cannot disagree about what "the range" means. Three mutations
+  confirm it: treating the wrap as a swap, ignoring the wrap in `Covers`, and not wrapping the range
+  walk each kill exactly one test.
+
+Measured on the closed preset: two trains, ten minutes, **4 and 5 laps**, zero violations, never a
+shared block, and ~24,000 frames apiece spent genuinely straddling the seam rather than stepping over
+it in one tick.
+
+**A train stopped in the station straddles the seam, and that is correct rather than convenient.** The
+station is the first block, so its start *is* the seam; a train held there at 2 m/s stops within about
+0.3 m of it and hangs its back half into the last block. Physically true, correctly interlocked, and
+it costs a block of capacity while dwelling. A real station stops a train at a marked platform
+position, which the zone model cannot express — it says *target speed*, not *stop here*. Recorded
+rather than fixed.
+
 **A closed circuit reports its own seam as a self-intersection (2026-08-04).** `AnalyseSelfClearance`
 skips sample pairs close together *along* the track, measured linearly. On a circuit the first and
 last samples are the same piece of track, so a linear separation calls them `TotalLength` apart, never

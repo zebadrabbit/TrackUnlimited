@@ -278,8 +278,16 @@ private:
 	TArray<int32> HoldZoneIndices;
 
 	// Seconds each train has been at rest in the last block, for the teleport back
-	// to the station. Per train, because they arrive at different times.
+	// to the station. Per train, because they arrive at different times. Unused on
+	// a circuit, where trains drive into the station instead.
 	TArray<float> StoppedForS;
+
+	// MEASURED on every rebuild, never authored: does the end of the track meet
+	// the start in position, heading AND roll? Trains lap when it does and are
+	// teleported back to the station when it does not, and neither behaviour is a
+	// preference — wrapping an open layout would invent continuity across whatever
+	// gap is there.
+	bool bTrackIsCircuit = false;
 
 	// Generic track cross-section: gauge, rail and spine dimensions, tie
 	// spacing. Defaults sit mid-range for real steel coaster track. Model a

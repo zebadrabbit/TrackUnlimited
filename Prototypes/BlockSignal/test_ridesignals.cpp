@@ -420,6 +420,58 @@ void TestTwoTrainsRoundACircuitCleanly()
     assert(Moves > 600);
 }
 
+void TestASeamStraddleHoldsTwoBlocksNotTheWholeRing()
+{
+    // On a circuit a train really can have its tail in the last block and its
+    // nose in the first, and then rear > front. Sorting that pair — which is the
+    // right thing on a strip — turns "I hold blocks 5 and 0" into "I hold 0
+    // through 5", so ONE train claims the entire circuit and nothing else can
+    // move anywhere, for ever, with no violation reported.
+    FRideSignals S(Wide(), 0.0, 1, 2, true);
+
+    assert(S.Update(0, 590.0, 5.0));
+    assert(S.OccupiedBy(0, 5));
+    assert(S.OccupiedBy(0, 0));
+    for (std::size_t b = 1; b <= 4; ++b)
+    {
+        assert(!S.OccupiedBy(0, b));
+    }
+    assert(S.GetState(5) == EBlockState::Occupied);
+    assert(S.GetState(0) == EBlockState::Occupied);
+    assert(S.GetState(3) == EBlockState::Clear);
+
+    // Tail round as well: the last block releases, exactly like any other exit.
+    assert(S.Update(0, 10.0, 25.0));
+    assert(S.GetState(5) == EBlockState::Clear);
+    assert(S.OccupiedBy(0, 0));
+    assert(S.Violations() == 0);
+}
+
+void TestASeamStraddleStillCollidesAndStillDenies()
+{
+    // The seam is not a hiding place. A train sitting in block 0 must still be
+    // seen by one arriving across the seam, and must still deny it.
+    FRideSignals S(Wide(), 0.0, 1, 2, true);
+
+    assert(S.Update(1, 20.0, 35.0));          // B parked in block 0
+    assert(!S.CanDispatchInto(0, 0));         // A may not be let into it
+    assert(!S.Update(0, 590.0, 5.0));         // and arriving anyway is a violation
+    assert(S.Violations() == 1);
+    assert(S.OccupiedBy(0, 0) && S.OccupiedBy(1, 0));
+}
+
+void TestWithoutCircuitAReversedPairIsStillSorted()
+{
+    // Unchanged, and it has to be: a point-to-point layout has no seam, so a
+    // reversed pair there is a caller passing its arguments the wrong way round.
+    FRideSignals S(Wide(), 0.0, 1);
+    assert(S.Update(120.0, 105.0));
+    assert(S.OccupiedBy(0, 1));
+    assert(!S.OccupiedBy(0, 0));
+    assert(!S.OccupiedBy(0, 5));
+    assert(S.Violations() == 0);
+}
+
 } // namespace
 
 int main()
@@ -444,6 +496,9 @@ int main()
     TestUnknownTrainDenies();
     TestOccupiesIsPerBlockAndPerTrain();
     TestTwoTrainsRoundACircuitCleanly();
+    TestASeamStraddleHoldsTwoBlocksNotTheWholeRing();
+    TestASeamStraddleStillCollidesAndStillDenies();
+    TestWithoutCircuitAReversedPairIsStillSorted();
 
     std::printf("test_ridesignals: all assertions passed\n");
     return 0;

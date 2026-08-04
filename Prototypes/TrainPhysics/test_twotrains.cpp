@@ -614,11 +614,14 @@ void TestTheActorsOwnLoopRunsTwoTrains()
 {
     // A LINE-FOR-LINE STAND-IN FOR ATUCoasterRide::Tick, because that function
     // cannot be compiled without Unreal and this is the only place its policy can
-    // be checked at all. Same order, same defaults, same teleport:
+    // be checked at all. Same order, same defaults:
     //
     //   for each train: ServeHolds, Step, Signals->Update
     //   Signals->Tick once
-    //   any train arrived in the last block -> back to the station after a dwell
+    //
+    // and NO teleport, because the layout closes. The trains drive round, through
+    // the seam, into the station, under their own power. The actor makes exactly
+    // that choice the same way: it measures the seam and only wraps if it meets.
     //
     // What it is really looking for is DEADLOCK. Every individual rule here is
     // "fail closed", and a circuit of fail-closed rules is exactly the shape that
@@ -640,12 +643,17 @@ void TestTheActorsOwnLoopRunsTwoTrains()
     assert(C.HoldStartS.size() == 5);
     assert(C.HoldStartS[0] == 0.0);
 
-    // The actor's defaults: 5 s overlap, lookahead 2, 3 s dwell before restart.
-    FRideSignals Sig(C.Boundaries, 5.0, 2, 2);
+    // The actor's defaults: 5 s overlap, lookahead 2. Circuit mode on both layers,
+    // which the actor sets from the same measurement TestTheCircuitActuallyCloses
+    // makes.
+    FRideSignals Sig(C.Boundaries, 5.0, 2, 2, true);
     assert(Sig.Lookahead() == 2);
 
     CloseAllHolds(A, C.Boundaries, T.TotalLength());
     CloseAllHolds(B, C.Boundaries, T.TotalLength());
+    A.SetCircuit(true);
+    B.SetCircuit(true);
+    assert(!A.IsAtEnd());   // a circuit has no end to be at, ever
 
     // Train 0 in the station; the rest at the holding places in track order.
     A.Place(0.0, 0.0);
@@ -654,10 +662,9 @@ void TestTheActorsOwnLoopRunsTwoTrains()
     Sig.Update(1, B.GetRearS(), B.GetFrontS());
 
     const double Dt = 1.0 / 240.0;
-    const double Dwell = 3.0;
-    const std::size_t Last = Sig.NumBlocks() - 1;
-    double StoppedFor[2] = {0.0, 0.0};
     int Laps[2] = {0, 0};
+    int SeamStraddles[2] = {0, 0};
+    double Prev[2] = {A.GetDistance(), B.GetDistance()};
     bool bShared = false;
 
     for (int Frame = 0; Frame < 240 * 600; ++Frame)
@@ -667,6 +674,16 @@ void TestTheActorsOwnLoopRunsTwoTrains()
             ServeHolds(*Trains[t], Sig, t, C.Authored);
             Trains[t]->Step(Dt);
             Sig.Update(t, Trains[t]->GetRearS(), Trains[t]->GetFrontS());
+
+            // A lap is the distance going backwards, which on a wrapping train is
+            // the only thing that can make it do so.
+            const double Now = Trains[t]->GetDistance();
+            if (Now + 100.0 < Prev[t]) { ++Laps[t]; }
+            Prev[t] = Now;
+
+            // And the train really does span the seam on the way through, rather
+            // than stepping over it in one frame and never being seen there.
+            if (Trains[t]->GetFrontS() < Trains[t]->GetRearS()) { ++SeamStraddles[t]; }
         }
         Sig.Tick(Dt);
 
@@ -677,33 +694,21 @@ void TestTheActorsOwnLoopRunsTwoTrains()
                 bShared = true;
             }
         }
-
-        for (std::size_t t = 0; t < 2; ++t)
-        {
-            const bool bSettled = Sig.BlockAt(Trains[t]->GetDistance()) == Last
-                && (Trains[t]->GetSpeed() <= 0.0 || Trains[t]->IsAtEnd());
-            if (!bSettled)
-            {
-                StoppedFor[t] = 0.0;
-                continue;
-            }
-            StoppedFor[t] += Dt;
-            if (StoppedFor[t] >= Dwell && !Sig.Occupies(0))
-            {
-                Trains[t]->Place(0.0, 0.0);
-                Sig.Update(t, Trains[t]->GetRearS(), Trains[t]->GetFrontS());
-                StoppedFor[t] = 0.0;
-                ++Laps[t];
-            }
-        }
     }
 
-    // Ten minutes of ride at a ~90 s circuit. BOTH trains keep going round — the
-    // deadlock this is looking for would show up as one of these stuck at zero
-    // while the other cycles, which is what a fail-closed rule set does when two
-    // trains each hold what the other is waiting for.
+    // Ten minutes of ride. BOTH trains keep going round — the deadlock this is
+    // looking for would show up as one stuck at zero while the other cycles,
+    // which is what a fail-closed rule set does when two trains each hold what
+    // the other is waiting for.
     assert(Laps[0] >= 3);
     assert(Laps[1] >= 3);
+
+    // Each lap crosses the seam with the train ACROSS it for a while — 15 m at
+    // station speed is a good few frames — and that is the state that used to be
+    // unrepresentable. If this is zero, the trains are jumping the seam in one
+    // step and the wrapped-range handling is never being exercised.
+    assert(SeamStraddles[0] > 10);
+    assert(SeamStraddles[1] > 10);
 
     // And the interlocking held throughout: never two trains in one block, never
     // a permissive granted into an occupied one.

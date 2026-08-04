@@ -139,6 +139,16 @@ struct FTrainConfig
     // which can look like the ride working. The reporting is what makes it
     // useful — see FRideProfile::bRolledBack, which says where it happened.
     bool bAllowRollback = false;
+
+    // Whether the end of the track joins the start, so a train runs LAPS instead
+    // of stopping at the end.
+    //
+    // Off by default and NOT a preference: on a layout that does not close, a
+    // wrap teleports the train across whatever gap is there and calls it
+    // continuity. The caller is expected to have MEASURED closure — position,
+    // heading and roll — before setting it. ATUCoasterRide does exactly that and
+    // turns it on only for the layout that passes.
+    bool bCircuit = false;
 };
 
 class FTrain
@@ -260,7 +270,19 @@ public:
     double GetVelocity() const { return VelocityMs; }
     bool IsRollingBack() const { return VelocityMs < 0.0; }
     double GetSpeed() const { return std::fabs(VelocityMs); }
-    bool IsAtEnd() const { return DistanceAlong >= Track.TotalLength(); }
+
+    // A circuit has no end to be at, which is the point of it. Everything that
+    // stops on this — the ride profile's walk, the actor's return-to-station —
+    // therefore keeps working unchanged on an open layout and simply never fires
+    // on a closed one.
+    bool IsAtEnd() const { return !Config.bCircuit && DistanceAlong >= Track.TotalLength(); }
+
+    // Set after construction rather than only in the config because the RIDE
+    // PROFILE has to be taken with it off: the profile walks arc length forwards
+    // and stops at the end, so on a circuit it would lap for ever and its samples
+    // would overwrite each other. Build open, measure, then close.
+    void SetCircuit(bool bIn) { Config.bCircuit = bIn; }
+    bool IsCircuit() const { return Config.bCircuit; }
 
     // Cached, not recomputed — the step that moved the train here already paid
     // for it. EvaluateAt is O(track length), so holding onto the frame halves
@@ -436,8 +458,13 @@ public:
             Advance = std::max(0.0, Advance);
         }
 
-        const double S1 = std::max(0.0, std::min(Total, S0 + Advance));
-        const double Travelled = S1 - S0;
+        // On a circuit the advance is never clipped, so the distance travelled is
+        // the advance itself. Reading it back off S1 - S0 would be NEGATIVE by a
+        // whole lap the step the train crosses the seam, which would reverse the
+        // gravity and resistance work for that step.
+        const double S1 = Config.bCircuit ? ClampS(S0 + Advance)
+                                          : std::max(0.0, std::min(Total, S0 + Advance));
+        const double Travelled = Config.bCircuit ? Advance : S1 - S0;
         // Continue from the cached frame rather than re-evaluating from the
         // track start: O(one tick's travel) instead of O(track length). On a
         // 425 m layout that is ~33 integrator steps a frame instead of ~42,500,
@@ -480,9 +507,25 @@ public:
     }
 
 private:
+    // Wraps on a circuit, clamps otherwise. Every arc length in this class goes
+    // through here — the train's own distance, the nose, the tail, every sample —
+    // so a circuit needs no second code path anywhere else.
     double ClampS(double S) const
     {
         const double Total = Track.TotalLength();
+        if (!(Total > 0.0))
+        {
+            return 0.0;
+        }
+        if (Config.bCircuit)
+        {
+            double W = std::fmod(S, Total);
+            if (W < 0.0)
+            {
+                W += Total;   // fmod keeps the sign of S; a lap has no sign
+            }
+            return W;
+        }
         return S < 0.0 ? 0.0 : (S > Total ? Total : S);
     }
 
@@ -548,10 +591,27 @@ private:
     // not changing anyway.
     void AdvanceSamples(double Travelled)
     {
+        const double Total = Track.TotalLength();
         for (std::size_t i = 0; i < Samples.size(); ++i)
         {
-            const double Next = ClampS(SampleS[i] + Travelled);
-            Samples[i] = Track.AdvanceFrom(Samples[i], SampleS[i], Next);
+            const double Raw = SampleS[i] + Travelled;
+            const double Next = ClampS(Raw);
+            // Crossing the seam, the wrapped target is BEHIND the cached frame, and
+            // AdvanceFrom would walk a whole lap backwards to reach it. Re-evaluate
+            // from the track start instead: O(track length), but once per sample
+            // per lap — about nine calls every hundred seconds, against the ~33
+            // integrator steps a frame this exists to avoid. The frame it returns
+            // is the canonical start frame, which is why the seam has to be closed
+            // in HEADING and ROLL and not merely in position: any residual there
+            // shows up as a pop, once a lap, in exactly the same place.
+            if (Config.bCircuit && (Raw >= Total || Raw < 0.0))
+            {
+                Samples[i] = Track.EvaluateAt(Next);
+            }
+            else
+            {
+                Samples[i] = Track.AdvanceFrom(Samples[i], SampleS[i], Next);
+            }
             SampleS[i] = Next;
         }
         Current = Samples[Samples.size() / 2];

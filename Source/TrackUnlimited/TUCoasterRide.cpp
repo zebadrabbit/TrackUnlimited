@@ -702,9 +702,36 @@ void ATUCoasterRide::RebuildFromSegments()
 				Wanted, Running, HoldStartS.Num());
 		}
 
+		// MEASURED, not authored. A layout either comes back to where it started
+		// or it does not, and only the geometry knows — so nobody gets to tick a
+		// "this is a circuit" box and be wrong about it. All three have to hold:
+		// position, because a gap is a gap; HEADING, because a track that returns
+		// to the right place pointing the wrong way is not joined; and ROLL,
+		// because the rider would be flipped at the seam.
+		//
+		// A millimetre and a hundredth of a degree are far below anything a rider
+		// or a mesh can resolve, and far above the ~1e-5 m that float-stored
+		// authored values actually leave.
+		{
+			const double End = Track.TotalLength();
+			const FTrackFrame A = Track.EvaluateAt(0.0);
+			const FTrackFrame B = Track.EvaluateAt(End);
+			const double Gap = Length(B.Position - A.Position);
+			const double Head = FMath::RadiansToDegrees(FMath::Acos(
+				FMath::Clamp(Dot(B.Tangent, A.Tangent), -1.0, 1.0)));
+			const double Roll = FMath::RadiansToDegrees(FMath::Abs(B.Roll - A.Roll));
+			bTrackIsCircuit = Gap < 1e-3 && Head < 0.01 && Roll < 0.01;
+
+			UE_LOG(LogTemp, Log,
+				TEXT("TrackUnlimited: seam %.6f m, %.6f deg heading, %.6f deg roll — %s"),
+				Gap, Head, Roll,
+				bTrackIsCircuit ? TEXT("CLOSED CIRCUIT, trains run laps")
+								: TEXT("open layout, trains return to the station by teleport"));
+		}
+
 		Signals = MakeUnique<FRideSignals>(BlockStarts, BlockBufferSeconds,
 			static_cast<std::size_t>(FMath::Max(1, DispatchLookahead)),
-			static_cast<std::size_t>(Running));
+			static_cast<std::size_t>(Running), bTrackIsCircuit);
 
 		{
 			FString Where;
@@ -828,12 +855,18 @@ void ATUCoasterRide::RebuildFromSegments()
 	// state of real ride control, and the alternative — open until a dispatcher
 	// notices — is open for exactly one frame every time, which is one frame of a
 	// train being pushed through a red.
+	//
+	// And NOW close the circuit, for the same reason and in the same breath: the
+	// profile walks arc length forwards and stops at the end, so on a lapping
+	// train it would never stop and its samples would overwrite each other. The
+	// ride profile is one lap, measured open; the ride itself laps.
 	for (const TUniquePtr<FTrain>& T : Trains)
 	{
 		for (const int32 Zi : HoldZoneIndices)
 		{
 			T->SetZoneTargetSpeed(static_cast<std::size_t>(Zi), 0.0);
 		}
+		T->SetCircuit(bTrackIsCircuit);
 	}
 
 	if (!Profile_.bCompleted)
@@ -1402,18 +1435,18 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 	// to the station is a teleport, and the range diff handles it with no special
 	// case: the last block exits and arms its overlap, the station block enters.
 	//
-	// ponytail: this teleport is the ride's only "lap". The layout closes in
-	// HEIGHT and has never been closed in position, heading and roll, so a train
-	// wrapped across that seam would be faking continuity rather than simulating
-	// it — which is why the seam is a jump the signalling can see rather than a
-	// wrap inside FTrain. Close the circuit properly and this becomes an S -= L.
+	// ONLY FOR LAYOUTS THAT DO NOT CLOSE. On a measured circuit FTrain wraps, so
+	// a train drives into the station under its own power and none of this runs —
+	// IsAtEnd is false for ever and the last block is just another block. This is
+	// the fallback for the three presets whose two ends are hundreds of metres
+	// apart, where a wrap would be inventing continuity that is not there.
 	//
 	// TWO GUARDS, both of which only matter with more than one train: it must be
 	// stopped in the LAST block (a train held at a block brake is also stopped,
 	// and teleporting that one would take it out of the queue it is waiting in),
 	// and the station must be empty (or two trains land on each other, which the
 	// interlocking would then correctly and uselessly report as a violation).
-	if (Signals)
+	if (Signals && !bTrackIsCircuit)
 	{
 		const std::size_t Last = Signals->NumBlocks() - 1;
 		for (int32 t = 0; t < Trains.Num(); ++t)

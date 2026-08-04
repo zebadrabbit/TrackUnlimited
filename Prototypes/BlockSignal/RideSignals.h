@@ -82,12 +82,21 @@ public:
     // Update and every permissive fail closed, which is a ride that never starts
     // with nothing anywhere saying why — the same failure the lookahead clamp
     // below exists to prevent.
+    //
+    // bCircuit says the track's end joins its start. It changes exactly one
+    // thing, and it is not the lookahead — that already wraps. It changes what a
+    // REVERSED rear/front pair means. On a strip, front behind rear is a caller
+    // mistake and gets sorted. On a circuit it is a train STRADDLING THE SEAM,
+    // holding the last block and the first, and sorting it would claim every
+    // block between them instead: the entire ring, from one train.
     FRideSignals(std::vector<double> InBoundaryS, double InBufferSeconds,
-                 std::size_t InLookahead, std::size_t InNumTrains = 1)
+                 std::size_t InLookahead, std::size_t InNumTrains = 1,
+                 bool bInCircuit = false)
         : Boundary(Repaired(std::move(InBoundaryS)))
         , Blocks(std::vector<FBlockConfig>(Boundary.size(), FBlockConfig{InBufferSeconds}))
         , Look(InLookahead)
         , Held(InNumTrains < 1 ? 1 : InNumTrains)
+        , bCircuit(bInCircuit)
     {
         // Clamped, not trusted. FBlockController fails closed at both ends of its
         // range, so an out-of-range lookahead would deny every dispatch for the
@@ -166,12 +175,28 @@ public:
             return false;
         }
         FHeldRange& Me = Held[Train];
+
+        // Reversed means one of two completely different things. See the
+        // constructor: on a circuit it is a seam straddle, everywhere else it is
+        // a caller that passed its arguments the wrong way round.
+        bool bWrap = false;
         if (FrontS < RearS)
         {
-            std::swap(RearS, FrontS);
+            if (bCircuit)
+            {
+                bWrap = true;
+            }
+            else
+            {
+                std::swap(RearS, FrontS);
+            }
         }
         const std::size_t NewTail = BlockAt(RearS);
         const std::size_t NewNose = BlockAt(FrontS);
+        if (NewTail == NewNose)
+        {
+            bWrap = false;   // a train shorter than one block cannot span the ring
+        }
         bool bOk = true;
 
         // One range diff covers every case that would otherwise be special: a
@@ -195,22 +220,24 @@ public:
         //
         // "Already held" is MY range, not the last-updated train's. That one word
         // is the difference between reporting a collision and suppressing it.
-        for (std::size_t b = NewTail; b <= NewNose; ++b)
+        const FHeldRange Old = Me;
+        const FHeldRange New{NewTail, NewNose, bWrap, true};
+
+        ForEachInRange(NewTail, NewNose, bWrap, [&](std::size_t b)
         {
-            const bool bHeldAlready = Me.bOccupies && b >= Me.Tail && b <= Me.Nose;
-            if (!bHeldAlready)
+            if (!Covers(Old, b))
             {
                 const bool bWasClear = Blocks.OnTrainEnter(b);
                 bOk = bOk && bWasClear;
             }
-        }
-        if (Me.bOccupies)
+        });
+        if (Old.bOccupies)
         {
-            for (std::size_t b = Me.Tail; b <= Me.Nose; ++b)
+            ForEachInRange(Old.Tail, Old.Nose, Old.bWrapped, [&](std::size_t b)
             {
-                if (b >= NewTail && b <= NewNose)
+                if (Covers(New, b))
                 {
-                    continue;
+                    return;
                 }
                 // Leaving a block does not mean the block is empty. Another
                 // train standing in it keeps it OCCUPIED — without this test a
@@ -218,22 +245,20 @@ public:
                 // behalf, and one reads CLEAR with a train parked in it.
                 if (HeldByAnother(Train, b))
                 {
-                    continue;
+                    return;
                 }
                 // Cannot report exit-without-entry: every block in the old
                 // range was entered when it became the range. Asserted in the
                 // test rather than branched on here.
                 Blocks.OnTrainExit(b);
-            }
+            });
         }
 
         // ponytail: a block crossed ENTIRELY within one dt is never entered and
         // never arms its overlap. At 60 Hz a 30 m/s train covers 0.5 m a frame,
         // so this needs a block shorter than that to matter. Step the range one
         // block at a time if block lengths ever approach a frame of travel.
-        Me.Tail = NewTail;
-        Me.Nose = NewNose;
-        Me.bOccupies = true;
+        Me = New;
         if (!bOk)
         {
             ++ViolationCount;
@@ -264,7 +289,7 @@ public:
         for (std::size_t i = 0; i < Look; ++i)
         {
             const std::size_t B = (Block + i) % N;
-            if (Me.bOccupies && B >= Me.Tail && B <= Me.Nose)
+            if (Covers(Me, B))
             {
                 continue;
             }
@@ -325,12 +350,7 @@ public:
     // rewrite turns on.
     bool OccupiedBy(std::size_t Train, std::size_t Block) const
     {
-        if (Train >= Held.size())
-        {
-            return false;
-        }
-        const FHeldRange& H = Held[Train];
-        return H.bOccupies && Block >= H.Tail && Block <= H.Nose;
+        return Train < Held.size() && Covers(Held[Train], Block);
     }
 
 private:
@@ -364,13 +384,54 @@ private:
     {
         std::size_t Tail = 0;
         std::size_t Nose = 0;
+        // The range runs Tail -> N-1 -> 0 -> Nose rather than Tail -> Nose. Only
+        // reachable on a circuit, and only while a train sits across the seam.
+        bool bWrapped = false;
         bool bOccupies = false;
     };
+
+    // Every block a range covers, once each, wrapped or not. One walk, so the
+    // enter loop, the exit loop and the occupancy test cannot disagree about what
+    // "the range" means — which is the class of bug this whole file exists after.
+    template <typename FN>
+    void ForEachInRange(std::size_t Tail, std::size_t Nose, bool bWrap, FN Fn) const
+    {
+        const std::size_t N = Blocks.NumBlocks();
+        if (N == 0)
+        {
+            return;
+        }
+        std::size_t B = Tail;
+        for (std::size_t Guard = 0; Guard < N; ++Guard)
+        {
+            Fn(B);
+            if (B == Nose)
+            {
+                return;
+            }
+            B = bWrap ? (B + 1) % N : B + 1;
+            if (!bWrap && B >= N)
+            {
+                return;
+            }
+        }
+    }
+
+    static bool Covers(const FHeldRange& H, std::size_t Block)
+    {
+        if (!H.bOccupies)
+        {
+            return false;
+        }
+        return H.bWrapped ? (Block >= H.Tail || Block <= H.Nose)
+                          : (Block >= H.Tail && Block <= H.Nose);
+    }
 
     std::vector<double> Boundary;
     FBlockController Blocks;
     std::size_t Look = 1;
     std::vector<FHeldRange> Held;
+    bool bCircuit = false;
 
     // Circuit-wide, not per train: a violation is an E-stop condition for the
     // whole ride, and the pair of trains involved is not a thing either of them
