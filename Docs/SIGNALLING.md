@@ -288,13 +288,46 @@ does **not** exist, in rough order of how much it would change:
   rider who needs longer to board does not hold up the two in front. Each position is one
   `FStationProcess` already, so this is three of them in series and a rule that the front one leaves
   first — but nothing sequences them yet.
-- **A multi-position platform.** A load platform holding three trains, dispatched individually so a
-  rider who needs longer to board does not hold up the two in front. Each position is one
-  `FStationProcess` already, and they can now be *authored* as separate zones — what is missing is the
-  rule that sequences them, so the front one leaves first and the others advance behind it.
-- **A turnout, and a maintenance spur.** A switch is not a zone: it changes which track a train is on,
-  which the whole arc-length model currently has no way to say. This is the largest of the three and
-  is properly Phase 4 or later.
+- **A turnout, and a maintenance spur.** Parked as a far-future stretch goal. A switch is not a zone:
+  it changes which *track* a train is on, which the whole arc-length model currently has no way to say.
+
+### Multi-position platforms, which turned out to be mostly emergent
+
+A load platform holding three trains, each dispatched individually — common on rides with small
+vehicles, where one train's worth of riders is a handful of people and the platform is long enough to
+work three at once. Almost none of it needed writing, and that is the payoff of having made the process
+**one per position**: the interlocking already says "advance when the space ahead frees", and each
+position already gates its own dispatch. There is no sequencing rule, because a train cannot pass the
+train in front of it and the block system already knew that.
+
+Two things did need building.
+
+**Authoring identical devices in a row.** Three loading positions are the same kind at the same speed,
+so neither of the run-splitting rules can tell them apart — they really are identical, and are still
+three separate machines with three motors and three blocks. `FTUTrackSegment::bStartsNewDevice` says so
+outright. The same flag authors a queue of brake sections.
+
+**"Loaded" belongs to the train, not the platform.** Riders board once, at whichever position their
+train was standing at, and the train then advances *full* — it does not board again at each position it
+passes through. The first version of the three-position test had every train re-run the whole boarding
+sequence three times, which is a platform that can never empty. It is per-vehicle state the ride control
+keeps, exactly as a real PLC does, and the platform is told rather than deciding: a switch has no idea
+which train is over it. A pass-through position still costs the operators' all-clear, because moving a
+train with people in it is a move somebody confirms.
+
+**Measured, and this is the operational argument for the whole shape.** Three positions, 8-second loads,
+departures at 19.2, 58.2 and 99.3 s. Now give one rider 52 extra seconds:
+
+| where the slow load is | departures | cost to the ride |
+|---|---|---|
+| rear position | 19.2, 58.2, **104.8** | **5.5 s** |
+| front position | **71.2, 110.2, 151.3** | **52.0 s** |
+
+At the back it is almost free, and the two trains in front are unaffected *to the frame* — asserted
+exactly, because "about the same" would pass on a mechanism that coupled them weakly and the claim is
+that they are not coupled at all. At the front it costs the full 52 seconds and everybody pays it.
+Positions are three loading bays, not a queue for one — and that is why an operation moves a slow load
+to the back of the platform when it can see one coming.
 
 ## How many trains a circuit carries
 

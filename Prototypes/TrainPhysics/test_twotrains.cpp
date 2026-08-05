@@ -61,22 +61,32 @@ double Deg(double D) { return D * Pi / 180.0; }
 // only thing that can both stop a train and let it go again. It is a separate
 // enumerator rather than a reused Lift because block boundaries fall where the
 // KIND changes, and two holding devices in a row have to stay two blocks.
-enum class EZone { None, Lift, Launch, Brake, BlockBrake, Station };
+enum class EZone { None, Lift, Launch, Brake, BlockBrake, Station, StationUnload, StationLoad };
 
 struct FItem
 {
     FAuthoredSegment A;
     EZone Zone = EZone::None;
     double Speed = 0.0;
+
+    // "A NEW DEVICE STARTS HERE", even though the kind and the speed are the same
+    // as what came before. The last thing needed to author several IDENTICAL
+    // devices in a row — three load positions on one platform, a queue of brake
+    // sections — where kind and speed cannot tell them apart because there is
+    // genuinely nothing different about them except that they are separate
+    // machines with separate motors.
+    bool bNewDevice = false;
 };
 
-void AddStraight(std::vector<FItem>& O, double L, EZone Z = EZone::None, double Sp = 0.0)
+void AddStraight(std::vector<FItem>& O, double L, EZone Z = EZone::None, double Sp = 0.0,
+                 bool bNewDevice = false)
 {
     FItem I;
     I.A.Kind = ESegmentKind::Straight;
     I.A.Length = L;
     I.Zone = Z;
     I.Speed = Sp;
+    I.bNewDevice = bNewDevice;
     O.push_back(I);
 }
 
@@ -228,6 +238,8 @@ FCircuit BuildCircuitFrom(FTrain* Tr, const std::vector<FItem>& Items)
             break;
         case EZone::BlockBrake:
         case EZone::Station:
+        case EZone::StationUnload:
+        case EZone::StationLoad:
             // Brakes AND drive tyres, so identical in shape to a lift. The
             // enumerators are separate for the block boundary, not for the
             // physics — and for the station that boundary is the whole point.
@@ -252,7 +264,8 @@ FCircuit BuildCircuitFrom(FTrain* Tr, const std::vector<FItem>& Items)
         // Clamped so a device barely longer than the train still puts the mark
         // where the whole train fits behind it.
         C.StopMarkS.push_back(std::max(OpenS + TrainLen, EndS - NoseClearance));
-        if (Open == EZone::Lift || Open == EZone::BlockBrake || Open == EZone::Station)
+        if (Open == EZone::Lift || Open == EZone::BlockBrake || Open == EZone::Station
+            || Open == EZone::StationUnload || Open == EZone::StationLoad)
         {
             C.HoldMidS.push_back(0.5 * (OpenS + EndS));
         }
@@ -275,7 +288,10 @@ FCircuit BuildCircuitFrom(FTrain* Tr, const std::vector<FItem>& Items)
         const bool bKindChanged = Items[i].Zone != Open;
         const bool bSpeedChanged = Open != EZone::None
             && std::fabs(Items[i].Speed - OpenSpeed) > 1e-9;
-        if (bKindChanged || bSpeedChanged)
+        // And the author saying so outright, for devices that are identical in
+        // every respect the walk can see and are still separate machines.
+        const bool bDeclared = Items[i].bNewDevice && Items[i].Zone != EZone::None;
+        if (bKindChanged || bSpeedChanged || bDeclared)
         {
             Close(AccS);
             if (AccS > C.Boundaries.back())
@@ -398,12 +414,18 @@ std::vector<FPlatform> BuildPlatforms(const FCircuit& C)
     std::vector<FPlatform> Out;
     for (std::size_t z = 0; z < C.Kinds.size(); ++z)
     {
-        if (C.Kinds[z] == EZone::Station)
+        EStationRole PlatformRole;
+        switch (C.Kinds[z])
         {
-            FPlatform P;
-            P.Zone = z;
-            Out.push_back(P);
+        case EZone::Station:       PlatformRole = EStationRole::Combined; break;
+        case EZone::StationUnload: PlatformRole = EStationRole::Unload;   break;
+        case EZone::StationLoad:   PlatformRole = EStationRole::Load;     break;
+        default: continue;
         }
+        FPlatform P;
+        P.Zone = z;
+        P.Process = FStationProcess(PlatformRole);
+        Out.push_back(P);
     }
     return Out;
 }
@@ -416,22 +438,45 @@ std::vector<FPlatform> BuildPlatforms(const FCircuit& C)
 // "In position" is the stop mark AND a motor reading nothing, because a train
 // running through the platform covers the same switch. Two instruments, and the
 // pair means something neither does alone.
+// bLoaded is per TRAIN and is the caller's to keep, because "has this vehicle got
+// its riders yet" is exactly the sort of thing a real PLC tracks per vehicle and
+// exactly the sort of thing a platform cannot know — a switch has no idea which
+// train is over it. On a multi-position platform every position after the first
+// sees an already-loaded train and must not board it again.
 void ServeStations(std::vector<FPlatform>& Platforms, const std::vector<FTrain*>& Trains,
-                   const FTrackSensors& Marks, const FTrackDrives& Drives, double Dt)
+                   const FTrackSensors& Marks, const FTrackDrives& Drives, double Dt,
+                   std::vector<bool>* bLoaded = nullptr)
 {
     for (FPlatform& P : Platforms)
     {
         bool bPresent = false;
-        for (const FTrain* Tr : Trains)
+        std::size_t Who = 0;
+        for (std::size_t t = 0; t < Trains.size(); ++t)
         {
-            if (Tr->IsInZone(P.Zone, Tr->GetDistance())) { bPresent = true; }
+            if (Trains[t]->IsInZone(P.Zone, Trains[t]->GetDistance()))
+            {
+                bPresent = true;
+                Who = t;
+            }
         }
         P.Inputs.bTrainPresent = bPresent;
         P.Inputs.bTrainInPosition = bPresent && Marks.IsBlocked(P.Zone)
             && std::fabs(Drives.Read(P.Zone).Actual) < 1e-6;
 
+        const bool bAlready = bLoaded != nullptr && bPresent
+            && P.Process.GetRole() == EStationRole::Load && (*bLoaded)[Who];
+
         P.Process.Update(P.Inputs);
-        P.Crew.Serve(P.Process, P.Inputs, Dt);
+        P.Crew.Serve(P.Process, P.Inputs, Dt, bAlready);
+
+        // Boarded here, and it stays boarded. Set on readiness rather than on the
+        // load contact so it survives the train being re-checked at the next
+        // position — which is the whole reason the flag exists.
+        if (bLoaded != nullptr && bPresent && P.Process.IsReadyToDispatch()
+            && P.Process.NeedsLoad())
+        {
+            (*bLoaded)[Who] = true;
+        }
     }
 }
 
@@ -1217,6 +1262,194 @@ void TestTheDrivesTellTheStoryOfTheRide()
     }
 }
 
+// A SMALL-BATCH PLATFORM: three load positions in a row, each its own device with
+// its own motor, then the course. Common on rides with small vehicles, where one
+// train's worth of riders is a handful of people and the platform is long enough
+// to work three at once.
+//
+// Positions are identical — same kind, same speed, same length — so nothing the
+// walk can see distinguishes them and bNewDevice is what says they are three
+// machines rather than one long one.
+std::vector<FItem> SmallBatchLayout()
+{
+    std::vector<FItem> Out;
+    AddStraight(Out, 20.0, EZone::StationLoad, 2.0);         // position 3, rearmost
+    AddStraight(Out, 20.0, EZone::StationLoad, 2.0, true);   // position 2
+    AddStraight(Out, 20.0, EZone::StationLoad, 2.0, true);   // position 1, front
+    AddStraight(Out, 60.0, EZone::Launch, 18.0);             // onto the course
+    AddStraight(Out, 150.0);
+    // And a run of brake sections to receive them, which is the same authoring
+    // trick as the platform and the other thing bNewDevice exists for. Without
+    // somewhere for three trains to park, the first one to leave stands in the
+    // only holding block on the course and the permissive correctly refuses to
+    // release anybody else — a dead end rather than a ride.
+    AddStraight(Out, 60.0, EZone::BlockBrake, 3.0);
+    AddStraight(Out, 60.0, EZone::BlockBrake, 3.0, true);
+    AddStraight(Out, 60.0, EZone::BlockBrake, 3.0, true);
+    return Out;
+}
+
+struct FBatchResult
+{
+    std::vector<double> LeftPlatformAt;   // per train, seconds; -1 if it never did
+    std::vector<double> FinalS;
+    bool bShared = false;
+    std::size_t Violations = 0;
+};
+
+// Three trains, one at each position, and the platform run for real: geometry,
+// physics, interlocking, drives and three independent station sequences.
+//
+// SlowPosition gets a load dwell long enough to matter — the rider who needs more
+// time — and the whole question is what that does to the two trains in front.
+//
+// PLATFORM INDICES RUN IN TRACK ORDER, so 0 is the REARMOST position and 2 is the
+// front one that dispatches. Train indices run the other way, 0 being the train
+// at the front. Getting those two backwards is what the first run of this test
+// did, and it looks exactly like a bug in the sequencing rather than in the test.
+FBatchResult RunSmallBatch(double SlowLoadSeconds, std::size_t SlowPosition)
+{
+    const std::vector<FItem> Items = SmallBatchLayout();
+    const FCircuit Shape = BuildCircuitFrom(nullptr, Items);
+    const FTrack T = BuildTrack(Shape.Doc);
+
+    FTrainConfig Cfg;
+    Cfg.TrainLength = 8.0;   // a small batch train, and it has to fit a 20 m position
+
+    std::vector<std::unique_ptr<FTrain>> Owned;
+    FCircuit C;
+    for (std::size_t t = 0; t < 3; ++t)
+    {
+        Owned.push_back(std::unique_ptr<FTrain>(new FTrain(T, Cfg)));
+        C = BuildCircuitFrom(Owned.back().get(), Items);
+    }
+    std::vector<FTrain*> All;
+    for (std::size_t t = 0; t < 3; ++t) { All.push_back(Owned[t].get()); }
+
+    // Four devices, so four blocks plus the plain stretch. THREE of them are the
+    // platform, which is the whole point: identical devices, separate blocks.
+    FRideSignals Sig(C.Boundaries, 5.0, 1, 3, false);
+    Sig.SetHoldingBlocks(HoldingBlocks(*Owned[0], C, T.TotalLength()));
+
+    FTrackSensors Marks(C.StopMarkS);
+    FTrackDrives Drives = OpenDrives(*Owned[0], C);
+    std::vector<FPlatform> Platforms = BuildPlatforms(C);
+    for (std::size_t p = 0; p < Platforms.size(); ++p)
+    {
+        Platforms[p].Crew.LoadSeconds = p == SlowPosition ? SlowLoadSeconds : 8.0;
+    }
+
+    // Train 0 at the FRONT position, 2 at the rear, so index order is travel order
+    // — the same convention the block indices use.
+    for (std::size_t t = 0; t < 3; ++t)
+    {
+        Owned[t]->Place(C.HoldMidS[2 - t], 0.0);
+        Sig.Update(t, Owned[t]->GetRearS(), Owned[t]->GetFrontS());
+    }
+
+    FBatchResult R;
+    R.LeftPlatformAt.assign(3, -1.0);
+    const double PlatformEnd = C.Boundaries[3];   // where the launch begins
+
+    std::vector<bool> Loaded(3, false);
+
+    const double Dt = 1.0 / 240.0;
+    for (int F = 0; F < 240 * 200; ++F)
+    {
+        ScanStopMarks(Marks, All, false, T.TotalLength());
+        ServeStations(Platforms, All, Marks, Drives, Dt, &Loaded);
+        for (std::size_t t = 0; t < 3; ++t)
+        {
+            ServeHolds(*Owned[t], Sig, t, C.Authored, Marks, Drives, Platforms);
+        }
+        Drives.Tick(Dt);
+        DriveTheTrack(Drives, All);
+
+        for (std::size_t t = 0; t < 3; ++t)
+        {
+            Owned[t]->Step(Dt);
+            Sig.Update(t, Owned[t]->GetRearS(), Owned[t]->GetFrontS());
+            if (R.LeftPlatformAt[t] < 0.0 && Owned[t]->GetRearS() > PlatformEnd)
+            {
+                R.LeftPlatformAt[t] = F * Dt;
+            }
+        }
+        Sig.Tick(Dt);
+        ReadTheDrives(Drives, All);
+
+        for (std::size_t a = 0; a < 3; ++a)
+        {
+            for (std::size_t b = a + 1; b < 3; ++b)
+            {
+                for (std::size_t k = 0; k < Sig.NumBlocks(); ++k)
+                {
+                    if (Sig.OccupiedBy(a, k) && Sig.OccupiedBy(b, k)) { R.bShared = true; }
+                }
+            }
+        }
+    }
+    R.Violations = Sig.Violations();
+    for (std::size_t t = 0; t < 3; ++t) { R.FinalS.push_back(Owned[t]->GetDistance()); }
+    return R;
+}
+
+void TestASmallBatchPlatformWorksThreeTrainsAtOnce()
+{
+    // THE SHAPE THIS WAS BUILT FOR, and most of it turns out to be emergent rather
+    // than written: the interlocking already says "advance when the space ahead
+    // frees", and each position already gates its own dispatch. Making the process
+    // one per POSITION rather than one per platform is what left nothing to add.
+    const std::vector<FItem> Items = SmallBatchLayout();
+    const FCircuit C = BuildCircuitFrom(nullptr, Items);
+
+    // Three identical devices stayed three. Under every rule but bNewDevice they
+    // are one 60 m zone holding one train.
+    assert(C.Authored.size() == 7);          // 3 positions, a launch, 3 brakes
+    assert(C.HoldMidS.size() == 6);          // everything but the launch holds
+    assert(std::fabs(C.Boundaries[1] - 20.0) < 1e-9);
+    assert(std::fabs(C.Boundaries[2] - 40.0) < 1e-9);
+    assert(std::fabs(C.Boundaries[3] - 60.0) < 1e-9);
+
+    // 1. All three get away, in order, front first. Nothing overtakes anything.
+    const FBatchResult Even = RunSmallBatch(8.0, 99);
+    assert(Even.LeftPlatformAt[0] > 0.0);
+    assert(Even.LeftPlatformAt[1] > Even.LeftPlatformAt[0]);
+    assert(Even.LeftPlatformAt[2] > Even.LeftPlatformAt[1]);
+    assert(!Even.bShared);
+    assert(Even.Violations == 0);
+
+    // 2. THE RIDER WHO NEEDS LONGER, at the REAR position (platform 0). It must
+    //    not delay the two trains in front by a single frame — they are ahead of
+    //    it and nothing about their own sequences has changed. Asserted EXACTLY,
+    //    because "about the same" would pass on a mechanism that coupled them
+    //    weakly, and the claim is that they are not coupled at all.
+    const FBatchResult SlowRear = RunSmallBatch(60.0, 0);
+    assert(std::fabs(SlowRear.LeftPlatformAt[0] - Even.LeftPlatformAt[0]) < 1e-9);
+    assert(std::fabs(SlowRear.LeftPlatformAt[1] - Even.LeftPlatformAt[1]) < 1e-9);
+    assert(SlowRear.Violations == 0);
+
+    //    AND THE WHOLE RIDE BARELY NOTICES, which is the throughput argument for
+    //    building a platform like this and is worth more than the assertion above.
+    //    Loading happens in PARALLEL with the queue clearing, so 52 extra seconds
+    //    at the back costs the last departure about five. Positions are not a
+    //    queue for one loading bay; they are three loading bays.
+    const double RearCost = SlowRear.LeftPlatformAt[2] - Even.LeftPlatformAt[2];
+    assert(RearCost > 0.0 && RearCost < 10.0);
+
+    // 3. The same rider at the FRONT (platform 2) is a different story, and it is
+    //    the other half of the same fact rather than a different one: a train
+    //    cannot pass the train in front of it, so everybody behind waits. This is
+    //    why a real operation moves a slow load to the BACK of the platform when it
+    //    can see one coming.
+    const FBatchResult SlowFront = RunSmallBatch(60.0, 2);
+    const double FrontCost = SlowFront.LeftPlatformAt[2] - Even.LeftPlatformAt[2];
+    assert(FrontCost > RearCost * 5.0);
+    assert(SlowFront.LeftPlatformAt[0] > Even.LeftPlatformAt[0] + 40.0);
+    assert(SlowFront.LeftPlatformAt[1] > Even.LeftPlatformAt[1] + 40.0);
+    assert(SlowFront.Violations == 0);
+    assert(!SlowFront.bShared);
+}
+
 void TestAnEmergencyStopStopsTheRideNotTheTrains()
 {
     // THE PROPERTY THAT FALLS OUT OF THE MODEL RATHER THAN BEING ARRANGED, and the
@@ -1435,6 +1668,7 @@ int main()
     TestAHeldTrainParksInsideItsBlock();
     TestSeveralHoldingDevicesInARowStaySeveral();
     TestTheDrivesTellTheStoryOfTheRide();
+    TestASmallBatchPlatformWorksThreeTrainsAtOnce();
     TestAnEmergencyStopStopsTheRideNotTheTrains();
     TestTheCircuitCarriesFourTrains();
     TestTheActorsOwnLoopRunsTwoTrains();
@@ -1500,6 +1734,23 @@ int main()
             std::printf("              %2zu  %7.2f  %11.2f  %10.2f\n",
                         z, C.StopMarkS[z], R.ParkedNoseS[z], BlockEnd - R.ParkedNoseS[z]);
         }
+    }
+
+    // The small-batch platform, which is a different layout and a different point:
+    // what three loading positions BUY, in seconds.
+    {
+        const FBatchResult Even = RunSmallBatch(8.0, 99);
+        const FBatchResult Rear = RunSmallBatch(60.0, 0);
+        const FBatchResult Front = RunSmallBatch(60.0, 2);
+        std::printf("\nSMALL-BATCH PLATFORM, three loading positions\n");
+        std::printf("  even 8 s loads      departures at %.1f, %.1f, %.1f s\n",
+                    Even.LeftPlatformAt[0], Even.LeftPlatformAt[1], Even.LeftPlatformAt[2]);
+        std::printf("  60 s load at REAR   %.1f, %.1f, %.1f s   costs the ride %.1f s\n",
+                    Rear.LeftPlatformAt[0], Rear.LeftPlatformAt[1], Rear.LeftPlatformAt[2],
+                    Rear.LeftPlatformAt[2] - Even.LeftPlatformAt[2]);
+        std::printf("  60 s load at FRONT  %.1f, %.1f, %.1f s   costs the ride %.1f s\n",
+                    Front.LeftPlatformAt[0], Front.LeftPlatformAt[1], Front.LeftPlatformAt[2],
+                    Front.LeftPlatformAt[2] - Even.LeftPlatformAt[2]);
     }
 
     std::printf("\ntest_twotrains: all assertions passed\n");

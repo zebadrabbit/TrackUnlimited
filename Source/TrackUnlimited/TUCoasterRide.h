@@ -393,6 +393,16 @@ private:
 	};
 	TArray<FTUPlatform> Platforms;
 
+	// Has this train got its riders yet — per TRAIN, because that is what it is a
+	// property of. On a multi-position platform every position after the first sees
+	// an already-loaded train and must not board it again: riders get on once, at
+	// whichever position their train was standing at, and it then advances full.
+	//
+	// Kept here rather than in the station because a platform cannot know which
+	// train is over it — a switch has no idea. This is the sort of per-vehicle
+	// state bit a real PLC keeps for exactly the same reason.
+	TArray<bool> TrainLoaded;
+
 	// Reads every platform's instruments and runs its crew. Once per frame, at the
 	// top of the scan with the other inputs.
 	void ServeStations(float DeltaSeconds);

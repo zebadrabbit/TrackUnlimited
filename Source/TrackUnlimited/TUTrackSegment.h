@@ -266,6 +266,29 @@ struct FTUTrackSegment
 	 */
 	UPROPERTY(EditAnywhere, Category = "Zone")
 	bool bAntiRollback = false;
+
+	/**
+	 * A new DEVICE starts here, even though the kind and the speed are the same as
+	 * the segment before.
+	 *
+	 * A zone is a contiguous run of segments describing one machine, and normally
+	 * the run ends where the kind or the speed changes — which is enough for almost
+	 * everything, because two different devices are almost always different in one
+	 * of those. This is for the case where they are not: three loading positions on
+	 * one platform, or a queue of brake sections behind the scenes, where the
+	 * devices are genuinely identical and are still separate machines with separate
+	 * motors and separate blocks.
+	 *
+	 * Set it on the FIRST segment of the new device. Ignored on unpowered track,
+	 * where there is no device to start.
+	 *
+	 * Measured on a three-position platform: 52 extra seconds of loading at the
+	 * REAR position costs the ride 5.5 s and does not delay the two trains in front
+	 * by a single frame, where the same delay at the FRONT costs the full 52 —
+	 * because positions are three loading bays, not a queue for one.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Zone")
+	bool bStartsNewDevice = false;
 };
 
 // Reflected editor struct -> the authored model the prototypes understand.

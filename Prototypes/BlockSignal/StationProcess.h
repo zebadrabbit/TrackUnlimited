@@ -326,7 +326,22 @@ struct FAutoStationCrew
     // Advance the crew and write what they have finished into In. Call once per
     // scan, after bTrainPresent and bTrainInPosition have been set from the
     // sensors — those two are real and are not the crew's to invent.
-    void Serve(const FStationProcess& Station, FStationInputs& In, double DeltaSeconds)
+    // bAlreadyLoaded says the train arrived with its riders already aboard, which
+    // is the normal case at every position of a MULTI-POSITION PLATFORM after the
+    // first. Riders board once, at whichever position their train was standing at,
+    // and the train then advances full — it does not board again at each one.
+    //
+    // "Loaded" is therefore a property of the TRAIN, not of the platform, and that
+    // is why it arrives as an argument rather than living in here. The first
+    // version of the three-position test had every train re-run the whole boarding
+    // sequence at each position it passed through, which is a train loading three
+    // times and a platform that could never empty.
+    //
+    // It belongs to the crew rather than to FStationProcess because it is a rider
+    // question — there is nobody to board, because they are already sitting down.
+    // The sequence itself is unchanged; the contacts simply come back at once.
+    void Serve(const FStationProcess& Station, FStationInputs& In, double DeltaSeconds,
+               bool bAlreadyLoaded = false)
     {
         const EStationPhase P = Station.GetPhase();
         if (P == EStationPhase::Empty || P == EStationPhase::Departing)
@@ -358,15 +373,24 @@ struct FAutoStationCrew
             if (Elapsed >= UnloadSeconds) { In.bUnloadComplete = true; }
             break;
         case EStationPhase::Loading:
-            if (Elapsed >= LoadSeconds) { In.bLoadComplete = true; }
+            // Nobody to board, so nothing to wait for.
+            if (bAlreadyLoaded || Elapsed >= LoadSeconds) { In.bLoadComplete = true; }
             break;
         case EStationPhase::Securing:
             // Restraints first, then the walk-round that produces the all-clear.
             // In that order because the check is OF the restraints, and a crew
             // that cleared the platform before they were locked would be signing
             // off work it had not done.
-            if (Elapsed >= SecureSeconds * 0.5) { In.bRestraintsLocked = true; }
-            if (Elapsed >= SecureSeconds)       { In.bPlatformClear = true; }
+            //
+            // An already-loaded train's restraints never opened, so they are locked
+            // the moment it arrives — but the all-clear still takes its time.
+            // Moving a train with people in it is a move an operator confirms, and
+            // that confirmation is the only thing a pass-through position costs.
+            if (bAlreadyLoaded || Elapsed >= SecureSeconds * 0.5)
+            {
+                In.bRestraintsLocked = true;
+            }
+            if (Elapsed >= SecureSeconds) { In.bPlatformClear = true; }
             break;
         default:
             break;

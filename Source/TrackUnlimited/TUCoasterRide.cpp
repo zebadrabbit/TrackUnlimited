@@ -734,7 +734,12 @@ void ATUCoasterRide::RebuildFromSegments()
 			const bool bKindChanged = Segments[i].Zone != Open;
 			const bool bSpeedChanged = Open != ETUSegmentZone::None
 				&& !FMath::IsNearlyEqual(Segments[i].ZoneSpeed, OpenSpeed);
-			if (bKindChanged || bSpeedChanged)
+			// And the author saying so outright, for devices that are identical in
+			// every respect the walk can see and are still separate machines —
+			// three loading positions on one platform, a queue of brake sections.
+			const bool bDeclared = Segments[i].bStartsNewDevice
+				&& Segments[i].Zone != ETUSegmentZone::None;
+			if (bKindChanged || bSpeedChanged || bDeclared)
 			{
 				Close(AccS);
 				AddBoundary(AccS);
@@ -1267,15 +1272,19 @@ void ATUCoasterRide::ServeStations(float DeltaSeconds)
 	// "In position" is the stop mark AND a motor reading nothing, because a train
 	// running through the platform covers the same switch. Two instruments, and the
 	// pair means something neither of them does alone.
+	TrainLoaded.SetNum(Trains.Num());
+
 	for (FTUPlatform& P : Platforms)
 	{
 		const std::size_t Z = static_cast<std::size_t>(P.Zone);
 		bool bPresent = false;
+		int32 Who = 0;
 		for (int32 t = 0; t < Trains.Num(); ++t)
 		{
 			if (Trains[t]->IsInZone(Z, Trains[t]->GetDistance()))
 			{
 				bPresent = true;
+				Who = t;
 			}
 		}
 		P.Inputs.bTrainPresent = bPresent;
@@ -1291,8 +1300,29 @@ void ATUCoasterRide::ServeStations(float DeltaSeconds)
 		P.Process.SetMode(bManualDispatch ? EDispatchMode::Manual
 										  : EDispatchMode::Automatic);
 
+		// Already aboard, so there is nobody to board again. Only a LOAD position
+		// passes through — a combined station's arriving train is full and genuinely
+		// does need unloading, and an unload position's certainly does.
+		const bool bAlready = bPresent && TrainLoaded.IsValidIndex(Who)
+			&& P.Process.GetRole() == EStationRole::Load && TrainLoaded[Who];
+
 		P.Process.Update(P.Inputs);
-		P.Crew.Serve(P.Process, P.Inputs, DeltaSeconds);
+		P.Crew.Serve(P.Process, P.Inputs, DeltaSeconds, bAlready);
+
+		// Boarded here, and it stays boarded. Set on readiness rather than on the
+		// load contact so it survives being re-checked at the next position, which
+		// is the whole reason the flag exists. Cleared when the train unloads.
+		if (bPresent && TrainLoaded.IsValidIndex(Who))
+		{
+			if (P.Process.NeedsUnload() && P.Process.GetPhase() == EStationPhase::Unloading)
+			{
+				TrainLoaded[Who] = false;
+			}
+			if (P.Process.NeedsLoad() && P.Process.IsReadyToDispatch())
+			{
+				TrainLoaded[Who] = true;
+			}
+		}
 	}
 }
 
