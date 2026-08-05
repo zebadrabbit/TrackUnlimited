@@ -1509,11 +1509,11 @@ void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/
 	const float Row = 13.f;
 	const float Pad = 8.f;
 	const float W = 470.f;
-	const int32 Rows = 2                          // title, status
-		+ 1 + NumBlocks                            // BLOCKS heading + indicators
+	const float StripH = 46.f;                     // the schematic, however many blocks
+	const int32 Rows = 2                           // title, status
 		+ 1 + NumDrives                            // DRIVES heading + VFD modules
-		+ (Platforms.Num() > 0 ? 1 + Platforms.Num() : 0);
-	const float H = Pad * 2.f + Rows * Row + 12.f;
+		+ (Platforms.Num() > 0 ? 1 + Platforms.Num() + 2 : 0);   // + CONSOLE heading, lamps
+	const float H = Pad * 2.f + Rows * Row + StripH + 22.f;
 
 	const float X = 16.f;
 	const float Y = FMath::Max(16.f, Canvas->SizeY - H - 16.f);
@@ -1543,58 +1543,114 @@ void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/
 		}
 		PanelLabel(Canvas, Lx, Ty, Status, Signals->Violations() > 0 ? PanelRed : PanelDim);
 
-		PanelLabel(Canvas, Lx + 300.f, Ty,
+		// THE STOP AUTHORITY IN ITS OWN BOX, outlined red, away from everything
+		// else. Straight off the console photo: the operating controls are grouped
+		// inside a green outline and the stop controls inside a red one, so a hand
+		// reaching for one is nowhere near the other. On a screen the outline is
+		// the whole of that idea, and it is worth keeping.
+		const float StopX = Lx + 292.f;
+		const float StopW = W - Pad * 2.f - 292.f;
+		PanelTile(Canvas, StopX, Ty - 2.f, StopW, 1.f, bStopped ? PanelRed : PanelDim);
+		PanelTile(Canvas, StopX, Ty + Row, StopW, 1.f, bStopped ? PanelRed : PanelDim);
+		PanelTile(Canvas, StopX, Ty - 2.f, 1.f, Row + 2.f, bStopped ? PanelRed : PanelDim);
+		PanelTile(Canvas, StopX + StopW - 1.f, Ty - 2.f, 1.f, Row + 2.f,
+			bStopped ? PanelRed : PanelDim);
+		PanelLabel(Canvas, StopX + 5.f, Ty,
 			bStopped ? FString::Printf(TEXT("E-STOP · %s"),
 				UTF8_TO_TCHAR(Drives->EmergencyStopReason()))
-					 : FString(TEXT("READY")),
+					 : FString(TEXT("RUNNING")),
 			bStopped ? PanelRed : PanelGreen);
-		Ty += Row + 4.f;
+		Ty += Row + 6.f;
 	}
 
-	// ---- BLOCKS: one indicator each, clear / occupied / buffer countdown ----
+	// ---- THE CIRCUIT, AS A SCHEMATIC ----------------------------------------
+	//
+	// A real ride's HMI draws the TRACK and puts the lamps on it, rather than
+	// listing blocks in a table. It is the better view for the same reason the
+	// coloured rails are: you are looking for where something is, and a diagram
+	// answers that in one glance where a table makes you read.
+	//
+	// Block widths are PROPORTIONAL TO BLOCK LENGTH, so the strip is a plan of the
+	// circuit rather than a row of equal boxes — the 130 m mid-course brake looks
+	// like the long block it is, and the four 10 m platform positions look like the
+	// tight cluster they are. All of it comes off Signals->Boundaries().
 	PanelTile(Canvas, Lx, Ty + 5.f, W - Pad * 2.f, 1.f, PanelRule);
-	PanelLabel(Canvas, Lx, Ty, TEXT("BLOCKS"), PanelDim);
-	Ty += Row;
+	PanelLabel(Canvas, Lx, Ty, TEXT("CIRCUIT"), PanelDim);
+	Ty += Row + 2.f;
 
-	for (int32 b = 0; b < NumBlocks; ++b)
 	{
-		const std::size_t B = static_cast<std::size_t>(b);
-		const EBlockState State = Signals->GetState(B);
-		const bool bOcc = State == EBlockState::Occupied;
-		const bool bBuf = State == EBlockState::Buffer;
-		const FLinearColor Lamp = bOcc ? PanelAmber : (bBuf ? PanelCyan : PanelGreen);
+		const std::vector<double>& Bounds = Signals->Boundaries();
+		const double Total = FMath::Max(1.0, Track.TotalLength());
+		const float StripX = Lx;
+		const float StripW = W - Pad * 2.f;
+		const float BoxY = Ty + 10.f;
+		const float BoxH = 16.f;
 
-		PanelTile(Canvas, Lx, Ty + 3.f, 6.f, 6.f, Lamp);
-		PanelLabel(Canvas, Lx + 12.f, Ty, FString::Printf(TEXT("B%02d"), b), PanelText);
-		PanelLabel(Canvas, Lx + 46.f, Ty,
-			bOcc ? TEXT("OCCUPIED") : (bBuf ? TEXT("BUFFER") : TEXT("CLEAR")), Lamp);
+		for (int32 b = 0; b < NumBlocks; ++b)
+		{
+			const std::size_t B = static_cast<std::size_t>(b);
+			const double S0 = Bounds[B];
+			const double S1 = (B + 1 < Bounds.size()) ? Bounds[B + 1] : Total;
+			const float X0 = StripX + static_cast<float>(S0 / Total) * StripW;
+			const float X1 = StripX + static_cast<float>(S1 / Total) * StripW;
+			const float BW = FMath::Max(2.f, X1 - X0 - 1.f);
 
-		if (bBuf)
-		{
-			PanelLabel(Canvas, Lx + 116.f, Ty,
-				FString::Printf(TEXT("%.1f s"), Signals->GetBufferRemaining(B)), PanelCyan);
-		}
-		for (int32 t = 0; t < Trains.Num(); ++t)
-		{
-			if (Signals->OccupiedBy(static_cast<std::size_t>(t), B))
+			const EBlockState State = Signals->GetState(B);
+			const bool bOcc = State == EBlockState::Occupied;
+			const bool bBuf = State == EBlockState::Buffer;
+			FLinearColor Lamp = bOcc ? PanelAmber : (bBuf ? PanelCyan : PanelGreen);
+
+			// A disagreement between the two detection methods paints the block RED
+			// on the diagram, which is where somebody is already looking.
+			if (Counter && B < Counter->NumBlocks()
+				&& (Counter->IsOccupied(B) != Signals->Occupies(B) || Counter->IsOverOccupied(B)))
 			{
-				PanelLabel(Canvas, Lx + 116.f, Ty,
-					FString::Printf(TEXT("train %d"), t), PanelText);
+				Lamp = PanelRed;
+			}
+
+			// Filled when it holds something, outlined when clear: an occupied
+			// block should read from across a room.
+			if (bOcc || bBuf)
+			{
+				PanelTile(Canvas, X0, BoxY, BW, BoxH, Lamp);
+			}
+			else
+			{
+				PanelTile(Canvas, X0, BoxY, BW, 1.f, Lamp);
+				PanelTile(Canvas, X0, BoxY + BoxH - 1.f, BW, 1.f, Lamp);
+				PanelTile(Canvas, X0, BoxY, 1.f, BoxH, Lamp);
+				PanelTile(Canvas, X0 + BW - 1.f, BoxY, 1.f, BoxH, Lamp);
+			}
+
+			// The device under the block, in the SAME colours the rails use, so the
+			// panel and the track view are the same object seen twice.
+			for (const FTUZoneSpan& Z : ZoneSpans)
+			{
+				if (Z.StartS >= S0 - 0.01 && Z.StartS < S1)
+				{
+					const float Zx0 = StripX + static_cast<float>(Z.StartS / Total) * StripW;
+					const float Zx1 = StripX + static_cast<float>(FMath::Min(Z.EndS, S1) / Total) * StripW;
+					PanelTile(Canvas, Zx0, BoxY + BoxH + 2.f,
+						FMath::Max(2.f, Zx1 - Zx0 - 1.f), 3.f, RailColourAt(Z.StartS + 0.01));
+				}
 			}
 		}
 
-		// THE SECOND DETECTION METHOD, shown next to the first. They are derived
-		// from different information and must agree; a panel that showed only one
-		// of them would be hiding the entire point of having two.
-		if (Counter && B < Counter->NumBlocks())
+		// EVERY TRAIN ON THE DIAGRAM, at its real position. The single most useful
+		// thing a control room screen shows, and it costs one tile each.
+		for (int32 t = 0; t < Trains.Num(); ++t)
 		{
-			const int32 Ct = Counter->TrainsIn(B);
-			const bool bAgree = Counter->IsOccupied(B) == Signals->Occupies(B);
-			PanelLabel(Canvas, Lx + 190.f, Ty,
-				FString::Printf(TEXT("counter %d  %s"), Ct, bAgree ? TEXT("ok") : TEXT("DISAGREES")),
-				bAgree ? PanelDim : PanelRed);
+			const float Px = StripX
+				+ static_cast<float>(Trains[t]->GetDistance() / Total) * StripW;
+			PanelTile(Canvas, Px - 1.f, BoxY - 6.f, 3.f, BoxH + 12.f, PanelText);
+			PanelLabel(Canvas, Px - 3.f, BoxY - 19.f, FString::Printf(TEXT("%d"), t), PanelText);
 		}
-		Ty += Row;
+
+		// Scale, so the strip is a drawing rather than a picture.
+		PanelLabel(Canvas, StripX, BoxY + BoxH + 6.f, TEXT("0"), PanelDim);
+		PanelLabel(Canvas, StripX + StripW - 44.f, BoxY + BoxH + 6.f,
+			FString::Printf(TEXT("%.0f m"), Total), PanelDim);
+		Ty += StripH;
 	}
 
 	// ---- DRIVES: a VFD module per powered run ----
@@ -1665,14 +1721,84 @@ void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/
 				// Ready and still standing means the OTHER half of the AND is
 				// saying no, which is the distinction an operator most wants and
 				// can least otherwise see.
-				const bool bBlocked = !Signals->CanRelease(0, ZoneSpans.IsValidIndex(P.Zone)
-					? ZoneSpans[P.Zone].StartS : 0.0);
+				const double AtS = ZoneSpans.IsValidIndex(P.Zone) ? ZoneSpans[P.Zone].StartS : 0.0;
+				const bool bBlocked = !Signals->CanRelease(0, AtS);
+
+				// ADVANCE OR DISPATCH, and a real console has them as separate
+				// labelled buttons. They are not the same move: an advance shuffles
+				// a train up to the next position on the same platform, still with
+				// riders boarding behind it; a dispatch sends it onto the course
+				// and is the last point anybody can change their mind. The model
+				// can already tell them apart — it is whether the next block along
+				// is another platform position or open track.
+				const TCHAR* Verb = TEXT("DISPATCH");
+				if (Signals->NumBlocks() > 0)
+				{
+					const std::size_t Here = Signals->BlockAt(AtS + 0.01);
+					const std::size_t Next = (Here + 1) % Signals->NumBlocks();
+					const double NextS = Signals->Boundaries()[Next];
+					for (const FTUPlatform& Q : Platforms)
+					{
+						if (ZoneSpans.IsValidIndex(Q.Zone)
+							&& FMath::Abs(ZoneSpans[Q.Zone].StartS - NextS) < 0.01)
+						{
+							Verb = TEXT("ADVANCE");
+						}
+					}
+				}
 				PanelLabel(Canvas, Lx + 226.f, Ty,
-					bBlocked ? TEXT("waiting on the block ahead") : TEXT("dispatching"),
+					bBlocked ? FString::Printf(TEXT("%s — waiting on the block ahead"), Verb)
+							 : FString(Verb),
 					bBlocked ? PanelAmber : PanelGreen);
 			}
 			Ty += Row;
 		}
+
+		// ---- THE CONSOLE, as lamps ------------------------------------------
+		//
+		// Straight off an operator's panel: CONTROL POWER, RESTRAINTS, GATES,
+		// DISPATCH, E-STOP RESET, EMERGENCY STOP — each an illuminated control that
+		// shows its own state. A screen cannot be pressed, so these are indicators
+		// rather than buttons, but they are the same six facts an operator reads
+		// off the panel in front of them, and every one is live.
+		//
+		// It shows ONE platform: whichever has a train and is furthest along, which
+		// is the one an operator standing at a station console is working. Nothing
+		// here is invented — a control this cannot honestly light is left off it,
+		// which is why there is no FLOOR RAISE/LOWER lamp.
+		const FTUPlatform* Console = nullptr;
+		for (const FTUPlatform& P : Platforms)
+		{
+			if (P.Inputs.bTrainPresent
+				&& (Console == nullptr || P.Zone > Console->Zone))
+			{
+				Console = &P;
+			}
+		}
+
+		Ty += 4.f;
+		PanelTile(Canvas, Lx, Ty + 5.f, W - Pad * 2.f, 1.f, PanelRule);
+		PanelLabel(Canvas, Lx, Ty, Console != nullptr
+			? FString::Printf(TEXT("CONSOLE · Z%d"), Console->Zone)
+			: FString(TEXT("CONSOLE")), PanelDim);
+		Ty += Row;
+
+		auto Lamp = [&](float Lx2, const TCHAR* Label, bool bLit, const FLinearColor& Col)
+		{
+			PanelTile(Canvas, Lx2, Ty + 2.f, 7.f, 7.f, bLit ? Col : FLinearColor(0.16f, 0.18f, 0.20f, 1.f));
+			PanelLabel(Canvas, Lx2 + 12.f, Ty, Label, bLit ? Col : PanelDim);
+		};
+
+		const bool bStop = Drives->IsEmergencyStopped();
+		Lamp(Lx, TEXT("RESTRAINTS"),
+			Console != nullptr && Console->Inputs.bRestraintsLocked, PanelGreen);
+		Lamp(Lx + 96.f, TEXT("GATES"),
+			Console != nullptr && Console->Inputs.bPlatformClear, PanelGreen);
+		Lamp(Lx + 168.f, TEXT("DISPATCH"),
+			Console != nullptr && Console->Process.IsReadyToDispatch(), PanelGreen);
+		Lamp(Lx + 268.f, TEXT("E-STOP"), bStop, PanelRed);
+		Lamp(Lx + 348.f, TEXT("RESET"), bStop, PanelCyan);
+		Ty += Row;
 	}
 }
 
