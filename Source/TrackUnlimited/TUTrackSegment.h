@@ -161,6 +161,32 @@ enum class ETUPresetLayout : uint8
 	SmallBatch UMETA(DisplayName = "Small batch (unload + 3 loading positions)"),
 };
 
+// Who is looking at the control panel.
+//
+// NOT a difficulty setting, and not the same UI with fewer buttons. It is the
+// split every real installation already has: the operator station a ride is
+// dispatched from, and the engineering page it is diagnosed from. An operator
+// console does not show motor current — that lives on a maintenance HMI, and
+// putting it on the dispatch screen is as wrong as leaving it out entirely.
+//
+// So each view answers a different question. The operator's is "may this train
+// go, and if not, what is holding it". Maintenance asks "what is this machine
+// actually doing", which needs the numbers behind the same facts.
+UENUM(BlueprintType)
+enum class ETUPanelView : uint8
+{
+	Off UMETA(DisplayName = "Off"),
+
+	// What the ride is doing, in states rather than quantities: where the trains
+	// are, what each platform is waiting for, whether a drive is running.
+	Operator UMETA(DisplayName = "Operator (dispatch)"),
+
+	// The same panel with the instrumentation behind it — commanded against
+	// output against motor, torque, fault acknowledgement, and the second
+	// detection method's own counts to read against the interlocking's.
+	Maintenance UMETA(DisplayName = "Maintenance (engineering)"),
+};
+
 UENUM(BlueprintType)
 enum class ETUCameraMode : uint8
 {
@@ -295,15 +321,15 @@ struct FTUTrackSegment
 	 * devices are genuinely identical and are still separate machines with separate
 	 * motors and separate blocks.
 	 *
-	 * Set it on the FIRST segment of the new device. Ignored on unpowered track,
-	 * where there is no device to start.
+	 * Set it on the FIRST segment of the new device.
 	 *
 	 * Measured on a three-position platform: 52 extra seconds of loading at the
 	 * REAR position costs the ride 5.5 s and does not delay the two trains in front
 	 * by a single frame, where the same delay at the FRONT costs the full 52 —
 	 * because positions are three loading bays, not a queue for one.
 	 */
-	UPROPERTY(EditAnywhere, Category = "Zone")
+	UPROPERTY(EditAnywhere, Category = "Zone", meta = (
+		EditCondition = "Zone != ETUSegmentZone::None", EditConditionHides))
 	bool bStartsNewDevice = false;
 };
 

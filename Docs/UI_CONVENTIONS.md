@@ -172,6 +172,53 @@ a display-layer change rather than a data-model one: only the right column moves
 
 ---
 
+---
+
+## 6. Two views, not two frameworks — and no skinning layer
+
+Considered and rejected 2026-08-05: a Slate "expert" UI with a UMG "easy mode" reskin, moddable by
+users.
+
+**Rejected, for three reasons.**
+
+- **Reskinning is not a framework question.** Same widgets, different look, is `FSlateStyleSet` /
+  `USlateWidgetStyleAsset` — widgets take `FButtonStyle`, `FTextBlockStyle` etc. from a style set,
+  and swapping the set restyles the tree. It works identically for Slate and UMG. If a skin is ever
+  wanted, that is the mechanism, and it costs nothing to leave until somebody asks.
+- **The proposed layering is backwards.** UMG sits *on top of* Slate, so "Slate core, UMG skin"
+  inverts the stack. And for modding specifically UMG is the better surface, not the worse one: a
+  mod ships a `.uasset` loaded by soft class reference, where a Slate mod needs the modder to build
+  the C++ project. If UI modding ever becomes a goal, that argues for UMG-primary — which is what
+  was chosen anyway.
+- **Two frameworks is two implementations, not core-plus-skin.** There is no shared layer to be
+  "core"; a Slate panel and a UMG panel are two widget trees over the same data, maintained forever,
+  with every new field landing twice.
+
+Also weighed: the plan cites NL2's Steam Workshop as what sustained it for a decade — and that
+community modded **tracks, trains and scenery**. Nobody mods NL2's UI.
+
+**What was built instead, because the good idea underneath was real.** `ETUPanelView` — the control
+panel has an **operator** view and a **maintenance** view, `[P]` cycles them.
+
+This is not a difficulty setting and not the same screen at two detail levels. It is the split every
+real installation already has, and honouring it makes the sim *more* faithful rather than less: an
+operator dispatches trains and a maintainer diagnoses machines, and **motor current belongs to
+exactly one of them.** A real dispatch console does not carry it. So each view answers its own
+question — the operator's is *"may this train go, and if not what is holding it"*, the maintainer's
+is *"what is this machine actually doing"* — off the same live reads, with nothing cached for
+either and nothing computed for a view it is not shown in.
+
+**The rule that keeps it honest:** a view may omit a fact, and may never invent or soften one. The
+operator's drive state is four words the drive holds about *itself* — `RUNNING`, `RAMPING`,
+`FAULT`, `STOPPED` — not a simplification of the numbers underneath.
+
+**Authoring gets progressive disclosure too, and mostly already had it.** `EditConditionHides` on
+`FTUTrackSegment` hides by *relevance* — pick Arc and you get Radius, pick Clothoid and you get
+curvature endpoints — which is better than a static advanced/basic split, because what is advanced
+depends on the segment kind. Adding `AdvancedDisplay` on top of it would buy almost nothing. **Never
+a mode that hides a field permanently**, because a hidden authored value is the same defect as a
+discarded one.
+
 ## What is not decided here
 
 - **Font.** Wants seeing on a 4K panel before being fixed. Whatever it is, it needs tabular figures

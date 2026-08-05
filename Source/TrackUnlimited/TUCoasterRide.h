@@ -287,14 +287,20 @@ public:
 
 	/**
 	 * The generated control panel: an indicator per block, a VFD module per
-	 * powered run, a sequence readout per platform. [P] toggles it in play.
+	 * powered run, a sequence readout per platform. [P] cycles operator ->
+	 * maintenance -> off.
+	 *
+	 * Two views rather than one because a real installation has two, and they are
+	 * not the same screen with a detail level: an operator dispatches trains and a
+	 * maintainer diagnoses machines, and motor current belongs to exactly one of
+	 * those. See ETUPanelView.
 	 *
 	 * Play only. It draws on the debug canvas, which the editor viewport does not
 	 * run — and a control room is a thing you look at while the ride is running,
 	 * not while you are drawing track.
 	 */
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Signalling")
-	bool bShowControlPanel = true;
+	ETUPanelView PanelView = ETUPanelView::Operator;
 
 	/**
 	 * Metres, nose to tail. Zero is a point mass at the heartline.
@@ -496,7 +502,17 @@ private:
 
 	void LogEvent(const FString& Text, bool bBad = true);
 
-	void ToggleControlPanel() { bShowControlPanel = !bShowControlPanel; }
+	// Operator -> maintenance -> off, on one key. Three states on the key that
+	// already showed the panel beats a second binding nobody remembers.
+	void CyclePanelView()
+	{
+		switch (PanelView)
+		{
+		case ETUPanelView::Operator:    PanelView = ETUPanelView::Maintenance; break;
+		case ETUPanelView::Maintenance: PanelView = ETUPanelView::Off; break;
+		default:                        PanelView = ETUPanelView::Operator; break;
+		}
+	}
 
 	// Will the station at this zone let its train go? True where there is no
 	// station, which is every device that is not a platform.

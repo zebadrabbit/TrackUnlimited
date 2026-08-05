@@ -696,6 +696,47 @@ panel telling its first lie:
 | `FLOOR RAISE/LOWER` | a movable station floor |
 | `GATES`, `RESTRAINTS` as **selectors** | the operator *commands* them and the sensors confirm; ours are asserted on a dwell timer by the stand-in crew. Same command-device-feedback shape the drives already have, and the most substantive of these. |
 
+### Two views, because a real installation has two
+
+`ETUPanelView`; `[P]` cycles **operator → maintenance → off**.
+
+Not a difficulty setting, and not one screen at two detail levels. An operator dispatches trains and
+a maintainer diagnoses machines, and **motor current belongs to exactly one of them** — it is not on
+a dispatch console, it is on an engineering page. Putting it on both is as wrong as leaving it out
+of both.
+
+**The drives section is the one place the two genuinely disagree.** Commanded against output against
+motor feedback, plus torque, is how you separate a slipping tyre from a ramping one — an engineering
+question. The operator gets one word instead:
+
+| state | what the drive knows |
+|---|---|
+| `RUNNING` | output non-zero and reached its command |
+| `RAMPING` | commanded ≠ output — the state that only became sayable once a command stopped taking effect instantly, and the one that explains a dispatch refused on the pre-launch term |
+| `FAULT` | slip and torque and time and not gaining |
+| `STOPPED` | output zero |
+
+Every one is a fact the drive holds about **itself**. None of them infers anything about a train,
+which a drive has no way to do.
+
+**Maintenance also gets the second detection method's own numbers** — a per-block count under the
+schematic, aligned through the same widened mapping the blocks use, and a `DETECTION` line stating
+the agreement. Agreement is the normal case and is still worth drawing, because **a cross-check
+never seen to agree is indistinguishable from one that is not running**. A block reading 2 is a
+collision derived from switches alone; one reading below zero is a *lie* — a missed trip or a bad
+seed. On an open layout there is no counter at all and the line says so, because
+`FBlockCounter` counts over a ring; an empty row would read as a dead instrument.
+
+The operator view omits that breakdown deliberately. A disagreement already trips the E-stop and
+names itself in the events, and there is nothing an operator can do with the per-block detail that
+the stop has not already done for them.
+
+**The rule that keeps the split honest: a view may omit a fact, and may never invent or soften
+one.** The operator's four states are not a rounding of the numbers underneath.
+
+`Docs/UI_CONVENTIONS.md` records what this was chosen *instead of* — a Slate/UMG "expert and easy
+mode" with a user-moddable reskin, rejected there with reasons.
+
 ## Making the causal chain visible
 
 Just as important as the data model: when a sensor trips, that should visibly propagate.

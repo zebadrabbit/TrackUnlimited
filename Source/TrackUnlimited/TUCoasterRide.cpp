@@ -1386,7 +1386,7 @@ void ATUCoasterRide::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 	PlayerInputComponent->BindKey(EKeys::End, IE_Pressed, this,
 		&ATUCoasterRide::ResetEmergencyStop);
 	PlayerInputComponent->BindKey(EKeys::P, IE_Pressed, this,
-		&ATUCoasterRide::ToggleControlPanel);
+		&ATUCoasterRide::CyclePanelView);
 	// NOT [A] — that is strafe-left, and acknowledging a fault every time somebody
 	// moved the free camera is exactly the kind of accidental press the whole
 	// acknowledge/reset ordering exists to prevent.
@@ -1552,10 +1552,21 @@ namespace
 
 void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/)
 {
-	if (!bShowControlPanel || !Canvas || !Signals || !Drives || !GEngine)
+	if (PanelView == ETUPanelView::Off || !Canvas || !Signals || !Drives || !GEngine)
 	{
 		return;
 	}
+
+	// TWO VIEWS OF ONE PANEL, and the split is the one every real installation
+	// already makes rather than a detail level invented here. The operator's
+	// question is "may this train go, and if not, what is holding it"; the
+	// maintainer's is "what is this machine actually doing". Motor current answers
+	// only the second, which is why an operator console does not carry it and why
+	// hiding it from one view is more faithful than showing it to both.
+	//
+	// Same walk, same live reads, one branch per section. Nothing is computed for
+	// a view it is not shown in, and nothing is cached for either.
+	const bool bMaint = PanelView == ETUPanelView::Maintenance;
 
 	// GENERATED FROM THE SAME LISTS AS THE RIDE. Nothing below is authored per
 	// layout: the rows come from walking the blocks, the zones and the platforms
@@ -1566,9 +1577,10 @@ void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/
 	const float Row = 13.f;
 	const float Pad = 8.f;
 	const float W = 470.f;
-	const float StripH = 46.f;                     // the schematic, however many blocks
+	const float StripH = bMaint ? 46.f + Row : 46.f;   // schematic, + the counts row
 	const int32 Rows = 2                           // title, status
 		+ 1 + NumDrives                            // DRIVES heading + VFD modules
+		+ (bMaint ? 1 : 0)                         // DETECTION summary
 		+ (Platforms.Num() > 0 ? 1 + Platforms.Num() + 2 : 0)    // + CONSOLE heading, lamps
 		+ (EventLog.Num() > 0 ? 1 + FMath::Min(EventLog.Num(), 4) : 0);
 	// The console row sat on the bottom edge, half off it: the section gaps are
@@ -1600,7 +1612,9 @@ void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/
 	float Ty = Y + Pad;
 	const float Lx = X + Pad + 4.f;   // clear of the green field band
 
-	PanelLabel(Canvas, Lx, Ty, TEXT("TRACKUNLIMITED  ·  RIDE CONTROL"), PanelCyan);
+	PanelLabel(Canvas, Lx, Ty, bMaint
+		? TEXT("TRACKUNLIMITED  ·  MAINTENANCE")
+		: TEXT("TRACKUNLIMITED  ·  RIDE CONTROL"), bMaint ? PanelAmber : PanelCyan);
 	Ty += Row;
 
 	// Top-level state, which is the one line an operator glances at.
@@ -1760,19 +1774,104 @@ void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/
 		PanelLabel(Canvas, StripX, BoxY + BoxH + 6.f, TEXT("0"), PanelDim);
 		PanelLabel(Canvas, StripX + StripW - 44.f, BoxY + BoxH + 6.f,
 			FString::Printf(TEXT("%.0f m"), Total), PanelDim);
+
+		// MAINTENANCE: what the SECOND detection method counted, under the block it
+		// counted it for. The strip above paints a disagreeing block red, which says
+		// where; this says what the counter actually believes, which is the
+		// difference between "something is wrong here" and a diagnosis. A block
+		// reading 2 is a collision derived from switches alone; one reading below
+		// zero is a missed trip or a bad seed, and is a LIE rather than a collision.
+		//
+		// Aligned to the blocks through the same widened mapping, or a number would
+		// sit under a block it does not describe.
+		if (bMaint && Counter)
+		{
+			for (int32 b = 0; b < NumBlocks; ++b)
+			{
+				const std::size_t B = static_cast<std::size_t>(b);
+				if (B >= Counter->NumBlocks())
+				{
+					break;
+				}
+				const int N = Counter->TrainsIn(B);
+				const bool bAgrees = Counter->IsOccupied(B) == Signals->Occupies(B);
+				PanelLabel(Canvas, BlockX(B) + 2.f, BoxY + BoxH + 19.f,
+					FString::Printf(TEXT("%d"), N),
+					(!bAgrees || N > 1 || N < 0) ? PanelRed : PanelDim);
+			}
+		}
 		Ty += StripH;
 	}
 
-	// ---- DRIVES: a VFD module per powered run ----
+	// ---- DETECTION: the two methods, stated side by side (maintenance only) ----
+	//
+	// Agreement is the normal case and is still worth showing, because a second
+	// means of detection that is never SEEN to agree is indistinguishable from one
+	// that is not running. This is the line that says the cross-check is alive.
+	//
+	// Operator view leaves it out deliberately: a disagreement already trips the
+	// E-stop and names itself in the events, and there is nothing an operator can
+	// do with the per-block breakdown that the stop has not already done for them.
+	if (bMaint)
+	{
+		Ty += 4.f;
+		PanelTile(Canvas, Lx, Ty + 5.f, W - Pad * 2.f, 1.f, PanelRule);
+		PanelLabel(Canvas, Lx, Ty, TEXT("DETECTION"), PanelDim);
+
+		if (Counter)
+		{
+			const int32 N = FMath::Min(static_cast<int32>(Counter->NumBlocks()), NumBlocks);
+			int32 Agree = 0;
+			int32 Over = 0;
+			for (int32 b = 0; b < N; ++b)
+			{
+				const std::size_t B = static_cast<std::size_t>(b);
+				if (Counter->IsOccupied(B) == Signals->Occupies(B)) { ++Agree; }
+				if (Counter->IsOverOccupied(B)) { ++Over; }
+			}
+			FString S = FString::Printf(TEXT("COUNTER v INTERLOCKING   %d/%d AGREE"), Agree, N);
+			if (Over > 0)
+			{
+				S += FString::Printf(TEXT("   %d OVER"), Over);
+			}
+			PanelLabel(Canvas, Lx + 130.f, Ty, S,
+				(Agree < N || Over > 0) ? PanelRed : PanelGreen);
+		}
+		else
+		{
+			// No counter on an open layout, and that is a property of the layout
+			// rather than a fault: FBlockCounter counts over a RING, so sensor 0
+			// going low is a train being PLACED at the start, not one leaving the
+			// end. Saying so beats an empty row that looks like a dead instrument.
+			PanelLabel(Canvas, Lx + 130.f, Ty,
+				TEXT("SPAN ONLY — no counter on an open layout"), PanelDim);
+		}
+		Ty += Row;
+	}
+
+	// ---- DRIVES: a module per powered run --------------------------------------
+	//
+	// THE ONE SECTION THE TWO VIEWS GENUINELY DISAGREE ABOUT. Commanded against
+	// output against motor feedback, and torque, are how you tell a slipping tyre
+	// from a ramping one — engineering questions, on a page an engineer opens. An
+	// operator dispatching trains needs one word per drive and cannot act on the
+	// numbers, and a real console reflects that: motor current is not on it.
+	//
+	// So the operator gets the STATE and the maintainer gets the instrument, both
+	// off the same live reading. Neither is a summary of the other — they are two
+	// different questions about one drive.
 	Ty += 4.f;
 	PanelTile(Canvas, Lx, Ty + 5.f, W - Pad * 2.f, 1.f, PanelRule);
 	// Headings at the SAME x as the values they head. Spelled out in one padded
 	// string they drifted, because the small font is not monospace.
 	PanelLabel(Canvas, Lx, Ty, TEXT("DRIVES"), PanelDim);
-	PanelLabel(Canvas, Lx + 130.f, Ty, TEXT("CMD"), PanelDim);
-	PanelLabel(Canvas, Lx + 178.f, Ty, TEXT("OUT"), PanelDim);
-	PanelLabel(Canvas, Lx + 226.f, Ty, TEXT("MOTOR"), PanelDim);
-	PanelLabel(Canvas, Lx + 288.f, Ty, TEXT("TORQUE"), PanelDim);
+	if (bMaint)
+	{
+		PanelLabel(Canvas, Lx + 130.f, Ty, TEXT("CMD"), PanelDim);
+		PanelLabel(Canvas, Lx + 178.f, Ty, TEXT("OUT"), PanelDim);
+		PanelLabel(Canvas, Lx + 226.f, Ty, TEXT("MOTOR"), PanelDim);
+		PanelLabel(Canvas, Lx + 288.f, Ty, TEXT("TORQUE"), PanelDim);
+	}
 	Ty += Row;
 
 	for (int32 z = 0; z < NumDrives; ++z)
@@ -1785,6 +1884,26 @@ void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/
 
 		PanelLabel(Canvas, Lx, Ty, FString::Printf(TEXT("Z%d %s"), z, ZoneKindName(Kind)),
 			bFault ? PanelRed : PanelText);
+
+		if (!bMaint)
+		{
+			// FOUR STATES, and every one is a fact the drive holds about ITSELF —
+			// no inference about trains, which a drive has no way to make. RAMPING
+			// is the state that only became sayable when a command stopped taking
+			// effect instantly, and it is the one that explains a dispatch being
+			// refused by the pre-launch term.
+			const TCHAR* State = TEXT("STOPPED");
+			FLinearColor Col = PanelDim;
+			if (bFault)                          { State = TEXT("FAULT");   Col = PanelRed; }
+			else if (!Drives->IsReady(Z))        { State = TEXT("RAMPING"); Col = PanelAmber; }
+			else if (FMath::Abs(R.Output) > 0.01) { State = TEXT("RUNNING"); Col = PanelGreen; }
+
+			PanelTile(Canvas, Lx + 130.f, Ty + 2.f, 7.f, 7.f, Col);
+			PanelLabel(Canvas, Lx + 142.f, Ty, State, Col);
+			Ty += Row;
+			continue;
+		}
+
 		PanelLabel(Canvas, Lx + 130.f, Ty, FString::Printf(TEXT("%5.1f"), R.Commanded), PanelDim);
 		PanelLabel(Canvas, Lx + 178.f, Ty, FString::Printf(TEXT("%5.1f"), R.Output), PanelText);
 		PanelLabel(Canvas, Lx + 226.f, Ty, FString::Printf(TEXT("%5.1f"), R.Actual),
@@ -1799,7 +1918,11 @@ void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/
 			bFault ? PanelRed : (R.Load > 0.99 ? PanelAmber : PanelCyan));
 		if (bFault)
 		{
-			PanelLabel(Canvas, BarX + BarW + 6.f, Ty, TEXT("FAULT"), PanelRed);
+			// ACKNOWLEDGED is worth a word of its own here and nowhere else: it is
+			// the maintainer's own audit trail, and "faulted, nobody has looked" is
+			// a different state from "faulted, seen, not yet cleared".
+			PanelLabel(Canvas, BarX + BarW + 6.f, Ty,
+				Drives->IsAcknowledged(Z) ? TEXT("FAULT ACK") : TEXT("FAULT"), PanelRed);
 		}
 		Ty += Row;
 	}
