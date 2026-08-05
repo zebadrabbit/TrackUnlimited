@@ -276,7 +276,7 @@ operator **commands** them and sensors then **confirm**. A thing that has been t
 thing that *has* closed — the same command → device → feedback shape the drives already have, and for
 the same reason.
 
-So `FRestraintBank` carries a commanded position, a travel time, and **a count of separately-sensed
+So `FCommandedBank` carries a commanded position, a travel time, and **a count of separately-sensed
 groups** — a car, a row, a platform segment. Locked means *every* group reports locked, ANDed, because
 a train with one bar open is a train with an open bar however many are shut. That is what makes
 **"commanded closed but car 3 is not locked" expressible**, which is the failure a walk-round exists to

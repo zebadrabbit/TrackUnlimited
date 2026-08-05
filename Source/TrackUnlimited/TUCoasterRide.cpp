@@ -1014,6 +1014,10 @@ void ATUCoasterRide::RebuildFromSegments()
 			P.Crew.SecureSeconds = RestraintCheckSeconds;
 			P.Crew.Restraints.TravelSeconds = RestraintTravelSeconds;
 			P.Crew.Restraints.Groups = FMath::Max(1, RestraintGroups);
+			// Airgates: the same device in a different place, and they travel
+			// faster than a restraint bar because they carry nothing.
+			P.Crew.Gates.TravelSeconds = RestraintTravelSeconds * 0.5f;
+			P.Crew.Gates.Groups = FMath::Max(1, RestraintGroups);
 			Platforms.Add(P);
 		}
 
@@ -1918,8 +1922,22 @@ void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/
 			Lamp(Lx, TEXT("HARNESS LOCKED"),
 				Console != nullptr && Console->Inputs.bRestraintsLocked, PanelGreen);
 		}
-		Lamp(Lx + 116.f, TEXT("GATES"),
-			Console != nullptr && Console->Inputs.bPlatformClear, PanelGreen);
+		// GATES read their own sensors too, so a jammed section shows as a count
+		// rather than as a dark lamp indistinguishable from "not commanded yet".
+		if (Console != nullptr && Console->Crew.Gates.IsCommandedClosed()
+			&& !Console->Crew.Gates.IsClosedAndLocked())
+		{
+			PanelTile(Canvas, Lx + 116.f, Ty + 2.f, 7.f, 7.f, PanelAmber);
+			PanelLabel(Canvas, Lx + 128.f, Ty,
+				FString::Printf(TEXT("GATES %d/%d"),
+					Console->Crew.Gates.GroupsConfirmed(),
+					Console->Crew.Gates.Groups), PanelAmber);
+		}
+		else
+		{
+			Lamp(Lx + 116.f, TEXT("GATES"),
+				Console != nullptr && Console->Crew.Gates.IsClosedAndLocked(), PanelGreen);
+		}
 		Lamp(Lx + 186.f, TEXT("DISPATCH READY"),
 			Console != nullptr && Console->Process.IsReadyToDispatch(), PanelGreen);
 		Lamp(Lx + 300.f, TEXT("E-STOP"), bStop, PanelRed);

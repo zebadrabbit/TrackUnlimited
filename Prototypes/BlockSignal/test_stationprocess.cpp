@@ -370,7 +370,7 @@ void TestARestraintIsCOMMANDEDAndCONFIRMED()
     // GATES and RESTRAINTS are selector switches and LOCK HARNESS is a button: the
     // operator COMMANDS them and sensors then confirm. A thing that has been told
     // to close is not a thing that HAS closed.
-    FRestraintBank B;
+    FCommandedBank B;
     B.TravelSeconds = 2.0;
     B.Groups = 4;
 
@@ -388,7 +388,7 @@ void TestARestraintIsCOMMANDEDAndCONFIRMED()
     // AND A STUCK GROUP NEVER GETS THERE. Commanded closed, three of four bars
     // down, and the bank correctly refuses to call itself locked - which is the
     // failure a walk-round exists to find and the one a single bool could not say.
-    FRestraintBank Stuck;
+    FCommandedBank Stuck;
     Stuck.TravelSeconds = 1.0;
     Stuck.Groups = 4;
     Stuck.Command(true);
@@ -438,6 +438,53 @@ void TestAStuckRestraintHoldsTheDispatchForEver()
     assert(S.IsReadyToDispatch());
 }
 
+void TestAStuckGATEHoldsItToo()
+{
+    // GATES ARE THE SAME DEVICE IN A DIFFERENT PLACE, and the all-clear waits on
+    // both. A gate that will not shut is somebody able to walk onto the track while
+    // a train is dispatched, which is the thing gates exist to prevent — so it
+    // holds the dispatch exactly as a stuck bar does.
+    //
+    // Worth its own test rather than trusting the shared type: the two banks are
+    // commanded from the same line, and a copy-paste that ticked one and tested the
+    // other would pass every restraint test in this file.
+    FStationProcess S(EStationRole::Combined);
+    FAutoStationCrew Crew;
+    Crew.UnloadSeconds = 1.0;
+    Crew.LoadSeconds = 1.0;
+    Crew.SecureSeconds = 1.0;
+    Crew.Restraints.TravelSeconds = 1.0;
+    Crew.Gates.TravelSeconds = 1.0;
+    Crew.StuckGate = 0;                  // one gate section jammed open
+
+    FStationInputs In;
+    In.bTrainPresent = true;
+    In.bTrainInPosition = true;
+
+    for (int i = 0; i < 240 * 30; ++i)
+    {
+        S.Update(In);
+        Crew.Serve(S, In, Dt);
+    }
+    assert(!S.IsReadyToDispatch());
+
+    // The BARS are fine — it is only the gate outstanding, which is why the two are
+    // separate devices rather than one "platform secure" bool.
+    assert(Crew.Restraints.IsClosedAndLocked());
+    assert(!Crew.Gates.IsClosedAndLocked());
+    assert(In.bRestraintsLocked);
+    assert(!In.bPlatformClear);
+    assert(std::strcmp(S.WhatIsHolding(), "platform not clear") == 0);
+
+    Crew.StuckGate = -1;
+    for (int i = 0; i < 240 * 5; ++i)
+    {
+        S.Update(In);
+        Crew.Serve(S, In, Dt);
+    }
+    assert(S.IsReadyToDispatch());
+}
+
 } // namespace
 
 int main()
@@ -454,6 +501,7 @@ int main()
     TestATiedDownDispatchButtonDispatchesNothing();
     TestARestraintIsCOMMANDEDAndCONFIRMED();
     TestAStuckRestraintHoldsTheDispatchForEver();
+    TestAStuckGATEHoldsItToo();
 
     std::printf("test_stationprocess: all assertions passed\n");
     return 0;

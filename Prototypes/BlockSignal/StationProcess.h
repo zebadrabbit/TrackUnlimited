@@ -306,7 +306,7 @@ private:
     bool bDispatchedThisTrain = false;
 };
 
-// A RESTRAINT BAR, OR A SET OF AIRGATES, AS A DEVICE.
+// A COMMANDED MULTI-GROUP DEVICE: a set of restraint bars, or a set of airgates.
 //
 // On every real operator console GATES and RESTRAINTS are SELECTOR SWITCHES —
 // CLOSE / OPEN — and LOCK HARNESS / UNLOCK HARNESS are buttons that light while
@@ -322,7 +322,7 @@ private:
 // WHY IT MATTERS RATHER THAN BEING TIDINESS: it makes "commanded closed but car 3
 // is not locked" EXPRESSIBLE. That is the failure a real ride checks for by
 // walking the train, and a single bool could not say it.
-struct FRestraintBank
+struct FCommandedBank
 {
     // How long the mechanism takes to travel, once told. A property of the
     // hardware, not of the people — a bar closes in the same time on a quiet
@@ -404,7 +404,16 @@ struct FAutoStationCrew
     // THE HARDWARE THE CREW OPERATES, owned here rather than passed in, so nothing
     // that already calls Serve has to change. The crew is the stand-in operator;
     // the bank is real and stays when the crew goes.
-    FRestraintBank Restraints;
+    FCommandedBank Restraints;
+
+    // AIRGATES, the same device in a different place. A real console has them on
+    // their own selector — CLOSE / OPEN — for the same reason restraints get one:
+    // commanded, travelling, sensed. The all-clear then waits on a CONTACT rather
+    // than only on a clock, so a gate that will not shut holds the dispatch.
+    //
+    // Groups are gate sections along the platform, not cars.
+    FCommandedBank Gates;
+    int StuckGate = -1;
 
     // Fault injection: which restraint group refuses to reach its commanded
     // position. -1 for none. This is what a walk-round finds, and the only reason
@@ -471,6 +480,12 @@ struct FAutoStationCrew
         Restraints.Command(bAlreadyLoaded || P == EStationPhase::Securing);
         Restraints.Tick(DeltaSeconds, StuckGroup);
 
+        // GATES OPEN WHILE RIDERS ARE MOVING and shut for the securing step. Same
+        // device, different job: they are what keeps somebody off the track while a
+        // train is being dispatched, so the all-clear cannot precede them.
+        Gates.Command(bAlreadyLoaded || P == EStationPhase::Securing);
+        Gates.Tick(DeltaSeconds, StuckGate);
+
         switch (P)
         {
         case EStationPhase::Unloading:
@@ -490,7 +505,12 @@ struct FAutoStationCrew
             // that will not travel holds the dispatch for ever instead of the
             // clock quietly declaring it shut.
             In.bRestraintsLocked = Restraints.IsClosedAndLocked();
-            if (In.bRestraintsLocked && Elapsed >= SecureSeconds)
+            // THE ALL-CLEAR IS NOW TWO CONTACTS AND A WALK-ROUND, not a clock: the
+            // bars down, the gates shut, and an operator who has looked. Any one of
+            // the three outstanding holds the dispatch, and a gate that will not
+            // travel holds it for ever rather than being timed out of the way.
+            if (In.bRestraintsLocked && Gates.IsClosedAndLocked()
+                && Elapsed >= SecureSeconds)
             {
                 In.bPlatformClear = true;
             }
