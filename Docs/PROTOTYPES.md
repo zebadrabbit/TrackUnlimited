@@ -111,6 +111,7 @@ tests. See [`SIGNALLING.md`](SIGNALLING.md) for what the states mean and why the
 |---|---|
 | `BlockSignal.h` | The per-block state machine and the permissive. Knows about blocks and nothing else |
 | `RideSignals.h` | The mapping layer: arc length → block index, each train's nose-and-tail range, one permissive keyed to the destination |
+| `TrackSensors.h` | The sensors a PLC actually reads, and a train counter that derives occupancy from their trips alone |
 
 `RideSignals.h` consumes **doubles and a train index, not an `FTrain`** — `RearS`, `FrontS`, `dt`.
 That keeps it independent of the physics, lets the assert suite drive it with bare numbers, and makes
@@ -153,6 +154,45 @@ Two contracts it cannot enforce from the inside, so they are the caller's: `Tick
 frame, not once per train** (overlaps live on blocks, and there is no clock in here to notice), and
 update order within a frame is observable — but it **fails closed**, reporting a following train half
 a frame early rather than half a frame late.
+
+### `TrackSensors.h` — what the PLC is actually allowed to know
+
+`FRideSignals` is *handed* the truth: each train's exact rear and front, every frame, for free. That
+is the difference between simulating a control system and simulating the answer one would have got. A
+real PLC has no idea where a train is — it knows a switch at 872.1 m went high. So:
+
+```
+FTrain span  ->  SENSORS (physical)  ->  PLC (logical)
+```
+
+`FTrackSensors` is the middle box and the **only** layer entitled to know a position, because a
+proximity switch genuinely is a device a physical train physically covers. It reports presence and
+counts edges, and deliberately does **not** report which train — a switch says "metal is over me" and
+nothing else. Identity is inferred downstream from the order things trip in, which is unambiguous only
+because no two trains may share a block: the interlocking and the identity tracking hold each other up.
+
+`FBlockCounter` then derives occupancy from trips alone:
+
+> **trains in block i = (times sensor i was entered) − (times sensor i+1 was fully cleared)**
+
+Rising on the way in, **falling** on the way out — that asymmetry is the whole trick, and it is why
+the sensor counts both edges. Use one edge for both ends and a block goes clear with a train still
+lying across its boundary. It is a train counter, which railways have used for a century, and it
+carries the property that matters: a block reading **two** is a collision, detected without anything
+ever having known a position.
+
+**Proves:** that the sensor layer is *sufficient* rather than decorative — the counter's occupancy is
+compared against a perfect-knowledge span test on every scan of three full laps and never differs. Also
+that a sensor is one device two trains cannot each decide the state of, that the circuit's seam is just
+more track to it, and that a counter must be **seeded**. That last one is not incidental: computing
+occupancy from lifetime edge totals sends the block *behind* a train's starting position to −1 the
+moment its tail leaves the first sensor, because it gets counted out of a block it was never counted
+into. Real rides are swept and their counters zeroed for exactly this reason, and `IsInconsistent()`
+reports a negative count separately from a collision, because the fix is different.
+
+**Records one limit:** a train that arrives and leaves between two scans is never seen at all — no
+rise, no fall, no trace. Real hardware latches the switch so a brief trip survives until the controller
+reads it, and that latch is the fix if it ever matters, not a faster scan.
 
 ## `NL2Csv/` — validation fixtures
 
