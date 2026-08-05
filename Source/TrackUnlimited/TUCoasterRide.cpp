@@ -4,9 +4,13 @@
 #include "TrackSpline/TrackValidate.h"
 
 #include "Camera/CameraComponent.h"
+#include "CanvasItem.h"
 #include "Components/InstancedStaticMeshComponent.h"
+#include "Debug/DebugDrawService.h"
 #include "DrawDebugHelpers.h"
+#include "Engine/Canvas.h"
 #include "Engine/Engine.h"
+#include "Engine/Font.h"
 #include "UObject/ConstructorHelpers.h"
 
 namespace
@@ -1334,6 +1338,8 @@ void ATUCoasterRide::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 		&ATUCoasterRide::PressEmergencyStop);
 	PlayerInputComponent->BindKey(EKeys::End, IE_Pressed, this,
 		&ATUCoasterRide::ResetEmergencyStop);
+	PlayerInputComponent->BindKey(EKeys::P, IE_Pressed, this,
+		&ATUCoasterRide::ToggleControlPanel);
 
 	PlayerInputComponent->BindAxisKey(EKeys::W, this, &ATUCoasterRide::AxisForward);
 	PlayerInputComponent->BindAxisKey(EKeys::S, this, &ATUCoasterRide::AxisBack);
@@ -1406,6 +1412,268 @@ void ATUCoasterRide::BeginPlay()
 		DrawTrack();
 	}
 	DrawRideProfile();
+
+	// The debug canvas rather than a UMG widget, deliberately: a generated panel
+	// has no fixed set of elements to lay out in an asset, and this needs no asset
+	// at all. It draws in play and not in the editor viewport, which is right — a
+	// control room is something you look at while the ride is running.
+	PanelDrawHandle = UDebugDrawService::Register(TEXT("Game"),
+		FDebugDrawDelegate::CreateUObject(this, &ATUCoasterRide::DrawControlPanel));
+}
+
+void ATUCoasterRide::EndPlay(const EEndPlayReason::Type Reason)
+{
+	// Unregistered explicitly: the service holds the delegate, and a stale one
+	// fires into a destroyed actor.
+	if (PanelDrawHandle.IsValid())
+	{
+		UDebugDrawService::Unregister(PanelDrawHandle);
+		PanelDrawHandle.Reset();
+	}
+	Super::EndPlay(Reason);
+}
+
+namespace
+{
+	// The drawing's own palette, so the panel and the splash are the same object
+	// seen twice. Near-black ground, amber for what is working, cyan for what is
+	// measured, red for what has stopped.
+	const FLinearColor PanelGround(0.043f, 0.055f, 0.067f, 0.92f);
+	const FLinearColor PanelRule(0.20f, 0.24f, 0.28f, 1.f);
+	const FLinearColor PanelText(0.72f, 0.78f, 0.82f, 1.f);
+	const FLinearColor PanelDim(0.42f, 0.47f, 0.52f, 1.f);
+	const FLinearColor PanelAmber(0.98f, 0.62f, 0.16f, 1.f);
+	const FLinearColor PanelCyan(0.35f, 0.74f, 1.00f, 1.f);
+	const FLinearColor PanelGreen(0.35f, 0.82f, 0.45f, 1.f);
+	const FLinearColor PanelRed(0.95f, 0.28f, 0.24f, 1.f);
+
+	void PanelTile(UCanvas* C, float X, float Y, float W, float H, const FLinearColor& Col)
+	{
+		FCanvasTileItem Tile(FVector2D(X, Y), FVector2D(W, H), Col);
+		Tile.BlendMode = SE_BLEND_Translucent;
+		C->DrawItem(Tile);
+	}
+
+	void PanelLabel(UCanvas* C, float X, float Y, const FString& S, const FLinearColor& Col)
+	{
+		FCanvasTextItem Item(FVector2D(X, Y), FText::FromString(S), GEngine->GetSmallFont(), Col);
+		Item.EnableShadow(FLinearColor::Black);
+		C->DrawItem(Item);
+	}
+
+	// What a zone IS, for the module heading. FTrackZone drops the kind because the
+	// physics does not care; the panel is the one place that has to say it.
+	const TCHAR* ZoneKindName(ETUSegmentZone Kind)
+	{
+		switch (Kind)
+		{
+		case ETUSegmentZone::Lift:          return TEXT("LIFT");
+		case ETUSegmentZone::Launch:        return TEXT("LAUNCH");
+		case ETUSegmentZone::Brake:         return TEXT("TRIM");
+		case ETUSegmentZone::BlockBrake:    return TEXT("BLOCK BRAKE");
+		case ETUSegmentZone::Station:       return TEXT("STATION");
+		case ETUSegmentZone::StationUnload: return TEXT("UNLOAD");
+		case ETUSegmentZone::StationLoad:   return TEXT("LOAD");
+		default:                            return TEXT("-");
+		}
+	}
+
+	const TCHAR* PhaseName(EStationPhase P)
+	{
+		switch (P)
+		{
+		case EStationPhase::Empty:     return TEXT("EMPTY");
+		case EStationPhase::Arriving:  return TEXT("ARRIVING");
+		case EStationPhase::Unloading: return TEXT("UNLOADING");
+		case EStationPhase::Loading:   return TEXT("LOADING");
+		case EStationPhase::Securing:  return TEXT("SECURING");
+		case EStationPhase::Ready:     return TEXT("READY");
+		default:                       return TEXT("DEPARTING");
+		}
+	}
+}
+
+void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/)
+{
+	if (!bShowControlPanel || !Canvas || !Signals || !Drives || !GEngine)
+	{
+		return;
+	}
+
+	// GENERATED FROM THE SAME LISTS AS THE RIDE. Nothing below is authored per
+	// layout: the rows come from walking the blocks, the zones and the platforms
+	// that RebuildFromSegments already derived, so a track with more blocks gets
+	// more indicators without anything here being told about it.
+	const int32 NumBlocks = static_cast<int32>(Signals->NumBlocks());
+	const int32 NumDrives = static_cast<int32>(Drives->Num());
+	const float Row = 13.f;
+	const float Pad = 8.f;
+	const float W = 470.f;
+	const int32 Rows = 2                          // title, status
+		+ 1 + NumBlocks                            // BLOCKS heading + indicators
+		+ 1 + NumDrives                            // DRIVES heading + VFD modules
+		+ (Platforms.Num() > 0 ? 1 + Platforms.Num() : 0);
+	const float H = Pad * 2.f + Rows * Row + 12.f;
+
+	const float X = 16.f;
+	const float Y = FMath::Max(16.f, Canvas->SizeY - H - 16.f);
+
+	PanelTile(Canvas, X, Y, W, H, PanelGround);
+	PanelTile(Canvas, X, Y, W, 1.f, PanelRule);
+	PanelTile(Canvas, X, Y + H - 1.f, W, 1.f, PanelRule);
+	PanelTile(Canvas, X, Y, 1.f, H, PanelRule);
+	PanelTile(Canvas, X + W - 1.f, Y, 1.f, H, PanelRule);
+
+	float Ty = Y + Pad;
+	const float Lx = X + Pad;
+
+	PanelLabel(Canvas, Lx, Ty, TEXT("TRACKUNLIMITED  ·  RIDE CONTROL"), PanelCyan);
+	Ty += Row;
+
+	// Top-level state, which is the one line an operator glances at.
+	{
+		const bool bStopped = Drives->IsEmergencyStopped();
+		FString Status = FString::Printf(TEXT("%s   %d TRAIN%s"),
+			bManualDispatch ? TEXT("MANUAL") : TEXT("AUTO"),
+			Trains.Num(), Trains.Num() == 1 ? TEXT("") : TEXT("S"));
+		if (Signals->Violations() > 0)
+		{
+			Status += FString::Printf(TEXT("   %d VIOLATION(S)"),
+				static_cast<int32>(Signals->Violations()));
+		}
+		PanelLabel(Canvas, Lx, Ty, Status, Signals->Violations() > 0 ? PanelRed : PanelDim);
+
+		PanelLabel(Canvas, Lx + 300.f, Ty,
+			bStopped ? FString::Printf(TEXT("E-STOP · %s"),
+				UTF8_TO_TCHAR(Drives->EmergencyStopReason()))
+					 : FString(TEXT("READY")),
+			bStopped ? PanelRed : PanelGreen);
+		Ty += Row + 4.f;
+	}
+
+	// ---- BLOCKS: one indicator each, clear / occupied / buffer countdown ----
+	PanelTile(Canvas, Lx, Ty + 5.f, W - Pad * 2.f, 1.f, PanelRule);
+	PanelLabel(Canvas, Lx, Ty, TEXT("BLOCKS"), PanelDim);
+	Ty += Row;
+
+	for (int32 b = 0; b < NumBlocks; ++b)
+	{
+		const std::size_t B = static_cast<std::size_t>(b);
+		const EBlockState State = Signals->GetState(B);
+		const bool bOcc = State == EBlockState::Occupied;
+		const bool bBuf = State == EBlockState::Buffer;
+		const FLinearColor Lamp = bOcc ? PanelAmber : (bBuf ? PanelCyan : PanelGreen);
+
+		PanelTile(Canvas, Lx, Ty + 3.f, 6.f, 6.f, Lamp);
+		PanelLabel(Canvas, Lx + 12.f, Ty, FString::Printf(TEXT("B%02d"), b), PanelText);
+		PanelLabel(Canvas, Lx + 46.f, Ty,
+			bOcc ? TEXT("OCCUPIED") : (bBuf ? TEXT("BUFFER") : TEXT("CLEAR")), Lamp);
+
+		if (bBuf)
+		{
+			PanelLabel(Canvas, Lx + 116.f, Ty,
+				FString::Printf(TEXT("%.1f s"), Signals->GetBufferRemaining(B)), PanelCyan);
+		}
+		for (int32 t = 0; t < Trains.Num(); ++t)
+		{
+			if (Signals->OccupiedBy(static_cast<std::size_t>(t), B))
+			{
+				PanelLabel(Canvas, Lx + 116.f, Ty,
+					FString::Printf(TEXT("train %d"), t), PanelText);
+			}
+		}
+
+		// THE SECOND DETECTION METHOD, shown next to the first. They are derived
+		// from different information and must agree; a panel that showed only one
+		// of them would be hiding the entire point of having two.
+		if (Counter && B < Counter->NumBlocks())
+		{
+			const int32 Ct = Counter->TrainsIn(B);
+			const bool bAgree = Counter->IsOccupied(B) == Signals->Occupies(B);
+			PanelLabel(Canvas, Lx + 190.f, Ty,
+				FString::Printf(TEXT("counter %d  %s"), Ct, bAgree ? TEXT("ok") : TEXT("DISAGREES")),
+				bAgree ? PanelDim : PanelRed);
+		}
+		Ty += Row;
+	}
+
+	// ---- DRIVES: a VFD module per powered run ----
+	Ty += 4.f;
+	PanelTile(Canvas, Lx, Ty + 5.f, W - Pad * 2.f, 1.f, PanelRule);
+	PanelLabel(Canvas, Lx, Ty, TEXT("DRIVES        CMD    OUT    ACTUAL   TORQUE"), PanelDim);
+	Ty += Row;
+
+	for (int32 z = 0; z < NumDrives; ++z)
+	{
+		const std::size_t Z = static_cast<std::size_t>(z);
+		const FDriveReading& R = Drives->Read(Z);
+		const bool bFault = Drives->IsFaulted(Z);
+		const ETUSegmentZone Kind = ZoneSpans.IsValidIndex(z)
+			? ZoneSpans[z].Kind : ETUSegmentZone::None;
+
+		PanelLabel(Canvas, Lx, Ty, FString::Printf(TEXT("Z%d %s"), z, ZoneKindName(Kind)),
+			bFault ? PanelRed : PanelText);
+		PanelLabel(Canvas, Lx + 130.f, Ty, FString::Printf(TEXT("%5.1f"), R.Commanded), PanelDim);
+		PanelLabel(Canvas, Lx + 178.f, Ty, FString::Printf(TEXT("%5.1f"), R.Output), PanelText);
+		PanelLabel(Canvas, Lx + 226.f, Ty, FString::Printf(TEXT("%5.1f"), R.Actual),
+			R.bLoaded ? PanelCyan : PanelDim);
+
+		// Torque as a bar, because a number that spends its life at 0 or 1 says
+		// less at a glance than a bar that fills.
+		const float BarX = Lx + 288.f;
+		const float BarW = 96.f;
+		PanelTile(Canvas, BarX, Ty + 3.f, BarW, 6.f, FLinearColor(0.12f, 0.14f, 0.16f, 1.f));
+		PanelTile(Canvas, BarX, Ty + 3.f, BarW * static_cast<float>(R.Load), 6.f,
+			bFault ? PanelRed : (R.Load > 0.99 ? PanelAmber : PanelCyan));
+		if (bFault)
+		{
+			PanelLabel(Canvas, BarX + BarW + 6.f, Ty, TEXT("FAULT"), PanelRed);
+		}
+		Ty += Row;
+	}
+
+	// ---- PLATFORMS: where each one is in its sequence, and what is holding it ----
+	if (Platforms.Num() > 0)
+	{
+		Ty += 4.f;
+		PanelTile(Canvas, Lx, Ty + 5.f, W - Pad * 2.f, 1.f, PanelRule);
+		PanelLabel(Canvas, Lx, Ty, TEXT("PLATFORMS"), PanelDim);
+		Ty += Row;
+
+		for (const FTUPlatform& P : Platforms)
+		{
+			const bool bReady = P.Process.IsReadyToDispatch();
+			const ETUSegmentZone Kind = ZoneSpans.IsValidIndex(P.Zone)
+				? ZoneSpans[P.Zone].Kind : ETUSegmentZone::None;
+
+			PanelTile(Canvas, Lx, Ty + 3.f, 6.f, 6.f, bReady ? PanelGreen : PanelDim);
+			PanelLabel(Canvas, Lx + 12.f, Ty,
+				FString::Printf(TEXT("Z%d %s"), P.Zone, ZoneKindName(Kind)), PanelText);
+			PanelLabel(Canvas, Lx + 130.f, Ty, PhaseName(P.Process.GetPhase()),
+				bReady ? PanelGreen : PanelAmber);
+
+			// WHAT IS HOLDING IT, which is the reason the station's gates are
+			// modelled one at a time. "Not ready" is useless to somebody standing
+			// on the platform; "restraints not locked" is somewhere to go and look.
+			const FString Holding = UTF8_TO_TCHAR(P.Process.WhatIsHolding());
+			if (!Holding.IsEmpty())
+			{
+				PanelLabel(Canvas, Lx + 226.f, Ty, Holding, PanelDim);
+			}
+			else if (bReady)
+			{
+				// Ready and still standing means the OTHER half of the AND is
+				// saying no, which is the distinction an operator most wants and
+				// can least otherwise see.
+				const bool bBlocked = !Signals->CanRelease(0, ZoneSpans.IsValidIndex(P.Zone)
+					? ZoneSpans[P.Zone].StartS : 0.0);
+				PanelLabel(Canvas, Lx + 226.f, Ty,
+					bBlocked ? TEXT("waiting on the block ahead") : TEXT("dispatching"),
+					bBlocked ? PanelAmber : PanelGreen);
+			}
+			Ty += Row;
+		}
+	}
 }
 
 void ATUCoasterRide::PressEmergencyStop()

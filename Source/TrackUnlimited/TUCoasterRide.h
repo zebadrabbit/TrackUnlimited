@@ -35,6 +35,7 @@ public:
 	ATUCoasterRide();
 
 	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type Reason) override;
 	virtual void Tick(float DeltaSeconds) override;
 
 	/** Runs on place, load, move and property change — so the preview is live without pressing play. */
@@ -263,6 +264,17 @@ public:
 	bool bEmergencyStop = false;
 
 	/**
+	 * The generated control panel: an indicator per block, a VFD module per
+	 * powered run, a sequence readout per platform. [P] toggles it in play.
+	 *
+	 * Play only. It draws on the debug canvas, which the editor viewport does not
+	 * run — and a control room is a thing you look at while the ride is running,
+	 * not while you are drawing track.
+	 */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Signalling")
+	bool bShowControlPanel = true;
+
+	/**
 	 * Metres, nose to tail. Zero is a point mass at the heartline.
 	 *
 	 * A train's speed is governed by the height of its centre of mass, so a
@@ -418,6 +430,28 @@ private:
 
 	/** Compares the counter against the interlocking; a difference stops the ride. */
 	void CrossCheckOccupancy();
+
+	/**
+	 * THE CONTROL PANEL, and it is GENERATED rather than authored. It walks the
+	 * same ordered block and zone lists the geometry and the physics walk, and for
+	 * each element emits its control-room counterpart: a block becomes an
+	 * indicator, a powered run becomes a VFD module, a platform becomes a sequence
+	 * readout. Add a block to a layout and an indicator appears, because there is
+	 * nowhere else for it to come from.
+	 *
+	 * It is a second generated VIEW over the canonical data, not a second copy of
+	 * it — every number here is read live from FRideSignals, FTrackDrives,
+	 * FBlockCounter and FStationProcess, and nothing is computed for display.
+	 *
+	 * 2D first, deliberately: a modelled control booth is a presentation layer over
+	 * this, later, not a separate system.
+	 */
+	void DrawControlPanel(UCanvas* Canvas, APlayerController* PC);
+
+	/** Registration handle for the debug-canvas draw. */
+	FDelegateHandle PanelDrawHandle;
+
+	void ToggleControlPanel() { bShowControlPanel = !bShowControlPanel; }
 
 	// Will the station at this zone let its train go? True where there is no
 	// station, which is every device that is not a platform.
