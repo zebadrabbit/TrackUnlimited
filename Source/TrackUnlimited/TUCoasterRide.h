@@ -237,6 +237,28 @@ public:
 	float RestraintCheckSeconds = 4.f;
 
 	/**
+	 * How long the restraint bars take to travel once commanded, and how many
+	 * separately-sensed groups they are in — a car, a row, a platform segment.
+	 *
+	 * UNLIKE THE DWELL FIGURES ABOVE, THIS IS HARDWARE. A bar closes in the same
+	 * time on a quiet Tuesday as on a busy Saturday, and it is what the sequence
+	 * actually waits on: the lock contact comes from the bank's own sensors rather
+	 * than from a clock, so a bar that will not travel holds the dispatch for ever
+	 * instead of being quietly declared shut.
+	 *
+	 * The group count is the resolution at which a failure can be reported. Real
+	 * HMIs unlock "Seats Segment 1" and lock all of them, which is why it is worth
+	 * more than one.
+	 */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Station",
+		meta = (ClampMin = "0.0", UIMax = "15.0"))
+	float RestraintTravelSeconds = 2.f;
+
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Station",
+		meta = (ClampMin = "1", UIMax = "12"))
+	int32 RestraintGroups = 4;
+
+	/**
 	 * Who decides the timing. In manual, a station holds its train until the
 	 * dispatch button is pressed — [Space] — and the button must be RELEASED
 	 * between trains, so a wedged control dispatches nothing.

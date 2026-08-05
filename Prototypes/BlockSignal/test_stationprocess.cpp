@@ -247,9 +247,16 @@ void TestTheCrewIsTheOnlyThingRunningOnTime()
     }
     assert(S.IsReadyToDispatch());
 
-    // 2 + 3 + 1 of dwell, plus a scan apiece for the phase to advance. The point
-    // is that the total is the SUM of the steps rather than any one of them.
-    assert(T > 5.9 && T < 6.2);
+    // 2 unload + 3 load + the securing step, plus a scan apiece for the phase to
+    // advance. The point is that the total is the SUM of the steps rather than any
+    // one of them.
+    //
+    // Securing is now 2 s rather than the crew's 1, because the RESTRAINT BARS take
+    // 2 s to travel and that is hardware rather than a crew allowance. The
+    // all-clear needs the bars locked AND the walk-round done, so the longer of the
+    // two governs — which is the right shape: an operator cannot sign off bars that
+    // are still moving, however quickly they walk.
+    assert(T > 6.9 && T < 7.2);
 
     // The train leaves and the next one arrives to a clean platform: the crew's
     // contacts are withdrawn, so nothing is pre-confirmed.
@@ -357,6 +364,80 @@ void TestATiedDownDispatchButtonDispatchesNothing()
     assert(S.IsReadyToDispatch());
 }
 
+void TestARestraintIsCOMMANDEDAndCONFIRMED()
+{
+    // THE POINT OF SEPARATING THE SWITCH FROM THE SENSOR. On every real console
+    // GATES and RESTRAINTS are selector switches and LOCK HARNESS is a button: the
+    // operator COMMANDS them and sensors then confirm. A thing that has been told
+    // to close is not a thing that HAS closed.
+    FRestraintBank B;
+    B.TravelSeconds = 2.0;
+    B.Groups = 4;
+
+    assert(!B.IsClosedAndLocked());
+    B.Command(true);
+    assert(B.IsCommandedClosed());
+    assert(!B.IsClosedAndLocked());     // told, not done
+    assert(B.IsInTransit());
+
+    for (int i = 0; i < 240 * 3; ++i) { B.Tick(Dt); }
+    assert(B.IsClosedAndLocked());
+    assert(!B.IsInTransit());
+    assert(B.GroupsConfirmed() == 4);
+
+    // AND A STUCK GROUP NEVER GETS THERE. Commanded closed, three of four bars
+    // down, and the bank correctly refuses to call itself locked - which is the
+    // failure a walk-round exists to find and the one a single bool could not say.
+    FRestraintBank Stuck;
+    Stuck.TravelSeconds = 1.0;
+    Stuck.Groups = 4;
+    Stuck.Command(true);
+    for (int i = 0; i < 240 * 10; ++i) { Stuck.Tick(Dt, 2); }
+    assert(Stuck.IsCommandedClosed());
+    assert(Stuck.GroupsConfirmed() == 3);
+    assert(!Stuck.IsClosedAndLocked());
+    assert(Stuck.IsInTransit());
+}
+
+void TestAStuckRestraintHoldsTheDispatchForEver()
+{
+    // WHY THIS WAS WORTH CHANGING. Under the old crew the lock was asserted on a
+    // clock, so a bar that never closed was declared shut a second and a half later
+    // and the train went. Now the contact comes from the bank's own sensors, and a
+    // bar that will not travel holds the dispatch indefinitely.
+    FStationProcess S(EStationRole::Combined);
+    FAutoStationCrew Crew;
+    Crew.UnloadSeconds = 1.0;
+    Crew.LoadSeconds = 1.0;
+    Crew.SecureSeconds = 1.0;
+    Crew.Restraints.TravelSeconds = 1.0;
+    Crew.StuckGroup = 1;                 // one bar will not come down
+
+    FStationInputs In;
+    In.bTrainPresent = true;
+    In.bTrainInPosition = true;
+
+    for (int i = 0; i < 240 * 60; ++i)   // a full minute of trying
+    {
+        S.Update(In);
+        Crew.Serve(S, In, Dt);
+    }
+    assert(!S.IsReadyToDispatch());
+    assert(S.GetPhase() == EStationPhase::Securing);
+    assert(std::strcmp(S.WhatIsHolding(), "restraints not locked") == 0);
+    assert(Crew.Restraints.IsCommandedClosed());     // the switch WAS thrown
+    assert(!Crew.Restraints.IsClosedAndLocked());    // the bars did not arrive
+
+    // Clear the fault and it completes, without redoing the load.
+    Crew.StuckGroup = -1;
+    for (int i = 0; i < 240 * 5; ++i)
+    {
+        S.Update(In);
+        Crew.Serve(S, In, Dt);
+    }
+    assert(S.IsReadyToDispatch());
+}
+
 } // namespace
 
 int main()
@@ -371,6 +452,8 @@ int main()
     TestNothingHappensUntilTheTrainStops();
     TestManualModeChangesWhoDecidesTheTimingAndNothingElse();
     TestATiedDownDispatchButtonDispatchesNothing();
+    TestARestraintIsCOMMANDEDAndCONFIRMED();
+    TestAStuckRestraintHoldsTheDispatchForEver();
 
     std::printf("test_stationprocess: all assertions passed\n");
     return 0;

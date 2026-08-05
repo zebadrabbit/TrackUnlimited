@@ -1012,6 +1012,8 @@ void ATUCoasterRide::RebuildFromSegments()
 			P.Crew.UnloadSeconds = UnloadSeconds;
 			P.Crew.LoadSeconds = LoadSeconds;
 			P.Crew.SecureSeconds = RestraintCheckSeconds;
+			P.Crew.Restraints.TravelSeconds = RestraintTravelSeconds;
+			P.Crew.Restraints.Groups = FMath::Max(1, RestraintGroups);
 			Platforms.Add(P);
 		}
 
@@ -1898,8 +1900,24 @@ void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/
 		// console uses. "DISPATCH READY" is its own lamp on all three panels rather
 		// than a property of the dispatch button, because the machine granting
 		// permission and a person taking it are two different events.
-		Lamp(Lx, TEXT("HARNESS LOCKED"),
-			Console != nullptr && Console->Inputs.bRestraintsLocked, PanelGreen);
+		// HARNESS shows the bank's own sensors, not the switch position. Commanded
+		// closed with bars still travelling reads amber with a count, because "told
+		// to close" and "closed" are different facts and the gap between them is
+		// exactly what a walk-round is looking for.
+		if (Console != nullptr && Console->Crew.Restraints.IsCommandedClosed()
+			&& !Console->Crew.Restraints.IsClosedAndLocked())
+		{
+			PanelTile(Canvas, Lx, Ty + 2.f, 7.f, 7.f, PanelAmber);
+			PanelLabel(Canvas, Lx + 12.f, Ty,
+				FString::Printf(TEXT("HARNESS %d/%d"),
+					Console->Crew.Restraints.GroupsConfirmed(),
+					Console->Crew.Restraints.Groups), PanelAmber);
+		}
+		else
+		{
+			Lamp(Lx, TEXT("HARNESS LOCKED"),
+				Console != nullptr && Console->Inputs.bRestraintsLocked, PanelGreen);
+		}
 		Lamp(Lx + 116.f, TEXT("GATES"),
 			Console != nullptr && Console->Inputs.bPlatformClear, PanelGreen);
 		Lamp(Lx + 186.f, TEXT("DISPATCH READY"),

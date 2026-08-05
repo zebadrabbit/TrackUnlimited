@@ -267,8 +267,25 @@ ahead was free, which is a ride with nobody in it.
 a restraint lock sensor per car (ANDed into one signal), airgate switches, the operators' all-clear.
 Minimum dwell exists, but it is a throughput target rather than what gates the dispatch — model the
 gates and the dwell falls out; model the dwell and the gates never get built. `FAutoStationCrew` is the
-stand-in that asserts those contacts on timers because nothing here simulates a person, and it is a
-separate object precisely so it can be deleted.
+stand-in that asserts the *rider* contacts on timers because nothing here simulates a person, and it is
+a separate object precisely so it can be deleted.
+
+**Restraints are a commanded device, not one of those timers.** On every real console `GATES` and
+`RESTRAINTS` are selector switches and `LOCK HARNESS` is a button that lights while it works: the
+operator **commands** them and sensors then **confirm**. A thing that has been told to close is not a
+thing that *has* closed — the same command → device → feedback shape the drives already have, and for
+the same reason.
+
+So `FRestraintBank` carries a commanded position, a travel time, and **a count of separately-sensed
+groups** — a car, a row, a platform segment. Locked means *every* group reports locked, ANDed, because
+a train with one bar open is a train with an open bar however many are shut. That is what makes
+**"commanded closed but car 3 is not locked" expressible**, which is the failure a walk-round exists to
+find and the one a single bool could not say. Asserted: a stuck group holds the dispatch for a full
+minute of trying, where the old clock declared it shut a second and a half in.
+
+Travel time is **hardware, not crew allowance** — a bar closes in the same time on a quiet Tuesday as
+on a busy Saturday — so the securing step now takes the longer of the walk-round and the bars, which is
+the right shape: an operator cannot sign off bars that are still moving, however quickly they walk.
 
 **Pre-launch: clear is not ready.** The step between "everything is secured" and "you may go", and it
 belongs to the **device** rather than the platform — a launch armed and charged, a chain actually

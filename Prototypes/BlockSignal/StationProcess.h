@@ -306,6 +306,84 @@ private:
     bool bDispatchedThisTrain = false;
 };
 
+// A RESTRAINT BAR, OR A SET OF AIRGATES, AS A DEVICE.
+//
+// On every real operator console GATES and RESTRAINTS are SELECTOR SWITCHES —
+// CLOSE / OPEN — and LOCK HARNESS / UNLOCK HARNESS are buttons that light while
+// they work. The operator COMMANDS them; sensors then confirm. That is the same
+// command -> device -> feedback shape FTrackDrives already has, and for the same
+// reason: a thing that is told to close is not a thing that HAS closed.
+//
+// Before this, FAutoStationCrew asserted bRestraintsLocked and bPlatformClear
+// straight into the process on a dwell timer. That was always labelled a stand-in.
+// This is the part of it that was not really about riders at all: the hardware
+// exists whether or not anybody is sitting in it.
+//
+// WHY IT MATTERS RATHER THAN BEING TIDINESS: it makes "commanded closed but car 3
+// is not locked" EXPRESSIBLE. That is the failure a real ride checks for by
+// walking the train, and a single bool could not say it.
+struct FRestraintBank
+{
+    // How long the mechanism takes to travel, once told. A property of the
+    // hardware, not of the people — a bar closes in the same time on a quiet
+    // Tuesday as on a busy Saturday.
+    double TravelSeconds = 2.0;
+
+    // How many separately-sensed groups: a car, a row, a platform segment. Real
+    // panels unlock "Seats Segment 1" and lock all of them, so the count is the
+    // resolution at which a failure can be reported and it is worth more than one.
+    int Groups = 4;
+
+    void Command(bool bClose)
+    {
+        if (bClose != bCommandedClosed)
+        {
+            bCommandedClosed = bClose;
+            Elapsed = 0.0;
+        }
+    }
+
+    // One scan. bStuckGroup is the fault injection hook — a group that will not
+    // reach its commanded position, which is exactly what the walk-round finds.
+    void Tick(double DeltaSeconds, int bStuckGroup = -1)
+    {
+        if (!(DeltaSeconds > 0.0))
+        {
+            return;
+        }
+        Elapsed += DeltaSeconds;
+        Confirmed = 0;
+        for (int g = 0; g < Groups; ++g)
+        {
+            if (g == bStuckGroup)
+            {
+                continue;   // this one does not get there
+            }
+            if (Elapsed >= TravelSeconds)
+            {
+                ++Confirmed;
+            }
+        }
+    }
+
+    // WHAT THE SENSORS SAY, not what the switch was set to. Locked means EVERY
+    // group reports locked — ANDed, because a train with one bar open is a train
+    // with an open bar however many are shut.
+    bool IsClosedAndLocked() const { return bCommandedClosed && Confirmed >= Groups; }
+    bool IsFullyOpen() const { return !bCommandedClosed && Confirmed >= Groups; }
+    bool IsCommandedClosed() const { return bCommandedClosed; }
+    int GroupsConfirmed() const { return Confirmed; }
+
+    // The disagreement, which is the whole point of separating the two. Commanded
+    // one way and not all groups there: either still travelling, or stuck.
+    bool IsInTransit() const { return Confirmed < Groups; }
+
+private:
+    bool bCommandedClosed = false;
+    int Confirmed = 0;
+    double Elapsed = 0.0;
+};
+
 // THE PART THAT GOES AWAY WHEN THERE ARE RIDERS.
 //
 // Nothing in this project simulates a person, so something has to assert the
@@ -322,6 +400,16 @@ struct FAutoStationCrew
     double UnloadSeconds = 6.0;
     double LoadSeconds = 12.0;
     double SecureSeconds = 4.0;
+
+    // THE HARDWARE THE CREW OPERATES, owned here rather than passed in, so nothing
+    // that already calls Serve has to change. The crew is the stand-in operator;
+    // the bank is real and stays when the crew goes.
+    FRestraintBank Restraints;
+
+    // Fault injection: which restraint group refuses to reach its commanded
+    // position. -1 for none. This is what a walk-round finds, and the only reason
+    // groups are counted separately at all.
+    int StuckGroup = -1;
 
     // Advance the crew and write what they have finished into In. Call once per
     // scan, after bTrainPresent and bTrainInPosition have been set from the
@@ -348,12 +436,18 @@ struct FAutoStationCrew
         {
             // Reset between trains. Without this the next train arrives to find
             // the last one's work already done and dispatches immediately.
+            //
+            // The RESTRAINTS ARE NOT RESET, deliberately. A departing train leaves
+            // with its bars locked and an empty platform has whatever the last
+            // train left it — hardware does not tidy itself up between customers,
+            // and the next train's sequence commands them open anyway.
             Elapsed = 0.0;
             In.bUnloadComplete = false;
             In.bLoadComplete = false;
             In.bRestraintsLocked = false;
             In.bPlatformClear = false;
             LastPhase = P;
+            Restraints.Tick(DeltaSeconds, StuckGroup);
             return;
         }
         if (P != LastPhase)
@@ -366,6 +460,16 @@ struct FAutoStationCrew
             return;   // nobody does anything until it stops
         }
         Elapsed += DeltaSeconds;
+
+        // THE CREW COMMANDS THE HARDWARE; THE HARDWARE REPORTS BACK. It no longer
+        // asserts bRestraintsLocked on a clock — it throws the switch, and the
+        // contact comes from the bank's own sensors. That is the difference between
+        // an operator who has pressed LOCK HARNESS and a train whose bars are down.
+        //
+        // An ALREADY-LOADED train's bars never opened, so the command stays closed
+        // and the confirmation is already there when it arrives.
+        Restraints.Command(bAlreadyLoaded || P == EStationPhase::Securing);
+        Restraints.Tick(DeltaSeconds, StuckGroup);
 
         switch (P)
         {
@@ -382,15 +486,14 @@ struct FAutoStationCrew
             // that cleared the platform before they were locked would be signing
             // off work it had not done.
             //
-            // An already-loaded train's restraints never opened, so they are locked
-            // the moment it arrives — but the all-clear still takes its time.
-            // Moving a train with people in it is a move an operator confirms, and
-            // that confirmation is the only thing a pass-through position costs.
-            if (bAlreadyLoaded || Elapsed >= SecureSeconds * 0.5)
+            // The lock now comes from the BANK rather than from a timer, so a bar
+            // that will not travel holds the dispatch for ever instead of the
+            // clock quietly declaring it shut.
+            In.bRestraintsLocked = Restraints.IsClosedAndLocked();
+            if (In.bRestraintsLocked && Elapsed >= SecureSeconds)
             {
-                In.bRestraintsLocked = true;
+                In.bPlatformClear = true;
             }
-            if (Elapsed >= SecureSeconds) { In.bPlatformClear = true; }
             break;
         default:
             break;
