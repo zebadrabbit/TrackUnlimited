@@ -66,6 +66,7 @@ drag is lumped; one zone type covers lift, launch, brake and station.
 |---|---|
 | `TrainPhysics.h` | The motion model, zones, the train's length, runtime zone retargeting |
 | `RideProfile.h` | The whole ride measured at edit time — speed, three G axes, roll rate, height |
+| `GEnvelope.h` | Judging that profile against published acceleration envelopes |
 | `test_twotrains.cpp` | Two trains on the real preset geometry — the only file crossing all three layers |
 
 **Proves:** energy conservation is exact rather than approximate; friction stopping distance matches
@@ -101,6 +102,54 @@ top 136.8 km/h   vertical -0.53 .. +3.08   lateral 0.15
 crest 48.5 m   clearance 11.68 m   peak roll rate 17.4 deg/s   105 s
 8 blocks, 5 of them able to hold a train, so 4 trains
 ```
+
+### `GEnvelope.h` — turning a G number into a verdict
+
+`RideProfile.h` reports "4.25 g at S = 310 m". This says whether that is *allowed*, against the
+duration-dependent acceleration envelopes of ASTM F2291 and EN 13814. **Report, never repair**, as
+everywhere else — a track outside an envelope is still buildable and still rideable, it is just told
+where and by how much.
+
+**The limit tables are UNVERIFIED.** They came from a research session, not from a copy of either
+standard, and both documents are paywalled. The header says so at the top and the test suite prints
+it on every run. The code is deliberately indifferent to the numbers: bands are data, and swapping in
+a verified table means editing one function.
+
+What makes it a real implementation rather than a lookup:
+
+- **You cannot check a peak.** A limit is a curve against *duration* — 6 g is allowed for under a
+  second and 3 g is not allowed for twelve. The bands are stored inverted (*no run above 4 g may last
+  longer than 1 s*), which is equivalent to the published form and much easier to scan for; the header
+  works a case through both ways, because getting the inversion backwards produces a checker that
+  silently passes 5.9 g held for three seconds.
+- **It resamples onto a uniform time base first.** `RunRideProfile` samples by *arc length*, which is
+  right for a graph against S and useless here: at 1 m spacing a sample is 0.025 s apart at 40 m/s and
+  0.5 s apart at 2 m/s, so durations measured on that grid measure the train's speed.
+- **It filters at 5 Hz before judging**, per F2137, with a second-order Butterworth run **forward
+  then backward** so there is zero phase lag. Not a nicety: the product is "go and look at S = this",
+  and a single-pass IIR reports the violation half a second downstream on innocent geometry. Measured
+  — a one-sample 12 g integrator artefact reads as 10.8 g unfiltered and vanishes at 5 Hz.
+- **An impact is not a short violation.** Events under 0.20 s (roughly neuromuscular reaction time)
+  leave the pass/fail entirely, or every curvature joint fails every track. They are reported *only
+  when the exemption is what saved them* — a short excursion that would not have violated its band
+  even if sustained is noise. Getting that ordering wrong gave the worked layout seven "impacts" that
+  were 1.02 g wobbles over the 1 g band, which is the resting value of every ride ever authored.
+- **Combined loading is a normalised ellipse**, because you cannot sit at 100% of two axis limits at
+  once. Asserted with a case where all three axes pass individually and the rider is still outside.
+- **One event is one finding.** The bands nest, so a 5 g pull-out crosses four of them and arrives as
+  four findings for one thing an author fixes once.
+
+**Not applied, and the verdict says so rather than a comment** — push-pull (reduced +Gz allowance
+after sustained −Gz) has no reduction factor in the source, and inventing one would be worse than
+omitting it; EN's measurement point is nearer head level and this model computes felt G at the
+heartline.
+
+The suite's last test runs a real 406 m layout — 96 km/h, 40 m of drop, 2.64 g at the pull-out — and
+**asserts the train completed.** That assertion is the one that makes the rest mean anything: the
+first three runs of this suite reported "within envelope, zero findings" on a train that crawled 46 m
+up a hill it could not climb and stopped. A stalled train produces a short, flat, entirely conformant
+profile, and judging a ride that did not happen is the one failure mode a conformance tool must not
+have.
 
 ## `BlockSignal/` — signalling
 
