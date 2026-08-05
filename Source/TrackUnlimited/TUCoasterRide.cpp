@@ -1132,13 +1132,30 @@ void ATUCoasterRide::RebuildFromSegments()
 	// beginning inside block 0 sends the block BEHIND it to minus one the moment
 	// its tail leaves the first sensor, counted out of somewhere it was never
 	// counted into. Real rides are swept for exactly this reason.
-	if (Counter && BlockSensors && Signals)
+	if (BlockSensors && Signals)
 	{
+		// SCAN FIRST, THEN BUILD THE COUNTER. Its constructor snapshots the
+		// sensors' edge totals, so a counter built afterwards starts from what the
+		// switches already read and does not process the rising edges a train
+		// parked on a boundary produced when the sensors were first covered. Built
+		// before the scan, that train gets counted in AND seeded in — two trains in
+		// a block holding one.
 		ScanBlockSensors();
-		Counter->Scan();
+		Counter = MakeUnique<FBlockCounter>(*BlockSensors);
+
+		// Seeded by SPAN rather than by centre block, because a train straddling a
+		// boundary really is in both and the interlocking already says so. Asking
+		// which blocks it holds is the only way to seed the two to agree — which is
+		// the entire point of running them side by side.
 		for (int32 t = 0; t < Trains.Num(); ++t)
 		{
-			Counter->Seed(Signals->BlockAt(Trains[t]->GetDistance()));
+			for (std::size_t b = 0; b < Counter->NumBlocks(); ++b)
+			{
+				if (Signals->OccupiedBy(static_cast<std::size_t>(t), b))
+				{
+					Counter->Seed(b);
+				}
+			}
 		}
 	}
 
@@ -1199,7 +1216,31 @@ void ATUCoasterRide::RebuildFromSegments()
 	// the signalling do to a timetable". A profile measured through a red would
 	// report a stall at the first block brake and call the ride broken.
 	Profile_ = RunRideProfile(*Trains[0], Track, 1.0);
-	Trains[0]->Place(0.0, 0.0);
+
+	// BACK TO ITS HOLDING POSITION, not to zero. The profile run leaves train 0
+	// wherever the ride ended, so it has to be put back — but putting it at 0.0
+	// puts it ON THE SEAM, where a train straddles the boundary and legitimately
+	// holds the first block and the last. That was harmless while nothing checked,
+	// and the moment the counter cross-check arrived it tripped the ride on frame
+	// one: the interlocking held blocks 0 and 10, the counter had been seeded for
+	// block 0 only, and the two disagreed exactly as they are supposed to when one
+	// of them is wrong.
+	//
+	// Which is the cross-check doing its job on its first run, against a line that
+	// had been quietly wrong since before any of this existed.
+	{
+		// Mid of the first holding device, which is where it was placed to begin
+		// with. Recomputed from HoldZoneIndices rather than reaching for the local
+		// the placement loop used, which is long out of scope by here.
+		double Home = 0.0;
+		if (HoldZoneIndices.Num() > 0)
+		{
+			const FTrackZone Z =
+				Trains[0]->GetZone(static_cast<std::size_t>(HoldZoneIndices[0]));
+			Home = 0.5 * (Z.StartS + Z.EndS);
+		}
+		Trains[0]->Place(Home, 0.0);
+	}
 
 	// NOW shut them, once the profile has been taken. Brakes-on is the resting
 	// state of real ride control, and the alternative — open until a dispatcher
@@ -1513,7 +1554,9 @@ void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/
 	const int32 Rows = 2                           // title, status
 		+ 1 + NumDrives                            // DRIVES heading + VFD modules
 		+ (Platforms.Num() > 0 ? 1 + Platforms.Num() + 2 : 0);   // + CONSOLE heading, lamps
-	const float H = Pad * 2.f + Rows * Row + StripH + 22.f;
+	// The console row sat on the bottom edge, half off it: the section gaps are
+	// worth about a row and a half between them and were not being counted.
+	const float H = Pad * 2.f + Rows * Row + StripH + 34.f;
 
 	const float X = 16.f;
 	const float Y = FMath::Max(16.f, Canvas->SizeY - H - 16.f);
@@ -1595,17 +1638,42 @@ void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/
 		const std::vector<double>& Bounds = Signals->Boundaries();
 		const double Total = FMath::Max(1.0, Track.TotalLength());
 		const float StripX = Lx;
-		const float StripW = W - Pad * 2.f;
+		const float StripW = W - Pad * 2.f - 4.f;
 		const float BoxY = Ty + 10.f;
 		const float BoxH = 16.f;
+
+		// EVERY BLOCK GETS A FLOOR. Strictly proportional widths made the four 10 m
+		// platform positions three pixels each on a 1288 m circuit — the single most
+		// interesting part of the ride, invisible, while the 696 m free run got
+		// two-fifths of the panel to say nothing in.
+		//
+		// So each block takes a minimum, and the REMAINDER is shared out
+		// proportionally. Long blocks still read as long and short ones still read
+		// as short; what goes is only the claim that the strip is to scale, which is
+		// a claim no control room screen makes either.
+		const float MinW = 9.f;
+		const float Floor = MinW * NumBlocks;
+		const float Share = FMath::Max(0.f, StripW - Floor);
+
+		auto BlockX = [&](std::size_t Upto) -> float
+		{
+			float Out = StripX;
+			for (std::size_t i = 0; i < Upto; ++i)
+			{
+				const double A = Bounds[i];
+				const double Bnd = (i + 1 < Bounds.size()) ? Bounds[i + 1] : Total;
+				Out += MinW + Share * static_cast<float>((Bnd - A) / Total);
+			}
+			return Out;
+		};
 
 		for (int32 b = 0; b < NumBlocks; ++b)
 		{
 			const std::size_t B = static_cast<std::size_t>(b);
 			const double S0 = Bounds[B];
 			const double S1 = (B + 1 < Bounds.size()) ? Bounds[B + 1] : Total;
-			const float X0 = StripX + static_cast<float>(S0 / Total) * StripW;
-			const float X1 = StripX + static_cast<float>(S1 / Total) * StripW;
+			const float X0 = BlockX(B);
+			const float X1 = BlockX(B + 1);
 			const float BW = FMath::Max(2.f, X1 - X0 - 1.f);
 
 			const EBlockState State = Signals->GetState(B);
@@ -1636,27 +1704,39 @@ void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/
 			}
 
 			// The device under the block, in the SAME colours the rails use, so the
-			// panel and the track view are the same object seen twice.
+			// panel and the track view are the same object seen twice. Blocks and
+			// zones come from one walk, so a device that starts in this block fills
+			// it — there is no partial case to draw.
 			for (const FTUZoneSpan& Z : ZoneSpans)
 			{
 				if (Z.StartS >= S0 - 0.01 && Z.StartS < S1)
 				{
-					const float Zx0 = StripX + static_cast<float>(Z.StartS / Total) * StripW;
-					const float Zx1 = StripX + static_cast<float>(FMath::Min(Z.EndS, S1) / Total) * StripW;
-					PanelTile(Canvas, Zx0, BoxY + BoxH + 2.f,
-						FMath::Max(2.f, Zx1 - Zx0 - 1.f), 3.f, RailColourAt(Z.StartS + 0.01));
+					PanelTile(Canvas, X0, BoxY + BoxH + 2.f, BW, 3.f,
+						RailColourAt(Z.StartS + 0.01));
 				}
 			}
 		}
 
 		// EVERY TRAIN ON THE DIAGRAM, at its real position. The single most useful
-		// thing a control room screen shows, and it costs one tile each.
+		// thing a control room screen shows, and it costs one tile each. Placed
+		// through the same widened mapping the blocks use, or a train would sit
+		// somewhere other than the block the panel says it is in.
+		auto SToX = [&](double S) -> float
+		{
+			const std::size_t B = Signals->BlockAt(S);
+			const double A = Bounds[B];
+			const double Bn = (B + 1 < Bounds.size()) ? Bounds[B + 1] : Total;
+			const float X0 = BlockX(B);
+			const float X1 = BlockX(B + 1);
+			const double F = (Bn > A) ? (S - A) / (Bn - A) : 0.0;
+			return X0 + static_cast<float>(F) * (X1 - X0);
+		};
+
 		for (int32 t = 0; t < Trains.Num(); ++t)
 		{
-			const float Px = StripX
-				+ static_cast<float>(Trains[t]->GetDistance() / Total) * StripW;
-			PanelTile(Canvas, Px - 1.f, BoxY - 6.f, 3.f, BoxH + 12.f, PanelText);
-			PanelLabel(Canvas, Px - 3.f, BoxY - 19.f, FString::Printf(TEXT("%d"), t), PanelText);
+			const float Px = SToX(Trains[t]->GetDistance());
+			PanelTile(Canvas, Px - 1.f, BoxY - 5.f, 3.f, BoxH + 10.f, PanelText);
+			PanelLabel(Canvas, Px - 3.f, BoxY - 18.f, FString::Printf(TEXT("%d"), t), PanelText);
 		}
 
 		// Scale, so the strip is a drawing rather than a picture.
@@ -1669,7 +1749,13 @@ void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/
 	// ---- DRIVES: a VFD module per powered run ----
 	Ty += 4.f;
 	PanelTile(Canvas, Lx, Ty + 5.f, W - Pad * 2.f, 1.f, PanelRule);
-	PanelLabel(Canvas, Lx, Ty, TEXT("DRIVES        CMD    OUT    ACTUAL   TORQUE"), PanelDim);
+	// Headings at the SAME x as the values they head. Spelled out in one padded
+	// string they drifted, because the small font is not monospace.
+	PanelLabel(Canvas, Lx, Ty, TEXT("DRIVES"), PanelDim);
+	PanelLabel(Canvas, Lx + 130.f, Ty, TEXT("CMD"), PanelDim);
+	PanelLabel(Canvas, Lx + 178.f, Ty, TEXT("OUT"), PanelDim);
+	PanelLabel(Canvas, Lx + 226.f, Ty, TEXT("MOTOR"), PanelDim);
+	PanelLabel(Canvas, Lx + 288.f, Ty, TEXT("TORQUE"), PanelDim);
 	Ty += Row;
 
 	for (int32 z = 0; z < NumDrives; ++z)
