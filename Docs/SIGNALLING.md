@@ -496,7 +496,47 @@ Two modes, matching how real ride control actually runs:
 **The safety interlocks apply identically in both modes.** Manual mode changes *who decides the
 timing*, never *whether the safety logic can be bypassed*. Any design that lets manual mode override
 a permissive is wrong, and would also be a poor simulation of a real system, where it is precisely
-what the interlocks exist to prevent.
+what the interlocks exist to prevent. So the dispatch request is ANDed on the end of every other
+condition and is never checked instead of one — asserted directly: a button held down from the moment
+a train arrives, with every step of the sequence incomplete, buys nothing at all.
+
+**A tied-down button dispatches nothing.** The request has to be *released and pressed again for each
+train*, so a wedged or taped control does not run a ride. Real ride control takes this seriously enough
+to use two buttons far enough apart that one person cannot hold both; the release rule is the cheap
+half of the same idea and catches the same abuse. The panel distinguishes "nobody has pressed it" from
+"it is being held from the last train", because those look identical on the wire and are a stuck
+operator versus a stuck button.
+
+### Emergency stop
+
+**It lives inside the drives, and that is the point.** A real E-stop cuts power to the motors; it is
+not a request the control program is invited to honour. Implemented one layer up — as "the dispatcher
+also commands zero" — it would be a stop with a hole in it the width of every caller that forgot, and
+the one thing that must never have holes is the stop. So it overrides the *output* rather than the
+command: the PLC may go on asking for whatever it likes and nothing turns.
+
+**It does not stop trains, it stops the ride**, and that falls out of the model rather than being
+arranged. A train on open course has nothing touching it, so it coasts, runs to the next brake and is
+held there. A train already in a brake run stops at once, because a brake commanded to zero bites.
+Nothing had to special-case where anybody was. Measured on the closed circuit: tripped mid-lap with
+three trains spread around it, **every one comes to rest at a holding device**, with no violation and
+no shared block on the way down. That last part is a property of the *layout* — a ride with a device
+within reach from anywhere is one that can be restarted rather than walked out to.
+
+**Latched, first reason wins, and cleared only by a person.** A stop that cleared itself when the
+condition passed would be a stop nobody had looked at, and a trip that overwrote its own reason with
+whatever failed next would throw away the only thing worth knowing, which is what went first.
+
+Three conditions trip it automatically, and all three were **already detected and only logged**:
+
+| condition | why it is an E-stop |
+|---|---|
+| a signalling violation | the interlocking detected the one thing it exists for, and the ride was carrying on into it |
+| a drive fault | a motor at full torque going nowhere is a stalled lift, a failed launch, or a brake that is not biting |
+| a block counted occupied twice | two trains in one block, derived from sensors alone |
+
+A faulted **drive** still only reports — deciding what a ride does about a failed motor is the PLC's
+job, not a property of the motor, and this is the PLC doing it.
 
 ## The generated control panel
 

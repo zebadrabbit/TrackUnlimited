@@ -223,6 +223,19 @@ of them what to do — so "the VFD decided to hold the train" is a category erro
 the PLC decided, the VFD carried it out. `FTrackDrives` is the model: one drive per
 zone, and writing a command is the whole of the PLC's authority over the ride.
 
+**Emergency stop** — cuts power to every drive at once. It does **not** stop
+trains, it stops the *ride*: a train on open course has nothing touching it and
+coasts to the next brake, where it is held; a train already in a brake run stops
+immediately, because a brake commanded to zero bites. That is why a ride is built
+out of block brakes, and why "can every train reach a device from anywhere" is a
+property of the layout worth checking. Latched — it clears when a person clears
+it, never because the condition passed.
+
+**Anti-tie-down** — the rule that a dispatch button must be *released* and pressed
+again for each train, so a wedged or taped control cannot run a ride. Real panels
+go further and use two buttons far enough apart that one person cannot hold both,
+which also proves the operator is not in the train.
+
 **Slip** — a drive's output speed disagreeing with what its load is actually doing.
 The tyres are turning at 5 m/s and the train is doing 2. Ordinary on its own — it
 is how a train gets up to chain speed in the first place — and only a problem

@@ -230,6 +230,33 @@ public:
 	float RestraintCheckSeconds = 4.f;
 
 	/**
+	 * Who decides the timing. In manual, a station holds its train until the
+	 * dispatch button is pressed — [Space] — and the button must be RELEASED
+	 * between trains, so a wedged control dispatches nothing.
+	 *
+	 * The safety interlocks apply identically in both modes. Manual changes who
+	 * decides *when*, never whether the permissives can be bypassed.
+	 */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Station")
+	bool bManualDispatch = false;
+
+	/**
+	 * Trip the ride's emergency stop from the Details panel. [Backspace] does the
+	 * same in play, and [End] resets it.
+	 *
+	 * IT DOES NOT STOP TRAINS, IT STOPS THE RIDE. Power is cut to every drive, so
+	 * a train in a brake run stops at once and a train on open course coasts to the
+	 * next brake and is held there — which is what a real E-stop does, and why a
+	 * ride is built out of block brakes in the first place.
+	 *
+	 * Also tripped automatically by the three conditions this project already
+	 * detects and, until now, only logged: a signalling violation, a drive fault,
+	 * and a train counter reading a block as occupied twice.
+	 */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Signalling")
+	bool bEmergencyStop = false;
+
+	/**
 	 * Metres, nose to tail. Zero is a point mass at the heartline.
 	 *
 	 * A train's speed is governed by the height of its centre of mass, so a
@@ -373,6 +400,15 @@ private:
 	// Will the station at this zone let its train go? True where there is no
 	// station, which is every device that is not a platform.
 	bool StationSaysGo(std::size_t Zone) const;
+
+	// The operator's controls. The dispatch button is bound on both edges because
+	// the RELEASE is half the safety rule.
+	void PressDispatch() { bDispatchHeld = true; }
+	void ReleaseDispatch() { bDispatchHeld = false; }
+	void PressEmergencyStop();
+	void ResetEmergencyStop();
+
+	bool bDispatchHeld = false;
 
 	// The STOP MARK of each zone: a physical switch bolted to the track that tells
 	// the PLC a trucking train has come far enough. One per zone, so the index is

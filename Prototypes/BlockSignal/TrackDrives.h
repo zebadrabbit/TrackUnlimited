@@ -149,6 +149,46 @@ public:
         return true;
     }
 
+    // ===================== EMERGENCY STOP =====================
+    //
+    // IT LIVES HERE, INSIDE THE DRIVES, and that is the point. A real E-stop cuts
+    // power to the motors; it is not a request the control program is invited to
+    // honour. Implemented one layer up — as "the dispatcher also commands zero" —
+    // it would be an E-stop with a hole in it the width of every caller that
+    // forgot, and the one thing that must never have holes is the stop.
+    //
+    // So it overrides the output rather than the command. The PLC can go on
+    // commanding whatever it likes; nothing turns.
+    //
+    // IT DOES NOT STOP TRAINS, IT STOPS THE RIDE, and that distinction falls out
+    // of the model for free rather than being arranged. A train on open course
+    // coasts, because no drive is touching it — it runs to the next brake and is
+    // held there. A train in a brake run stops at once, because a brake commanded
+    // to zero bites. That is exactly what a real E-stop does and exactly why a
+    // ride is built out of block brakes in the first place.
+    //
+    // LATCHED, AND THE FIRST REASON WINS. An E-stop clears when a person clears
+    // it, never because the condition passed; and a trip that overwrote its own
+    // reason with whatever failed next would throw away the only thing worth
+    // knowing, which is what went first.
+    bool TripEmergencyStop(const char* InReason)
+    {
+        if (bEmergencyStopped)
+        {
+            return false;   // already stopped; keep the original cause
+        }
+        bEmergencyStopped = true;
+        StopReason = InReason != nullptr ? InReason : "unspecified";
+        return true;
+    }
+
+    bool IsEmergencyStopped() const { return bEmergencyStopped; }
+    const char* EmergencyStopReason() const { return bEmergencyStopped ? StopReason : ""; }
+
+    // Manual, and deliberately the only way out. Same reasoning as a drive fault
+    // needing a reset: a stop nobody has looked at has not been dealt with.
+    void ResetEmergencyStop() { bEmergencyStopped = false; StopReason = ""; }
+
     // Ramp every output toward its command, and age the fault timers. ONCE PER
     // FRAME, like FRideSignals::Tick and for the same reason — these are rates,
     // and a rate applied N times a frame is N times the rate.
@@ -159,6 +199,18 @@ public:
     {
         if (!(DeltaSeconds > 0.0))
         {
+            return;
+        }
+        if (bEmergencyStopped)
+        {
+            // Not ramped down. Power is gone, so the output is gone — and the fault
+            // timers stop with it, because a drive that has been cut cannot be
+            // usefully accused of slipping.
+            for (FDriveReading& R : State)
+            {
+                R.Output = 0.0;
+                R.SlippingFor = 0.0;
+            }
             return;
         }
         for (std::size_t i = 0; i < State.size(); ++i)
@@ -264,8 +316,17 @@ public:
 
     // WHAT THE TRACK IS TOLD. The one number that leaves this class and reaches
     // the physics — everything else here is for the panel and the diagnostics.
+    //
+    // Zero under an E-stop, tested HERE as well as in Tick. Belt and braces on
+    // purpose: this is the single value that decides whether anything on the ride
+    // moves, and a caller that reads it without having ticked first must not get a
+    // stale non-zero out of it.
     double Output(std::size_t Drive) const
     {
+        if (bEmergencyStopped)
+        {
+            return 0.0;
+        }
         return Drive < State.size() ? State[Drive].Output : 0.0;
     }
 
@@ -314,4 +375,10 @@ private:
     // rather than on the reading, because it is the fault rule's own scratch space
     // and not something a panel would ever show.
     std::vector<double> LastSlip;
+
+    // Ride-wide rather than per drive, because that is what an E-stop is: one
+    // circuit, one button, everything dead. A per-drive version would be a way of
+    // stopping half a ride, which is not a thing anybody wants to be able to do.
+    bool bEmergencyStopped = false;
+    const char* StopReason = "";
 };

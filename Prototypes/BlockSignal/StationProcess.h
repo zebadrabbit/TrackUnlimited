@@ -68,6 +68,16 @@
 
 #include <cstddef>
 
+// Who decides the TIMING. Not whether the safety logic applies — it applies
+// identically in both, and any design that lets manual mode override a permissive
+// is wrong twice over: unsafe, and a poor simulation of a real system where that
+// is precisely what the interlocks exist to prevent.
+enum class EDispatchMode
+{
+    Automatic,   // go as soon as every permissive is satisfied
+    Manual,      // an operator presses the button; the permissives still all apply
+};
+
 enum class EStationRole
 {
     Combined,   // riders off and on in one place
@@ -103,18 +113,27 @@ struct FStationInputs
     bool bLoadComplete = false;      // everyone seated, airgates shut
     bool bRestraintsLocked = false;  // every car reporting locked, ANDed
     bool bPlatformClear = false;     // operators' all-clear
+
+    // THE OPERATOR'S BUTTON, and it is a request rather than a permission. Ignored
+    // entirely in automatic mode. In manual it is necessary and nowhere near
+    // sufficient: it is ANDed with everything above, never instead of it.
+    bool bDispatchRequest = false;
 };
 
 class FStationProcess
 {
 public:
-    explicit FStationProcess(EStationRole InRole = EStationRole::Combined)
+    explicit FStationProcess(EStationRole InRole = EStationRole::Combined,
+                             EDispatchMode InMode = EDispatchMode::Automatic)
         : Role(InRole)
+        , Mode(InMode)
     {
     }
 
     EStationRole GetRole() const { return Role; }
     EStationPhase GetPhase() const { return Phase; }
+    EDispatchMode GetMode() const { return Mode; }
+    void SetMode(EDispatchMode In) { Mode = In; }
 
     // One scan. Walks the phase forward as steps complete and back when a
     // condition is lost, both from the live inputs.
@@ -129,7 +148,23 @@ public:
             // dispatch the next one on them.
             Phase = EStationPhase::Empty;
             bDispatchedThisTrain = false;
+            bRequestArmed = false;
+            bRequestGiven = false;
             return;
+        }
+
+        // ANTI-TIE-DOWN. The button has to be RELEASED and pressed again for each
+        // train, so a taped-down or wedged control dispatches nothing. Real ride
+        // control takes this seriously enough to use two buttons far enough apart
+        // that one person cannot hold both — the release rule is the cheap half of
+        // the same idea and catches the same abuse.
+        if (!In.bDispatchRequest)
+        {
+            bRequestArmed = true;
+        }
+        else if (bRequestArmed)
+        {
+            bRequestGiven = true;
         }
 
         if (!In.bTrainInPosition)
@@ -227,6 +262,13 @@ public:
         if (NeedsLoad() && !Last.bLoadComplete)       { return "loading"; }
         if (NeedsRestraints() && !Last.bRestraintsLocked) { return "restraints not locked"; }
         if (!Last.bPlatformClear)    { return "platform not clear"; }
+        if (Mode == EDispatchMode::Manual && !bRequestGiven)
+        {
+            // Distinguishes "nobody has pressed it" from "it is being held down
+            // from the last train", which look identical on the wire and are a
+            // stuck operator versus a stuck button.
+            return bRequestArmed ? "waiting for dispatch" : "dispatch button not released";
+        }
         return "";   // ready; anything still holding the train is the interlocking
     }
 
@@ -243,12 +285,21 @@ private:
         if (NeedsUnload() && !In.bUnloadComplete)         { return false; }
         if (NeedsLoad() && !In.bLoadComplete)             { return false; }
         if (NeedsRestraints() && !In.bRestraintsLocked)   { return false; }
-        return In.bPlatformClear;
+        if (!In.bPlatformClear)                           { return false; }
+        // LAST, and ANDed rather than instead of. Manual mode changes who decides
+        // the timing, never whether the safety logic can be bypassed.
+        return Mode == EDispatchMode::Automatic || bRequestGiven;
     }
 
     EStationRole Role = EStationRole::Combined;
+    EDispatchMode Mode = EDispatchMode::Automatic;
     EStationPhase Phase = EStationPhase::Empty;
     FStationInputs Last;
+
+    // The anti-tie-down pair. Armed by a release, given by a press after one, and
+    // both cleared when the train goes so the next one needs its own press.
+    bool bRequestArmed = false;
+    bool bRequestGiven = false;
 
     // Set once this train has been given permission, so a train off its mark can
     // be told apart from one that has not reached it. Cleared when the train goes.

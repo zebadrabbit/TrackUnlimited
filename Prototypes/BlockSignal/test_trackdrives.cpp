@@ -10,6 +10,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 
 namespace
 {
@@ -339,6 +340,70 @@ void TestOneDrivePerZoneEvenWhereThereIsNoMotor()
     assert(D.Output(9) == 0.0);          // out of range reads as stopped, not UB
 }
 
+void TestAnEmergencyStopCutsThePowerAndCannotBeTalkedOutOfIt()
+{
+    // IT LIVES IN THE DRIVES BECAUSE A REAL ONE CUTS POWER TO THE MOTORS. Put one
+    // layer up — as "the dispatcher also commands zero" — it would be a stop with a
+    // hole in it the width of every caller that forgot, and the one thing that must
+    // never have holes is the stop. So it overrides the OUTPUT, not the command:
+    // the PLC may go on asking for whatever it likes and nothing turns.
+    FTrackDrives D(3);
+    D.Preset(0, 5.0);
+    D.Preset(1, 20.0);
+    D.Preset(2, 0.0);
+    assert(D.Output(0) == 5.0);
+
+    assert(D.TripEmergencyStop("test"));
+    assert(D.IsEmergencyStopped());
+    assert(D.Output(0) == 0.0);
+    assert(D.Output(1) == 0.0);
+
+    // Commanding through it changes nothing, ticked or not.
+    D.Command(0, 12.0);
+    D.Command(1, 30.0);
+    D.Tick(Dt);
+    assert(D.Output(0) == 0.0);
+    assert(D.Output(1) == 0.0);
+    assert(D.Read(0).Commanded == 12.0);   // the PLC still asked; nothing turned
+
+    // LATCHED, AND THE FIRST REASON WINS. What went first is the only thing worth
+    // knowing, so a later trip must not overwrite it.
+    assert(!D.TripEmergencyStop("something later"));
+    assert(std::strcmp(D.EmergencyStopReason(), "test") == 0);
+
+    // Cleared only by a person, never because the condition passed. Outputs come
+    // back from the commands that were standing all along.
+    D.ResetEmergencyStop();
+    assert(!D.IsEmergencyStopped());
+    D.Tick(Dt);
+    assert(D.Output(0) == 12.0);
+    assert(D.Output(1) == 30.0);
+}
+
+void TestAStoppedDriveIsNotAlsoAccusedOfSlipping()
+{
+    // A drive that has been CUT cannot usefully be accused of failing to reach its
+    // output: it has no output. Without this an E-stop raises a drive fault a few
+    // seconds later on every motor with a train on it, and the panel fills with
+    // failures that are all the same failure and none of them real.
+    FDriveSpec S;
+    S.SlipTripSeconds = 1.0;
+    FTrackDrives D(1);
+    D.Configure(0, S);
+    D.Preset(0, 10.0);
+
+    D.TripEmergencyStop("cut");
+    for (int i = 0; i < 240 * 10; ++i)
+    {
+        D.BeginFeedback();
+        D.ReportFeedback(0, 10.0, 1.0);   // train still rolling through, full torque
+        D.EndFeedback();
+        D.Tick(Dt);
+    }
+    assert(!D.IsFaulted(0));
+    assert(D.Read(0).SlippingFor == 0.0);
+}
+
 } // namespace
 
 int main()
@@ -352,6 +417,8 @@ int main()
     TestAFaultIsReportedAndNotActedOn();
     TestMalformedInputIsRefused();
     TestOneDrivePerZoneEvenWhereThereIsNoMotor();
+    TestAnEmergencyStopCutsThePowerAndCannotBeTalkedOutOfIt();
+    TestAStoppedDriveIsNotAlsoAccusedOfSlipping();
 
     std::printf("test_trackdrives: all assertions passed\n");
     return 0;

@@ -1142,6 +1142,20 @@ void ATUCoasterRide::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 	// concern rather than a today one.
 	PlayerInputComponent->BindKey(EKeys::C, IE_Pressed, this, &ATUCoasterRide::CycleCameraMode);
 
+	// THE OPERATOR. Space is the dispatch button and is bound on BOTH edges,
+	// because the release is half the safety rule — a control that only ever
+	// reports "pressed" is a control that can be wedged. Backspace stops the ride
+	// and End resets it, deliberately far apart on the keyboard: the two are
+	// nowhere near each other on a real panel either.
+	PlayerInputComponent->BindKey(EKeys::SpaceBar, IE_Pressed, this,
+		&ATUCoasterRide::PressDispatch);
+	PlayerInputComponent->BindKey(EKeys::SpaceBar, IE_Released, this,
+		&ATUCoasterRide::ReleaseDispatch);
+	PlayerInputComponent->BindKey(EKeys::BackSpace, IE_Pressed, this,
+		&ATUCoasterRide::PressEmergencyStop);
+	PlayerInputComponent->BindKey(EKeys::End, IE_Pressed, this,
+		&ATUCoasterRide::ResetEmergencyStop);
+
 	PlayerInputComponent->BindAxisKey(EKeys::W, this, &ATUCoasterRide::AxisForward);
 	PlayerInputComponent->BindAxisKey(EKeys::S, this, &ATUCoasterRide::AxisBack);
 	PlayerInputComponent->BindAxisKey(EKeys::D, this, &ATUCoasterRide::AxisRight);
@@ -1215,6 +1229,34 @@ void ATUCoasterRide::BeginPlay()
 	DrawRideProfile();
 }
 
+void ATUCoasterRide::PressEmergencyStop()
+{
+	bEmergencyStop = true;
+	if (Drives && Drives->TripEmergencyStop("operator"))
+	{
+		UE_LOG(LogTemp, Error, TEXT("TrackUnlimited: EMERGENCY STOP — operator."));
+	}
+}
+
+void ATUCoasterRide::ResetEmergencyStop()
+{
+	// Cleared only here, never because the condition passed. Same reasoning as a
+	// drive fault needing a reset: a stop nobody has looked at has not been dealt
+	// with. Drive faults are cleared with it, because an operator resetting the
+	// ride has been to look at what tripped it.
+	bEmergencyStop = false;
+	if (Drives)
+	{
+		Drives->ResetEmergencyStop();
+		for (std::size_t z = 0; z < Drives->Num(); ++z)
+		{
+			Drives->ResetFault(z);
+		}
+	}
+	ReportedDriveFault.Reset();
+	UE_LOG(LogTemp, Warning, TEXT("TrackUnlimited: emergency stop reset."));
+}
+
 void ATUCoasterRide::ServeStations(float DeltaSeconds)
 {
 	// The station's inputs, from instruments, once per scan. Only two of the six
@@ -1240,6 +1282,14 @@ void ATUCoasterRide::ServeStations(float DeltaSeconds)
 		P.Inputs.bTrainInPosition = bPresent && StopMarks && Z < StopMarks->Num()
 			&& StopMarks->IsBlocked(Z)
 			&& Drives && FMath::Abs(Drives->Read(Z).Actual) < 1e-6;
+
+		// One button, every platform. A real ride has one per position and an
+		// operator standing at it; there is one keyboard here, so it presses them
+		// all — which is right for the single-platform layouts this project has and
+		// is the first thing a multi-position platform will have to split.
+		P.Inputs.bDispatchRequest = bDispatchHeld;
+		P.Process.SetMode(bManualDispatch ? EDispatchMode::Manual
+										  : EDispatchMode::Automatic);
 
 		P.Process.Update(P.Inputs);
 		P.Crew.Serve(P.Process, P.Inputs, DeltaSeconds);
@@ -1554,6 +1604,12 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 		}
 		StopMarks->EndScan();
 	}
+	// The Details-panel checkbox, so the stop can be tripped without playing. Read
+	// here rather than in a PostEditChangeProperty because it has to work in PIE.
+	if (bEmergencyStop && Drives && !Drives->IsEmergencyStopped())
+	{
+		Drives->TripEmergencyStop("operator");
+	}
 	ServeStations(DeltaSeconds);
 
 	for (int32 t = 0; t < Trains.Num(); ++t)
@@ -1591,6 +1647,15 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 				TEXT("TrackUnlimited: SIGNALLING VIOLATION — train %d entered a block that "
 					"was not clear, at %.1f m."),
 				t, Trains[t]->GetDistance());
+
+			// AND IT STOPS THE RIDE. Until the E-stop existed this was a log line
+			// and nothing else: the interlocking detected the one thing it is for
+			// and then let the ride carry on into it. A violation is the definition
+			// of an E-stop condition on real hardware.
+			if (Drives && Drives->TripEmergencyStop("signalling violation"))
+			{
+				bEmergencyStop = true;
+			}
 		}
 	}
 	if (Signals)
@@ -1632,6 +1697,16 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 						"%.1f, motor reading %.1f, at full torque and not gaining."),
 					static_cast<int32>(z), Drives->Read(z).Commanded, Drives->Read(z).Output,
 					Drives->Read(z).Actual);
+
+				// A motor at full torque going nowhere is a stalled lift, a failed
+				// launch or a brake that is not biting, and every one of those is a
+				// ride an operator has to walk out to. The DRIVE still only reports
+				// — deciding what a ride does about a failed motor is the PLC's job,
+				// and this is the PLC doing it.
+				if (Drives->TripEmergencyStop("drive fault"))
+				{
+					bEmergencyStop = true;
+				}
 			}
 		}
 	}
@@ -1872,7 +1947,25 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 			}
 			if (!StationRow.IsEmpty())
 			{
-				GEngine->AddOnScreenDebugMessage(12, 0.f, FColor(120, 170, 255), StationRow);
+				GEngine->AddOnScreenDebugMessage(12, 0.f, FColor(120, 170, 255),
+					StationRow + (bManualDispatch
+						? TEXT("   [Space] dispatch") : TEXT("   auto")));
+			}
+
+			// Loudest thing on screen, and it stays until somebody resets it. A
+			// stop nobody has looked at has not been dealt with.
+			if (Drives && Drives->IsEmergencyStopped())
+			{
+				GEngine->AddOnScreenDebugMessage(13, 0.f, FColor::Red,
+					FString::Printf(
+						TEXT("*** EMERGENCY STOP — %s ***   power is cut to every drive; ")
+						TEXT("trains run to the next brake and hold.   [End] to reset"),
+						UTF8_TO_TCHAR(Drives->EmergencyStopReason())));
+			}
+			else
+			{
+				GEngine->AddOnScreenDebugMessage(13, 0.f, FColor(120, 120, 120),
+					TEXT("[Backspace] emergency stop"));
 			}
 		}
 

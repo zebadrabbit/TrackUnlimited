@@ -282,6 +282,81 @@ void TestNothingHappensUntilTheTrainStops()
     assert(!S.IsReadyToDispatch());
 }
 
+void TestManualModeChangesWhoDecidesTheTimingAndNothingElse()
+{
+    // THE ONE RULE THAT MATTERS ABOUT MANUAL MODE. It changes who decides WHEN,
+    // never whether the safety logic can be bypassed — a design that let an
+    // operator override a permissive would be unsafe and also a poor simulation of
+    // a real system, where that is precisely what interlocks exist to prevent.
+    FStationProcess S(EStationRole::Combined, EDispatchMode::Manual);
+    FStationInputs In = Stopped();
+
+    // Button held from the moment the train arrives, every step incomplete. It
+    // must buy nothing at all.
+    In.bDispatchRequest = true;
+    for (int i = 0; i < 8; ++i) { S.Update(In); }
+    assert(!S.IsReadyToDispatch());
+    assert(std::strcmp(S.WhatIsHolding(), "unloading") == 0);
+
+    // Everything done EXCEPT the press, which is now the only thing outstanding.
+    In.bDispatchRequest = false;
+    In.bUnloadComplete = In.bLoadComplete = In.bRestraintsLocked = In.bPlatformClear = true;
+    for (int i = 0; i < 4; ++i) { S.Update(In); }
+    assert(!S.IsReadyToDispatch());
+    assert(std::strcmp(S.WhatIsHolding(), "waiting for dispatch") == 0);
+
+    In.bDispatchRequest = true;
+    S.Update(In);
+    assert(S.IsReadyToDispatch());
+
+    // And in automatic the same inputs go without anyone touching anything.
+    FStationProcess A(EStationRole::Combined, EDispatchMode::Automatic);
+    FStationInputs Auto = Stopped();
+    Auto.bUnloadComplete = Auto.bLoadComplete = true;
+    Auto.bRestraintsLocked = Auto.bPlatformClear = true;
+    for (int i = 0; i < 4; ++i) { A.Update(Auto); }
+    assert(A.IsReadyToDispatch());
+}
+
+void TestATiedDownDispatchButtonDispatchesNothing()
+{
+    // A wedged or taped control is the abuse real ride control designs against —
+    // with two buttons far enough apart that one person cannot hold both. The
+    // release rule is the cheap half of the same idea and catches the same thing:
+    // the button must be let go and pressed again FOR EACH TRAIN.
+    FStationProcess S(EStationRole::Combined, EDispatchMode::Manual);
+    FStationInputs In = Stopped();
+    In.bUnloadComplete = In.bLoadComplete = true;
+    In.bRestraintsLocked = In.bPlatformClear = true;
+
+    // Train one: released, then pressed. Goes.
+    In.bDispatchRequest = false;
+    for (int i = 0; i < 4; ++i) { S.Update(In); }
+    In.bDispatchRequest = true;
+    S.Update(In);
+    assert(S.IsReadyToDispatch());
+
+    // It leaves with the button STILL HELD, and the next train arrives to a button
+    // that was never released.
+    In.bTrainInPosition = false;
+    S.Update(In);
+    In.bTrainPresent = false;
+    S.Update(In);
+
+    In.bTrainPresent = true;
+    In.bTrainInPosition = true;
+    for (int i = 0; i < 6; ++i) { S.Update(In); }
+    assert(!S.IsReadyToDispatch());
+    assert(std::strcmp(S.WhatIsHolding(), "dispatch button not released") == 0);
+
+    // Let go, press again: now it goes. Which is a human being present.
+    In.bDispatchRequest = false;
+    S.Update(In);
+    In.bDispatchRequest = true;
+    S.Update(In);
+    assert(S.IsReadyToDispatch());
+}
+
 } // namespace
 
 int main()
@@ -294,6 +369,8 @@ int main()
     TestALoadPlatformSkipsUnloadEntirely();
     TestTheCrewIsTheOnlyThingRunningOnTime();
     TestNothingHappensUntilTheTrainStops();
+    TestManualModeChangesWhoDecidesTheTimingAndNothingElse();
+    TestATiedDownDispatchButtonDispatchesNothing();
 
     std::printf("test_stationprocess: all assertions passed\n");
     return 0;

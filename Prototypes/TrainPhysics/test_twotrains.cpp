@@ -917,12 +917,17 @@ struct FRunResult
     std::vector<double> PeakLoad;
     bool bDriveFaulted = false;
     int FirstFaultedDrive = -1;   // which one, so a fault is a place to go and look
+
+    std::vector<double> FinalSpeed;     // per train, at the end of the run
+    std::vector<double> FinalS;
+    std::vector<int> FinalHoldZone;     // -1 if it did not stop at a holding device
 };
 
 // The actor's tick, N trains, for Seconds of ride. One place, because the only
 // way to trust a capacity number is for the capacity test and the two-train test
 // to be running the SAME policy.
-FRunResult RunTrains(std::size_t N, std::size_t Lookahead, double Seconds)
+FRunResult RunTrains(std::size_t N, std::size_t Lookahead, double Seconds,
+                     double EStopAtSeconds = -1.0)
 {
     const FCircuit Shape = BuildCircuit(nullptr);
     const FTrack T = BuildTrack(Shape.Doc);
@@ -964,6 +969,10 @@ FRunResult RunTrains(std::size_t N, std::size_t Lookahead, double Seconds)
     const double Dt = 1.0 / 240.0;
     for (int F = 0; F < static_cast<int>(240.0 * Seconds); ++F)
     {
+        if (EStopAtSeconds >= 0.0 && F * Dt >= EStopAtSeconds)
+        {
+            Drives.TripEmergencyStop("test");
+        }
         ScanStopMarks(Marks, All, true, T.TotalLength());
         ServeStations(Platforms, All, Marks, Drives, Dt);
         for (std::size_t t = 0; t < N; ++t)
@@ -1022,6 +1031,12 @@ FRunResult RunTrains(std::size_t N, std::size_t Lookahead, double Seconds)
         }
     }
     R.Violations = Sig.Violations();
+    for (std::size_t t = 0; t < N; ++t)
+    {
+        R.FinalSpeed.push_back(Owned[t]->GetSpeed());
+        R.FinalS.push_back(Owned[t]->GetDistance());
+        R.FinalHoldZone.push_back(Owned[t]->FindHoldZoneAt(Owned[t]->GetDistance()));
+    }
     return R;
 }
 
@@ -1200,6 +1215,43 @@ void TestTheDrivesTellTheStoryOfTheRide()
         }
         assert(R.PeakLoad[z] > 0.99);
     }
+}
+
+void TestAnEmergencyStopStopsTheRideNotTheTrains()
+{
+    // THE PROPERTY THAT FALLS OUT OF THE MODEL RATHER THAN BEING ARRANGED, and the
+    // reason a ride is built out of block brakes in the first place.
+    //
+    // An E-stop cuts power to every drive. It does NOT reach out and grab a train:
+    // one on open course simply has nothing touching it, so it coasts, runs to the
+    // next brake and is held there. One already in a brake run stops at once,
+    // because a brake commanded to zero bites. Nothing anywhere had to special-case
+    // "where is everybody" — cutting the outputs is the whole of it.
+    //
+    // Tripped at 200 s, deliberately mid-lap with trains spread round the circuit,
+    // then 300 s more so everything has time to come to rest.
+    const FRunResult R = RunTrains(3, 1, 500.0, 200.0);
+
+    // 1. EVERYTHING STOPPED. Not slowed, not still creeping — stopped.
+    for (std::size_t t = 0; t < R.FinalSpeed.size(); ++t)
+    {
+        assert(R.FinalSpeed[t] < 1e-6);
+    }
+
+    // 2. And every one of them stopped AT A DEVICE, which is the claim worth
+    //    having. A train left standing on open course is a train that has to be
+    //    walked out to and evacuated; one held at a brake is a ride that can be
+    //    restarted. This layout has a device within reach from anywhere on it, and
+    //    that is a property of the LAYOUT rather than of the E-stop.
+    for (std::size_t t = 0; t < R.FinalHoldZone.size(); ++t)
+    {
+        assert(R.FinalHoldZone[t] >= 0);
+    }
+
+    // 3. Nobody ran into anybody on the way down. An E-stop that produced a
+    //    collision would be worse than no E-stop.
+    assert(R.Violations == 0);
+    assert(!R.bShared);
 }
 
 void TestTheCircuitCarriesFourTrains()
@@ -1383,6 +1435,7 @@ int main()
     TestAHeldTrainParksInsideItsBlock();
     TestSeveralHoldingDevicesInARowStaySeveral();
     TestTheDrivesTellTheStoryOfTheRide();
+    TestAnEmergencyStopStopsTheRideNotTheTrains();
     TestTheCircuitCarriesFourTrains();
     TestTheActorsOwnLoopRunsTwoTrains();
 
