@@ -191,7 +191,11 @@ show it. `AnalyseRollRate`, `AnalyseResolvedRollRate`.
 
 These are railway signalling terms, used here in their railway sense.
 
-**Block** — a length of track only one train may occupy at a time.
+**Block** — a length of track with a controllable start and stop point, which only
+one train may occupy at a time. The "controllable" is the load-bearing half: a
+stretch of track is only a block if something there can **stop** a train *and*
+get it moving again. A ride must have at least one more block than it runs
+trains, or every train is standing where the one behind it needs to go.
 
 **Buffer** / **overlap** — the safety margin a block holds *after* a train has
 physically left it, before it reports clear. Real railways call this an overlap.
@@ -240,4 +244,63 @@ access, an egress route, not merely somewhere a train can stop. A large ride has
 far more of these than it has blocks, and they answer a different question. Not
 modelled yet.
 
+**Neutral slope** — the downgrade at which a rolling car neither gains nor loses
+speed, because gravity along the track exactly pays for resistance. It matters
+here for a reason that is not obvious: it is a **third way to restart a stopped
+train**, beside a chain and drive tyres. Park a train on a grade steeper than
+neutral and gravity starts it, which is why a plain friction brake on a downgrade
+can still bound a block.
+
+At a crawl, where drag vanishes, it is exact and closed-form — `tan θ = Crr`. For
+the measured `RollingResistance = 0.024` that is **1.3748°**, and the model
+reproduces it: a train holds speed there, gains on anything steeper and loses on
+anything shallower. Asserted in `test_trainphysics.cpp`. Drag steepens it with
+speed, which makes the general case implicit rather than closed-form.
+
+**Cycle** — one trip round the circuit. Running trains continuously is *cycling*.
+
+**THRC** — theoretical hourly ride capacity: how many riders an hour a ride could
+serve under ideal conditions, from seats per train and ride time. The number
+capacity work is ultimately aimed at, and the reason block sections matter
+commercially rather than only for safety.
+
+**Kicker tyre** — a drive tyre used to nudge a train out of a stop, rather than to
+drive it any distance.
+
+**Transfer track** — a movable section for getting trains on and off the circuit,
+into and out of the shed. A block in its own right, and the reason a real ride's
+block list has one more entry than the layout suggests.
+
+**LIM / LSM** — linear induction and linear synchronous motors: electromagnetic
+propulsion with the stator laid out flat along the track, so there is no rotation
+and nothing to wear. The other kind of launch, against tyres or a catapult.
+
+**Proximity switch** — the usual way a ride knows where its trains are. An
+electromagnetic sensor at a fixed point, tripped by a metal **flag** under each
+car; counting flags is how the controller knows the *whole* train has passed
+rather than just the front of it. That count is the real-world equivalent of this
+project's nose-and-tail range. **Photo eyes** (a broken light beam) and
+mechanical **limit switches** do the same job less commonly.
+
+Note that this project models position *continuously* — a train always knows
+exactly where it is — where a real ride infers it from a finite number of discrete
+trips. Sensor count scales with capacity: a two-train gravity coaster might have a
+couple of dozen; a twelve-vehicle ride, hundreds.
+
 `Prototypes/BlockSignal/`.
+
+---
+
+## A note on sources
+
+Terminology here is checked against **Nick Weisenberger, *Coasters 101: An
+Engineer's Guide to Roller Coaster Design*** (3rd ed.), which is the accessible
+standard reference for how real rides are built and operated. Definitions on this
+page are written from scratch for this project — no text is reproduced from it —
+but where an industry term has a settled meaning, that meaning is the one used.
+
+Two things in this project were derived independently and then found to match it
+exactly, which is worth recording because it is the only outside check either has
+had: the capacity rule (*a ride must have at least one more block than it has
+trains*) and the requirement that a block contain both a way to stop a train and a
+way to get it moving again.

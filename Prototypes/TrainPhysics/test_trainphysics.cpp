@@ -526,6 +526,73 @@ static void TestRollbackReturnsExactlyTheEnergyItSpent()
     std::printf("  rollback: left at 15.000 m/s, came back at %.3f m/s\n", ReturnSpeed);
 }
 
+static void TestNeutralSlopeMatchesTheIndustryDefinition()
+{
+    // NEUTRAL SLOPE is a real term of art: the downgrade at which a moving car
+    // holds its speed, gravity exactly paying for resistance. It matters to a
+    // block system because it is a THIRD way to restart a stopped train — beside
+    // a chain and drive tyres — and a block only counts as a block if it can both
+    // stop a train and get it going again.
+    //
+    // So the model owes an answer, and it is a closed form: g sin(t) balances
+    // Crr*g*cos(t) + DragK*v^2, which at a crawl is just tan(t) = Crr. With the
+    // measured 0.024 that is 1.375 degrees, and it should hold for ANY speed the
+    // train is placed at, because the balance is what defines it.
+    // Drag would make it speed-dependent and implicit, so this pins the case that
+    // is EXACT and closed-form: at a crawl, where DragK*v^2 vanishes, the balance
+    // is g*sin(t) = Crr*g*cos(t), i.e. tan(t) = Crr. Nothing about the track, the
+    // train or the timestep enters it — it is a property of the friction model
+    // alone, which is what makes it worth pinning.
+    FTrainConfig C;
+    C.DragK = 0.0;
+    const double Theta = std::atan(C.RollingResistance);
+
+    // Pitch down to Theta and then hold it: curvature turns the frame, a straight
+    // keeps whatever it was handed.
+    const double K = 0.02;
+    FTrack Track;
+    FTrackSegment Ramp;
+    Ramp.Length = Theta / K;
+    Ramp.PitchCurvatureStart = Ramp.PitchCurvatureEnd = -K;   // negative descends
+    Track.AddSegment(Ramp);
+    Track.AddSegment(MakeStraight(500.0));
+
+    const double Grade = Track.EvaluateAt(Ramp.Length + 50.0).Tangent.Z;
+    assert(Near(std::asin(-Grade), Theta, 1e-6));   // the grade really is Theta
+
+    // A train placed on it holds its speed: not gaining, not losing, over 400 m.
+    FTrain Train(Track, C);
+    Train.Place(Ramp.Length + 10.0, 3.0);
+    for (int i = 0; i < 240 * 200 && !Train.IsAtEnd(); ++i)
+    {
+        Train.Step(1.0 / 240.0);
+    }
+    assert(Near(Train.GetSpeed(), 3.0, 1e-3));
+
+    // Shallower and it loses speed; steeper and it gains. Both directions,
+    // because "holds speed" alone would also pass on a model that ignored the
+    // grade entirely.
+    for (int Sign = -1; Sign <= 1; Sign += 2)
+    {
+        FTrack Other;
+        FTrackSegment R2;
+        R2.Length = (Theta + Sign * 0.004) / K;
+        R2.PitchCurvatureStart = R2.PitchCurvatureEnd = -K;
+        Other.AddSegment(R2);
+        Other.AddSegment(MakeStraight(500.0));
+
+        FTrain T2(Other, C);
+        T2.Place(R2.Length + 10.0, 3.0);
+        for (int i = 0; i < 240 * 200 && !T2.IsAtEnd(); ++i) { T2.Step(1.0 / 240.0); }
+        if (Sign < 0) { assert(T2.GetSpeed() < 3.0 - 1e-3); }
+        else          { assert(T2.GetSpeed() > 3.0 + 1e-3); }
+    }
+
+    std::printf("  neutral slope: %.4f deg holds speed exactly, Crr = %.3f "
+                "(the grade a stopped train needs to self-start)\n",
+                Theta * 180.0 / Pi, C.RollingResistance);
+}
+
 static void TestAnAntiRollbackCatchHoldsTheTrainDead()
 {
     // The most universal safety device on a coaster — ratchets, chain dogs, a
@@ -1072,6 +1139,7 @@ int main()
     TestStallsInsteadOfProducingNaN();
     TestStepRejectsBadDeltas();
     TestRollbackReturnsExactlyTheEnergyItSpent();
+    TestNeutralSlopeMatchesTheIndustryDefinition();
     TestAnAntiRollbackCatchHoldsTheTrainDead();
     TestACatchOnlyGuardsItsOwnSpan();
     TestRollbackIsOffByDefaultAndChangesNothingWhenItIs();

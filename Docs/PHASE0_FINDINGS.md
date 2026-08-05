@@ -252,6 +252,43 @@ second train exists" — **it is not what fails**; identity fails first and fail
 acquires a contract it never needed: **once per frame, not once per train**, or a 5 s overlap expires
 in 2.5 s with two trains and nothing says so.
 
+**Two rules derived here turn out to be the industry's, and one is too strict (2026-08-04).** Checked
+against Weisenberger's *Coasters 101* (3rd ed.), the accessible standard reference. This is the only
+outside check either rule has had, so it is worth recording that they match.
+
+- **Capacity.** The book states it directly: a ride must have at least one more block than it has
+  trains. That is `trains = blocks − 1`, derived here from five holding places running four trains and
+  gridlocking at five, and since generalised to a test over rings of three to eight.
+- **What makes a block a block.** The book requires each block to contain a way to stop a train *and*
+  a way to get it moving again. That is the both-authorities rule `FindHoldZoneAt` enforces, arrived at
+  by watching trains park on trim brakes and never leave.
+- **Brakes rest closed.** Real friction brakes are spring-closed and opened by air pressure, so a loss
+  of pressure applies them. The dispatcher's "a holding device is shut unless a permissive is live"
+  was reasoned from fail-closed logic; the hardware does it mechanically for the same reason.
+
+**Where we are too strict, and deliberately staying so.** The book gives a *third* way to restart a
+stopped train, beside a chain and drive tyres: **gravity**, by putting the stop point on a downgrade.
+So a plain friction brake on a slope steeper than neutral genuinely does bound a block, and
+`FindHoldZoneAt` — which demands `MaxAccel > 0` — would refuse it.
+
+That is the safe direction to be wrong in: we decline to park a train somewhere that would in fact
+work, rather than parking one somewhere it would strand. Closing the gap means testing the grade at
+the stop point against the neutral slope rather than testing the device, and nothing authored here
+needs it yet.
+
+**Neutral slope, and the model reproduces it exactly.** The grade at which a rolling car holds speed,
+gravity along the track exactly paying for resistance. At a crawl, where drag vanishes, it is
+closed-form: `tan θ = Crr`, so the measured `RollingResistance = 0.024` gives **1.3748°**. Asserted
+both ways — a train holds speed on it, gains on anything steeper, loses on anything shallower — which
+is a check on the friction model that owes nothing to a layout or a timestep.
+
+**What the model does NOT have, now that there is a reference to check against.** A magnetic brake's
+force scales with *velocity* (eddy currents), which is why real ones decelerate more smoothly than
+friction; `FTrackZone` has a constant `MaxDecel`, so every brake here is a friction brake. And train
+position is known *continuously*, where a real ride infers it from discrete proximity switches
+counting a metal flag under each car — the count being how it knows the whole train cleared, which is
+the hardware's version of this project's nose-and-tail range.
+
 **A circuit closes by SHAPE, not by solver — and the shape decides the whole ride (2026-08-04).** The
 two-train layout closed in *height* and nothing else: it ended **373.794 m** from the station pointing
 **86.421°** wrong, because its two turns summed to **446.42°** where a circuit needs 360. The train ran
