@@ -60,7 +60,7 @@ double Deg(double D) { return D * Pi / 180.0; }
 // only thing that can both stop a train and let it go again. It is a separate
 // enumerator rather than a reused Lift because block boundaries fall where the
 // KIND changes, and two holding devices in a row have to stay two blocks.
-enum class EZone { None, Lift, Launch, Brake, BlockBrake };
+enum class EZone { None, Lift, Launch, Brake, BlockBrake, Station };
 
 struct FItem
 {
@@ -141,7 +141,7 @@ std::vector<FItem> Layout()
 
     std::vector<FItem> Out;
     // LEG A, outbound.
-    AddStraight(Out, 26.0, EZone::Lift, 1.5);              // 0 STATION, drive tyres
+    AddStraight(Out, 26.0, EZone::Station, 1.5);           // 0 STATION, drive tyres
     AddStraight(Out, 150.0, EZone::Launch, 38.0);          // 1 LAUNCH
     AddEasedPitch(Out, Up, 0.0130);
     AddStraight(Out, 40.0);
@@ -216,8 +216,13 @@ FCircuit BuildCircuit(FTrain* Tr)
             if (Tr) { Tr->AddZone(MakeBrake(OpenS, EndS, OpenSpeed, Grip)); }
             break;
         case EZone::BlockBrake:
+        case EZone::Station:
             // Brakes AND drive tyres, so identical in shape to a lift. The
-            // enumerator is separate for the block boundary, not for the physics.
+            // enumerators are separate for the block boundary, not for the
+            // physics — and for the station that boundary is the whole point.
+            // Authored as a Lift it MERGES into any lift behind it, which on the
+            // reference layout is the lift hill, and a station sharing a block
+            // with a lift means no train can board while another is climbing.
             if (Tr) { Tr->AddZone(MakeLift(OpenS, EndS, OpenSpeed, Grip)); }
             break;
         default:
@@ -235,7 +240,7 @@ FCircuit BuildCircuit(FTrain* Tr)
         // Clamped so a device barely longer than the train still puts the mark
         // where the whole train fits behind it.
         C.StopMarkS.push_back(std::max(OpenS + TrainLen, EndS - NoseClearance));
-        if (Open == EZone::Lift || Open == EZone::BlockBrake)
+        if (Open == EZone::Lift || Open == EZone::BlockBrake || Open == EZone::Station)
         {
             C.HoldMidS.push_back(0.5 * (OpenS + EndS));
         }

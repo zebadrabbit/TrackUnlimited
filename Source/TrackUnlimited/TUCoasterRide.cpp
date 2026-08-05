@@ -177,7 +177,7 @@ TArray<FTUTrackSegment> ATUCoasterRide::OutAndBackLayout()
 	const double DropLength = 26.758;
 
 	TArray<FTUTrackSegment> Out;
-	AddStraight(Out, 20.0, ETUSegmentZone::Lift, 4.f);         // station
+	AddStraight(Out, 20.0, ETUSegmentZone::Station, 4.f);      // station
 	AddEasedPitch(Out, Up, 0.03, ETUSegmentZone::Lift, 4.f);   // into the climb
 	AddStraight(Out, 62.0, ETUSegmentZone::Lift, 4.f);         // lift climb
 
@@ -306,7 +306,7 @@ TArray<FTUTrackSegment> ATUCoasterRide::TwoTrainCircuitLayout()
 	TArray<FTUTrackSegment> Out;
 
 	// ---- LEG A, outbound. Station, launch, and the climb to the turnaround.
-	AddStraight(Out, 26.0, ETUSegmentZone::Lift, 1.5f);       // 1 STATION, drive tyres
+	AddStraight(Out, 26.0, ETUSegmentZone::Station, 1.5f);    // 1 STATION, drive tyres
 	AddStraight(Out, 150.0, ETUSegmentZone::Launch, 38.f);    // 2 LAUNCH
 
 	// Launch length matters more than the target: at the fixed 6 m/s^2 grip a
@@ -456,7 +456,7 @@ TArray<FTUTrackSegment> ATUCoasterRide::ReferenceLayout()
 		Out.Add(Tail);
 	};
 
-	Straight(20.0, ETUSegmentZone::Lift, 4.f);         // station
+	Straight(20.0, ETUSegmentZone::Station, 4.f);      // station
 	EasedPitch(Lift, 0.03, ETUSegmentZone::Lift, 4.f); // into the climb
 	Straight(LiftClimb, ETUSegmentZone::Lift, 4.f);    // lift climb
 
@@ -582,6 +582,7 @@ void ATUCoasterRide::RebuildFromSegments()
 	// with the first about where the brakes are.
 	TArray<FTrackZone> Zones;
 	ZoneReleaseSpeed.Reset();
+	ZoneSpans.Reset();
 
 	// Zones come from contiguous runs of segments carrying the same kind, so a
 	// lift is however many segments in a row say "Lift" and moving one is an
@@ -652,10 +653,11 @@ void ATUCoasterRide::RebuildFromSegments()
 				Zones.Add(MakeBrake(OpenS, EndS, Speed, Grip));
 				break;
 			case ETUSegmentZone::BlockBrake:
+			case ETUSegmentZone::Station:
 				// Brakes AND drive tyres, so identical in shape to a lift chain.
-				// The separate enumerator exists for the block boundary and for
-				// the Details panel, not for the physics — what makes it a block
-				// brake is having BOTH authorities, which is exactly what
+				// The separate enumerators exist for the block boundary and for
+				// the Details panel, not for the physics — what makes them hold a
+				// train is having BOTH authorities, which is exactly what
 				// FTrain::FindHoldZoneAt looks for.
 				Zones.Add(MakeLift(OpenS, EndS, Speed, Grip));
 				break;
@@ -666,6 +668,7 @@ void ATUCoasterRide::RebuildFromSegments()
 			// most of its life commanded to zero, so this is the only surviving
 			// record of what it should open to.
 			ZoneReleaseSpeed.Add(Speed);
+			ZoneSpans.Add(FTUZoneSpan{OpenS, EndS, Open});
 
 			// THE STOP MARK, surveyed rather than computed. Its nose clearance is
 			// measured back from the far end of the device, because what the margin
@@ -1185,6 +1188,34 @@ void ATUCoasterRide::BeginPlay()
 	DrawRideProfile();
 }
 
+FColor ATUCoasterRide::RailColourAt(double S) const
+{
+	// A debug view, and the reason it earns its keep is that the DEVICES are the
+	// part of a layout you cannot see. Geometry is visible — a hill is a hill —
+	// but which stretch of track can hold a train, which can only slow one, and
+	// which can only push one all look identical in wireframe, and confusing them
+	// is the single most expensive authoring mistake this model allows.
+	//
+	// Linear scan over a handful of zones, once per half metre, once at BeginPlay.
+	for (const FTUZoneSpan& Z : ZoneSpans)
+	{
+		if (S < Z.StartS || S > Z.EndS)
+		{
+			continue;
+		}
+		switch (Z.Kind)
+		{
+		case ETUSegmentZone::Station:    return FColor(35, 70, 165);    // dark blue
+		case ETUSegmentZone::Lift:
+		case ETUSegmentZone::Launch:     return FColor(70, 210, 95);    // green
+		case ETUSegmentZone::Brake:
+		case ETUSegmentZone::BlockBrake: return FColor(230, 60, 50);    // red
+		default:                         break;
+		}
+	}
+	return FColor(235, 235, 235);   // plain track
+}
+
 void ATUCoasterRide::DrawTrack() const
 {
 	// No track mesh yet — that is Phase 4. This draws the actual cross-section
@@ -1210,12 +1241,17 @@ void ATUCoasterRide::DrawTrack() const
 		const FTrackFrame NextFrame = Track.AdvanceFrom(Walk, S, Next);
 		const FTrackCrossSection NextSection = CrossSectionAt(NextFrame, Heartline, Profile);
 
+		// The RAILS carry the device colour and nothing else does. Heartline, spine
+		// and ties keep their own so the geometry stays readable underneath it —
+		// a view where everything changes colour at once says less, not more.
+		const FColor Rail = RailColourAt(S);
+
 		DrawDebugLine(GetWorld(), ToWorld(Walk.Position), ToWorld(NextFrame.Position),
 			FColor(90, 190, 255), true, -1.f, 0, 2.f);                 // heartline
 		DrawDebugLine(GetWorld(), ToWorld(Section.LeftRail), ToWorld(NextSection.LeftRail),
-			FColor(235, 235, 235), true, -1.f, 0, 3.f);                // running rails
+			Rail, true, -1.f, 0, 3.f);                                 // running rails
 		DrawDebugLine(GetWorld(), ToWorld(Section.RightRail), ToWorld(NextSection.RightRail),
-			FColor(235, 235, 235), true, -1.f, 0, 3.f);
+			Rail, true, -1.f, 0, 3.f);
 		DrawDebugLine(GetWorld(), ToWorld(Section.SpineCentre), ToWorld(NextSection.SpineCentre),
 			FColor(150, 150, 160), true, -1.f, 0, 4.f);                // spine
 

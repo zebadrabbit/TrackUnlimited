@@ -267,6 +267,11 @@ public:
 private:
 	void RebuildFromSegments();
 	void DrawTrack() const;
+
+	// What colour the running rails are at this arc length: the authored device,
+	// not the geometry. Station dark blue, lift and launch green, brakes red,
+	// plain track white.
+	FColor RailColourAt(double S) const;
 	void DrawRideProfile() const;
 
 	/** The whole ride, sampled by arc length. Recomputed on every rebuild. */
@@ -305,6 +310,19 @@ private:
 	// device's live target is overwritten to zero whenever its signal is red — so
 	// this is the only remaining record of what it should release at.
 	TArray<double> ZoneReleaseSpeed;
+
+	// Where each zone is and WHAT KIND it was authored as. FTrackZone deliberately
+	// drops the kind — a station, a block brake and a lift chain are the same
+	// physics, which is the point — so this keeps it for the things that need to
+	// tell them apart. Today that is the debug view colouring the rails; the
+	// control panel will want the same list.
+	struct FTUZoneSpan
+	{
+		double StartS = 0.0;
+		double EndS = 0.0;
+		ETUSegmentZone Kind = ETUSegmentZone::None;
+	};
+	TArray<FTUZoneSpan> ZoneSpans;
 
 	// The STOP MARK of each zone: a physical switch bolted to the track that tells
 	// the PLC a trucking train has come far enough. One per zone, so the index is

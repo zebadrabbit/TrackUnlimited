@@ -240,6 +240,17 @@ hold it there, and start it again. That last part is what separates it from a
 stays there for good. Only block brakes bound a block, and only block brakes
 count toward how many trains a circuit can carry.
 
+**Station** — drive tyres where riders board, and a **process** rather than just a
+place: a train arrives, unloads, loads, restraints are closed and checked, the
+platform is confirmed clear, and only then may a dispatch happen. The block
+signalling is the *last* link in that chain, not the whole of it. Physically the
+same device as a block brake — the same pair of authorities — and a separate
+authored kind because block boundaries fall where the kind changes, so a station
+authored as a lift merges into the lift hill behind it and no train can board
+while another is climbing. Large rides split it further into a separate **unload**
+and **load** platform, which for the same reason have to be separate blocks: the
+whole point is emptying one train while another is still being filled.
+
 **Anti-rollback** — ratchets, chain dogs, a catch car. A train cannot roll
 backwards through a stretch fitted with them. A *safety* device rather than a
 control one: no speed, no authority, nothing commanding it, and it works by being

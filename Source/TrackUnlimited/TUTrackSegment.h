@@ -77,6 +77,23 @@ enum class ETUSegmentZone : uint8
 	// two-train preset the mid-course brake fails that test by a factor of 1.5,
 	// which is why it is authored Brake and not this.
 	BlockBrake UMETA(DisplayName = "Block brake (brakes + drive tyres)"),
+
+	// Drive tyres where riders board. Physically identical to a block brake — the
+	// same pair of authorities, the same MakeLift — and a separate enumerator for
+	// exactly the reason BlockBrake is one: block boundaries fall where the KIND
+	// changes.
+	//
+	// Without it a station authored as Lift MERGES INTO THE LIFT HILL behind it,
+	// because a run is a contiguous stretch of the same kind and the two are then
+	// the same kind. That is what the reference layout did, and it is a signalling
+	// defect rather than a cosmetic one: a station and a lift sharing one block
+	// means no train can be in the station while another is on the lift, which is
+	// the whole reason a real ride puts a boundary between them.
+	//
+	// APPENDED, NOT INSERTED. This is a uint8 UENUM whose values are serialised
+	// into every level that has a track in it; inserting in the middle would
+	// silently renumber every zone already authored.
+	Station UMETA(DisplayName = "Station (drive tyres, riders board)"),
 };
 
 // Starter layouts. Each one is a worked example of the authored vocabulary
