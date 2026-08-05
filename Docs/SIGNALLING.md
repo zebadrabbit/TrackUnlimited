@@ -250,7 +250,16 @@ later without a rewrite — see below.
 High-throughput rides put riders **off** at one platform and **on** at another, with track between
 them, often themed as different scenes even though they are a wall apart. They have to be separate
 zones and separate blocks, since the entire point is emptying one train while another is still being
-filled. The roles differ in what they require, and not decoratively:
+filled.
+
+Worth saying plainly, because it is easy to over-model: **the backstage machinery of a big ride is
+made of the devices already here.** A buffer that keeps three trains queued at the platform is a run of
+brake sections with drive tyres, one train each — block brakes, doing what block brakes do. It is a
+*layout* decision belonging to one specific coaster rather than a feature the general model owes
+anybody, and it needs no concept that does not exist. What it does need is the authoring change noted
+below, so that several in a row can be *said*.
+
+The roles differ in what they require, and not decoratively:
 
 | role | requires |
 |---|---|
@@ -265,10 +274,14 @@ does **not** exist, in rough order of how much it would change:
   rider who needs longer to board does not hold up the two in front. Each position is one
   `FStationProcess` already, so this is three of them in series and a rule that the front one leaves
   first — but nothing sequences them yet.
-- **A storage buffer.** Ten or so trains stacked nose to tail behind the scenes, deployed one at a
-  time. **The current interlocking cannot express this**: a block holding two trains is a collision,
-  by definition and by the counter that detects it. A storage track is a deliberately non-interlocked
-  low-speed queue and needs to be a different kind of thing, not a block with the rule relaxed.
+- **Authoring several holding devices in a row.** A backstage buffer that keeps trains fed to the
+  platform is not a new kind of thing — it is **brake sections with drive tyres**, one train each,
+  which is a block brake and is already exactly what the model expresses. What it needs is the ability
+  to *say* it: a run is a contiguous stretch of the same **kind**, so ten block brakes in a row author
+  as **one** zone and therefore one block, which holds one train rather than ten. The same rule already
+  discards a speed change inside a run and already logs a warning about it — that warning and this are
+  the same wart, and the fix is in how runs are split rather than in a new concept. Nothing about the
+  interlocking needs to change.
 - **A turnout, and a maintenance spur.** A switch is not a zone: it changes which track a train is on,
   which the whole arc-length model currently has no way to say. This is the largest of the three and
   is properly Phase 4 or later.

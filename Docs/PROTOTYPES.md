@@ -270,8 +270,9 @@ remembered the last train's would dispatch this one on them.
 
 **One process is one POSITION, not one platform**, so a three-position load platform is three of these
 in series. See [`SIGNALLING.md`](SIGNALLING.md#split-platforms-and-what-is-not-built-yet) for the rest
-of that shape — multi-position platforms, the storage buffer and the turnout — none of which is built,
-and one of which the current interlocking cannot express at all.
+of that shape — multi-position platforms and turnouts — neither of which is built. A backstage buffer
+is *not* on that list: it is brake sections with drive tyres, one train each, which the model already
+expresses. Only the authoring of several in a row is missing.
 
 ## `NL2Csv/` — validation fixtures
 
