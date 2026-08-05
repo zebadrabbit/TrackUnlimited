@@ -2339,11 +2339,14 @@ void ATUCoasterRide::DrawRideProfile() const
 		double PerUnit;
 		double FRideSample::*Field;
 	};
+	// Okabe-Ito, the colourblind-safe qualitative palette — see Docs/UI_CONVENTIONS.md.
+	// The previous green/orange pair was the common deuteranopia collision. Blue #0072B2 is
+	// deliberately unused: ~3:1 against the background, too weak for a 2 px line.
 	const FChannel Channels[] = {
-		{bGraphVerticalG, FColor(120, 235, 130), 1.0, &FRideSample::VerticalG},
-		{bGraphLateralG, FColor(250, 175, 80), 1.0, &FRideSample::LateralG},
-		{bGraphSpeed, FColor(110, 205, 255), 1.0 / (10.0 / 3.6), &FRideSample::Speed},
-		{bGraphRollRate, FColor(230, 130, 235), 1.0 / 30.0, &FRideSample::RollRateDegPerSec},
+		{bGraphVerticalG, FColor(86, 180, 233), 1.0, &FRideSample::VerticalG},          // sky blue
+		{bGraphLateralG, FColor(230, 159, 0), 1.0, &FRideSample::LateralG},             // orange
+		{bGraphSpeed, FColor(0, 158, 115), 1.0 / (10.0 / 3.6), &FRideSample::Speed},    // bluish green
+		{bGraphRollRate, FColor(204, 121, 167), 1.0 / 30.0, &FRideSample::RollRateDegPerSec}, // reddish purple
 	};
 
 	if (Profile_.Samples.size() < 2)
