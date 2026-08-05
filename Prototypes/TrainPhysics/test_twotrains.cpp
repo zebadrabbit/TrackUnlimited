@@ -239,6 +239,7 @@ struct FCircuit
     std::vector<double> HoldMidS;    // where a train may stand: mid-device
     std::vector<double> StopMarkS;   // per zone, the switch that says "far enough"
     std::vector<EZone> Kinds;        // per zone, what it was authored as
+    std::vector<double> ZoneStartS;  // per zone, where it begins — a block boundary
 };
 
 // One platform position, with everything it needs to run its own sequence. A
@@ -309,6 +310,7 @@ FCircuit BuildCircuitFrom(FTrain* Tr, const std::vector<FItem>& Items,
         }
         C.Authored.push_back(OpenSpeed);
         C.Kinds.push_back(Open);
+        C.ZoneStartS.push_back(OpenS);
 
         // THE STOP MARK, and it is a PHYSICAL SWITCH rather than a sum. One per
         // zone so its index is the zone's own; a zone with no drive tyres can
@@ -378,11 +380,46 @@ FCircuit BuildCircuit(FTrain* Tr) { return BuildCircuitFrom(Tr, Layout()); }
 // straddles a block boundary and "the block my centre is in" is unambiguous.
 bool StationSaysGo(const std::vector<FPlatform>& Platforms, std::size_t Zone);
 
+// PRE-LAUNCH. Is the device this train is about to be handed to ready to take it?
+//
+// The step between "everything is secured" and "you may go", and it belongs to the
+// DEVICE rather than the platform: a launch armed and charged, a chain turning,
+// tyres up to speed. The interlocking already asks whether the next blocks are
+// CLEAR; this asks whether the one taking the train is READY, which is a different
+// question and the one a real console puts a lamp on.
+//
+// Zones and blocks fall out of the same walk, so a device that exists in the next
+// block starts exactly at its boundary. NO DEVICE THERE IS TRIVIALLY READY - plain
+// track takes a train perfectly well, and a term that denied a dispatch onto open
+// course would stop the ride rather than protect it.
+bool DeviceAheadIsReady(const FRideSignals& Sig, const FCircuit& C,
+                        const FTrackDrives& Drives, double AtS)
+{
+    const std::size_t N = Sig.NumBlocks();
+    if (N == 0)
+    {
+        return true;
+    }
+    const std::size_t Next = (Sig.BlockAt(AtS) + 1) % N;
+    const double NextS = Sig.Boundaries()[Next];
+
+    // A zone's start IS a block boundary by construction, so the device in the next
+    // block is the zone that begins there.
+    for (std::size_t z = 0; z < C.ZoneStartS.size(); ++z)
+    {
+        if (std::fabs(C.ZoneStartS[z] - NextS) < 0.01)
+        {
+            return Drives.IsReady(z);
+        }
+    }
+    return true;   // plain track, and plain track is always ready
+}
+
 // It writes to a DRIVE, not to the track. A command is a request; how fast the
 // drive gets there, and whether it manages to, is the drive's business and the
 // panel's story. This is the whole of the PLC's authority over the ride.
 void ServeHolds(FTrain& Tr, const FRideSignals& Sig, std::size_t Id,
-                const std::vector<double>& Authored, const FTrackSensors& Marks,
+                const FCircuit& C, const FTrackSensors& Marks,
                 FTrackDrives& Drives, const std::vector<FPlatform>& Platforms)
 {
     const int Z = Tr.FindHoldZoneAt(Tr.GetDistance());
@@ -394,13 +431,19 @@ void ServeHolds(FTrain& Tr, const FRideSignals& Sig, std::size_t Id,
 
     // THE PERMISSIVE IS AN AND, and the interlocking is only one term of it. A
     // real dispatch needs the blocks clear AND the riders aboard AND the
-    // restraints locked AND the platform confirmed, and on a working ride the
-    // block is usually the term that went green first while an operator was still
-    // walking the train. Before this, a train left the station the instant the
-    // track ahead was free, which is a ride with nobody in it.
-    if (Sig.CanRelease(Id, Tr.GetDistance()) && StationSaysGo(Platforms, Zi))
+    // restraints locked AND the platform confirmed AND the device about to take
+    // the train ready — and on a working ride the block is usually the term that
+    // went green first while an operator was still walking the train. Before this,
+    // a train left the station the instant the track ahead was free, which is a
+    // ride with nobody in it.
+    //
+    // The third term is PRE-LAUNCH: clear is not the same as ready. A block with a
+    // launch in it can be empty and still refuse a train, because the launch has
+    // not armed.
+    if (Sig.CanRelease(Id, Tr.GetDistance()) && StationSaysGo(Platforms, Zi)
+        && DeviceAheadIsReady(Sig, C, Drives, Tr.GetDistance()))
     {
-        Drives.Command(Zi, Authored[Zi]);
+        Drives.Command(Zi, C.Authored[Zi]);
         return;
     }
 
@@ -459,7 +502,7 @@ void ServeHolds(FTrain& Tr, const FRideSignals& Sig, std::size_t Id,
     // being 1.5 m/s against 6 m/s^2 of grip. Real placement absorbs that in the
     // margin, which is what a margin is for, and the clearance stays under a metre.
     // ponytail: 1.5 m/s of crawl, a maintenance-pace guess.
-    const double Convey = std::min(Authored[Zi], 1.5);
+    const double Convey = std::min(C.Authored[Zi], 1.5);
     Drives.Command(Zi, Marks.IsBlocked(Zi) ? 0.0 : Convey);
 }
 
@@ -926,9 +969,9 @@ void TestTwoTrainsQueueBeforeTheStation()
         ServeStations(Platforms, Both, Marks, Drives, Dt);
         if (Frame >= Release)
         {
-            ServeHolds(A, Sig, 0, C.Authored, Marks, Drives, Platforms);
+            ServeHolds(A, Sig, 0, C, Marks, Drives, Platforms);
         }
-        ServeHolds(B, Sig, 1, C.Authored, Marks, Drives, Platforms);
+        ServeHolds(B, Sig, 1, C, Marks, Drives, Platforms);
         Drives.Tick(Dt);
         DriveTheTrack(Drives, Both);
 
@@ -1134,7 +1177,7 @@ FRunResult RunTrains(std::size_t N, std::size_t Lookahead, double Seconds,
         ServeStations(Platforms, All, Marks, Drives, Dt, &Loaded);
         for (std::size_t t = 0; t < N; ++t)
         {
-            ServeHolds(*Owned[t], Sig, t, C.Authored, Marks, Drives, Platforms);
+            ServeHolds(*Owned[t], Sig, t, C, Marks, Drives, Platforms);
         }
         Drives.Tick(Dt);
         DriveTheTrack(Drives, All);
@@ -1361,6 +1404,62 @@ void TestSeveralHoldingDevicesInARowStaySeveral()
     assert(M.Authored.size() == 1);
 }
 
+void TestADispatchWaitsForTheLaunchToBeArmed()
+{
+    // PRE-LAUNCH, on the real layout. The step a real console has between
+    // "everything is secured" and "you may go": harness locked and gates closed ->
+    // COMPLETE -> PRE-LAUNCH -> advance/dispatch.
+    //
+    // It is the DEVICE declaring itself ready rather than the platform, so the
+    // permissive gained a third term. CLEAR IS NOT READY — a block with a launch in
+    // it can be perfectly empty and still refuse a train, because the launch has
+    // not armed.
+    const FCircuit C = BuildCircuit(nullptr);
+    const FTrack T = BuildTrack(C.Doc);
+    FRideSignals Sig(C.Boundaries, 5.0, 1, 1, true);
+
+    FTrainConfig Cfg;
+    Cfg.TrainLength = TrainLen;
+    FTrain Tr(T, Cfg);
+    const FCircuit Live = BuildCircuit(&Tr);
+    FTrackDrives Drives = OpenDrives(Tr, Live);
+
+    // A train standing in the station. Block 1 ahead of it is the launch.
+    const double AtStation = Live.HoldMidS[0];
+    assert(Sig.BlockAt(AtStation) == 0);
+
+    // As the ride opens, every drive is PRESET — commanded and already there — so
+    // the launch is armed and the term is satisfied. That is why nothing measured
+    // before this moved: a drive with no ramp reaches its command in one frame.
+    assert(DeviceAheadIsReady(Sig, Live, Drives, AtStation));
+
+    // Now give the launch a real ramp and start it from rest, which is a launch
+    // that has been TOLD to arm and has not finished doing it.
+    FDriveSpec Slow;
+    Slow.AccelRampMs2 = 4.0;
+    assert(Drives.Configure(1, Slow));
+    Drives.Preset(1, 0.0);
+    Drives.Command(1, Live.Authored[1]);       // 38 m/s
+
+    assert(!DeviceAheadIsReady(Sig, Live, Drives, AtStation));
+    Drives.Tick(1.0 / 240.0);
+    assert(!DeviceAheadIsReady(Sig, Live, Drives, AtStation));   // still ramping
+
+    // 38 m/s at 4 m/s^2 is 9.5 seconds, and only then may a train be handed to it.
+    for (int i = 0; i < 240 * 10; ++i) { Drives.Tick(1.0 / 240.0); }
+    assert(DeviceAheadIsReady(Sig, Live, Drives, AtStation));
+
+    // AND PLAIN TRACK IS ALWAYS READY. A term that denied a dispatch onto open
+    // course would stop the ride rather than protect it — the mid-course brake is
+    // preceded by unpowered track, and a train has to be allowed onto it.
+    const double BeforePlainTrack = 200.0;      // out on the course, no device ahead
+    assert(DeviceAheadIsReady(Sig, Live, Drives, BeforePlainTrack));
+
+    // An E-STOPPED ride is ready for nothing, so no dispatch survives one.
+    Drives.TripEmergencyStop("test");
+    assert(!DeviceAheadIsReady(Sig, Live, Drives, AtStation));
+}
+
 void TestTwoIndependentMeansOfKnowingAgreeOnEveryBlock()
 {
     // THE SENSOR LAYER DOING SAFETY WORK RATHER THAN SITTING DECORATIVE. Until
@@ -1529,7 +1628,7 @@ FBatchResult RunSmallBatch(double SlowLoadSeconds, std::size_t SlowPosition)
         ServeStations(Platforms, All, Marks, Drives, Dt, &Loaded);
         for (std::size_t t = 0; t < 3; ++t)
         {
-            ServeHolds(*Owned[t], Sig, t, C.Authored, Marks, Drives, Platforms);
+            ServeHolds(*Owned[t], Sig, t, C, Marks, Drives, Platforms);
         }
         Drives.Tick(Dt);
         DriveTheTrack(Drives, All);
@@ -1830,7 +1929,7 @@ void TestTheActorsOwnLoopRunsTwoTrains()
         ServeStations(Platforms, All, Marks, Drives, Dt);
         for (std::size_t t = 0; t < 2; ++t)
         {
-            ServeHolds(*Trains[t], Sig, t, C.Authored, Marks, Drives, Platforms);
+            ServeHolds(*Trains[t], Sig, t, C, Marks, Drives, Platforms);
         }
         Drives.Tick(Dt);
         DriveTheTrack(Drives, All);
@@ -1896,6 +1995,7 @@ int main()
     TestTheCatchHoldsAFailedLaunchOnTheRealLayout();
     TestAHeldTrainParksInsideItsBlock();
     TestSeveralHoldingDevicesInARowStaySeveral();
+    TestADispatchWaitsForTheLaunchToBeArmed();
     TestTwoIndependentMeansOfKnowingAgreeOnEveryBlock();
     TestTheDrivesTellTheStoryOfTheRide();
     TestTheSmallBatchCircuitIsTheSameOvalAndStillCloses();

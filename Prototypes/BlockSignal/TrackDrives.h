@@ -331,6 +331,30 @@ public:
     }
 
     const FDriveReading& Read(std::size_t Drive) const { return State[Drive]; }
+
+    // PRE-LAUNCH: is this drive ready to take a train?
+    //
+    // The step a real console has between "everything is secured" and "you may
+    // go". It is the DEVICE declaring itself ready rather than the platform — a
+    // launch armed and charged, a chain actually turning, tyres up to speed — and
+    // a dispatch is not permitted until the thing about to take the train says it
+    // can.
+    //
+    // Ready is output HAS REACHED command and nothing is faulted. A drive still
+    // ramping is not ready, which is the whole reason Commanded and Output are two
+    // numbers: the moment a command stopped taking effect instantly, "arming" and
+    // "armed" became distinguishable for free.
+    //
+    // An E-stopped ride is ready for nothing.
+    bool IsReady(std::size_t Drive) const
+    {
+        if (bEmergencyStopped || Drive >= State.size())
+        {
+            return false;
+        }
+        const FDriveReading& R = State[Drive];
+        return !R.bFaulted && std::fabs(R.Commanded - R.Output) <= 1e-9;
+    }
     const FDriveSpec& SpecOf(std::size_t Drive) const { return Spec[Drive]; }
 
     // Signed: positive means the drive is running faster than its load, which is a

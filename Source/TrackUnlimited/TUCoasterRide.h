@@ -457,6 +457,20 @@ private:
 	// station, which is every device that is not a platform.
 	bool StationSaysGo(std::size_t Zone) const;
 
+	/**
+	 * PRE-LAUNCH: is the device about to take this train ready to take it?
+	 *
+	 * The step between "everything is secured" and "you may go", and it belongs to
+	 * the DEVICE rather than the platform — a launch armed and charged, a chain
+	 * actually turning. The interlocking asks whether the next blocks are CLEAR;
+	 * this asks whether the one taking the train is READY, which is a different
+	 * question and the one a real console puts its own lamp on.
+	 *
+	 * Plain track is trivially ready: a term that denied a dispatch onto open
+	 * course would stop the ride rather than protect it.
+	 */
+	bool DeviceAheadIsReady(double AtS) const;
+
 	// The operator's controls. The dispatch button is bound on both edges because
 	// the RELEASE is half the safety rule.
 	void PressDispatch() { bDispatchHeld = true; }

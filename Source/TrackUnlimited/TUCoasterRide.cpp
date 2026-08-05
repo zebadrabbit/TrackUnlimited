@@ -1822,6 +1822,10 @@ void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/
 				// can least otherwise see.
 				const double AtS = ZoneSpans.IsValidIndex(P.Zone) ? ZoneSpans[P.Zone].StartS : 0.0;
 				const bool bBlocked = !Signals->CanRelease(0, AtS);
+				// PRE-LAUNCH gets its own words, because "waiting" for a block that
+				// is occupied and "waiting" for a launch that has not armed are two
+				// different waits and an operator needs to know which.
+				const bool bNotArmed = !DeviceAheadIsReady(AtS);
 
 				// ADVANCE OR DISPATCH, and a real console has them as separate
 				// labelled buttons. They are not the same move: an advance shuffles
@@ -1845,10 +1849,11 @@ void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/
 						}
 					}
 				}
-				PanelLabel(Canvas, Lx + 226.f, Ty,
-					bBlocked ? FString::Printf(TEXT("%s — waiting on the block ahead"), Verb)
-							 : FString(Verb),
-					bBlocked ? PanelAmber : PanelGreen);
+				FString Why = Verb;
+				if (bBlocked)      { Why = FString::Printf(TEXT("%s — block ahead"), Verb); }
+				else if (bNotArmed) { Why = FString::Printf(TEXT("%s — PRE-LAUNCH"), Verb); }
+				PanelLabel(Canvas, Lx + 226.f, Ty, Why,
+					(bBlocked || bNotArmed) ? PanelAmber : PanelGreen);
 			}
 			Ty += Row;
 		}
@@ -2072,6 +2077,29 @@ void ATUCoasterRide::CrossCheckOccupancy()
 	}
 }
 
+bool ATUCoasterRide::DeviceAheadIsReady(double AtS) const
+{
+	if (!Signals || !Drives || Signals->NumBlocks() == 0)
+	{
+		return true;
+	}
+	const std::size_t Next = (Signals->BlockAt(AtS) + 1) % Signals->NumBlocks();
+	const double NextS = Signals->Boundaries()[Next];
+
+	// A zone's start IS a block boundary by construction - blocks and zones fall
+	// out of the same walk - so the device in the next block is the zone that
+	// begins there. No zone there means plain track, which takes a train perfectly
+	// well and is always ready.
+	for (int32 z = 0; z < ZoneSpans.Num(); ++z)
+	{
+		if (FMath::Abs(ZoneSpans[z].StartS - NextS) < 0.01)
+		{
+			return Drives->IsReady(static_cast<std::size_t>(z));
+		}
+	}
+	return true;
+}
+
 bool ATUCoasterRide::StationSaysGo(std::size_t Zone) const
 {
 	for (const FTUPlatform& P : Platforms)
@@ -2267,11 +2295,17 @@ void ATUCoasterRide::ServeHolds(std::size_t TrainIndex)
 
 	// THE PERMISSIVE IS AN AND, and the interlocking is only one term of it. A real
 	// dispatch needs the blocks clear AND the riders aboard AND the restraints
-	// locked AND the platform confirmed — and on a working ride the block is
-	// usually the term that went green first, while an operator was still walking
-	// the train. Before the station process existed a train left the instant the
-	// track ahead was free, which is a ride with nobody in it.
-	if (Signals->CanRelease(TrainIndex, T.GetDistance()) && StationSaysGo(Zi))
+	// locked AND the platform confirmed AND the device about to take the train
+	// ready — and on a working ride the block is usually the term that went green
+	// first, while an operator was still walking the train. Before the station
+	// process existed a train left the instant the track ahead was free, which is a
+	// ride with nobody in it.
+	//
+	// The last term is PRE-LAUNCH, and it is a genuinely different question from
+	// the first: CLEAR IS NOT READY. A block with a launch in it can be perfectly
+	// empty and still refuse a train, because the launch has not armed.
+	if (Signals->CanRelease(TrainIndex, T.GetDistance()) && StationSaysGo(Zi)
+		&& DeviceAheadIsReady(T.GetDistance()))
 	{
 		Drives->Command(Zi, ZoneReleaseSpeed[Z]);
 		return;

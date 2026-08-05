@@ -404,6 +404,61 @@ void TestAStoppedDriveIsNotAlsoAccusedOfSlipping()
     assert(D.Read(0).SlippingFor == 0.0);
 }
 
+void TestReadyIsNotTheSameAsCommanded()
+{
+    // PRE-LAUNCH. "Clear" and "ready" are different questions, and the second one
+    // is the device's to answer: a launch that has been TOLD to arm is not the same
+    // as one that HAS armed. Those two states became distinguishable for free the
+    // moment a command stopped taking effect instantly, which is the whole reason
+    // Commanded and Output are two numbers rather than one.
+    FDriveSpec S;
+    S.AccelRampMs2 = 4.0;
+    FTrackDrives D(1);
+    D.Configure(0, S);
+
+    // Sitting at zero, asked for nothing: ready, trivially.
+    assert(D.IsReady(0));
+
+    // Told to arm. NOT ready - it has been asked, not achieved.
+    D.Command(0, 20.0);
+    assert(!D.IsReady(0));
+    D.Tick(Dt);
+    assert(!D.IsReady(0));          // ramping
+
+    for (int i = 0; i < 240 * 6; ++i) { D.Tick(Dt); }
+    assert(D.IsReady(0));           // up to speed
+
+    // A FAULTED DRIVE IS NEVER READY, however matched its numbers are. A motor at
+    // full torque going nowhere is not something to hand a train to.
+    FDriveSpec F;
+    F.SlipTripSeconds = 1.0;
+    FTrackDrives E(1);
+    E.Configure(0, F);
+    E.Preset(0, 5.0);
+    assert(E.IsReady(0));
+    for (int i = 0; i < 240 * 2; ++i)
+    {
+        E.BeginFeedback();
+        E.ReportFeedback(0, 0.0, 1.0);
+        E.EndFeedback();
+        E.Tick(Dt);
+    }
+    assert(E.IsFaulted(0));
+    assert(!E.IsReady(0));
+
+    // AND AN E-STOPPED RIDE IS READY FOR NOTHING, whatever the individual drives
+    // think. Power is gone.
+    FTrackDrives G(2);
+    G.Preset(0, 3.0);
+    G.Preset(1, 0.0);
+    assert(G.IsReady(0) && G.IsReady(1));
+    G.TripEmergencyStop("test");
+    assert(!G.IsReady(0));
+    assert(!G.IsReady(1));
+    G.ResetEmergencyStop();
+    assert(G.IsReady(0));
+}
+
 } // namespace
 
 int main()
@@ -419,6 +474,7 @@ int main()
     TestOneDrivePerZoneEvenWhereThereIsNoMotor();
     TestAnEmergencyStopCutsThePowerAndCannotBeTalkedOutOfIt();
     TestAStoppedDriveIsNotAlsoAccusedOfSlipping();
+    TestReadyIsNotTheSameAsCommanded();
 
     std::printf("test_trackdrives: all assertions passed\n");
     return 0;

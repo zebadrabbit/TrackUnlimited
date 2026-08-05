@@ -270,6 +270,25 @@ gates and the dwell falls out; model the dwell and the gates never get built. `F
 stand-in that asserts those contacts on timers because nothing here simulates a person, and it is a
 separate object precisely so it can be deleted.
 
+**Pre-launch: clear is not ready.** The step between "everything is secured" and "you may go", and it
+belongs to the **device** rather than the platform — a launch armed and charged, a chain actually
+turning, tyres up to speed. The full sequence a real console runs is
+
+> harness locked and gates closed → **COMPLETE** → **PRE-LAUNCH** → advance / dispatch
+
+so the permissive carries a third term: the device you are being dispatched *into* must be **ready**,
+not merely clear. A block with a launch in it can be perfectly empty and still refuse a train.
+
+It needed nothing new to compute. A drive is ready when its output has **reached** its command and
+nothing is faulted; one still ramping is not. Those two states became distinguishable for free the
+moment a command stopped taking effect instantly, which is the whole reason `Commanded` and `Output`
+are two numbers. An E-stopped ride is ready for nothing, and **plain track is always ready** — a term
+that denied a dispatch onto open course would stop the ride rather than protect it.
+
+Ramps default to off, so on the shipped presets a drive reaches its command in one frame and the term
+is satisfied immediately; nothing measured before it moved. Authoring a real ramp on a launch is what
+makes it visible, and is how it is tested.
+
 **Readiness is continuous; the release is latched.** These sound contradictory and are not. Every
 condition is re-derived each scan right up to the moment of release, so a restraint popping open in
 `Ready` takes the permission away the same frame — a station that latched readiness would show "ready"
