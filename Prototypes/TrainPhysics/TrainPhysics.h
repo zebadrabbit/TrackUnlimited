@@ -29,6 +29,7 @@
 #include "../TrackSpline/TrackSpline.h"
 
 #include <algorithm>
+#include <utility>
 #include <cmath>
 #include <vector>
 
@@ -211,6 +212,47 @@ public:
     {
         return Index < Zones.size() ? Zones[Index] : FTrackZone{};
     }
+
+    // A stretch of track a train cannot roll backwards through: ratchets, chain
+    // dogs, a catch car. NOT a zone — it has no speed, no authority and nothing to
+    // command, which is the whole difference between a safety device and a control
+    // device. A zone decides how fast; this decides which way is possible.
+    //
+    // Refused rather than stored if inverted, exactly as AddZone refuses a
+    // malformed zone: a backwards span would silently never engage, and the only
+    // symptom would be a train rolling through a lift hill it should have been
+    // caught on.
+    bool AddAntiRollback(double StartS, double EndS)
+    {
+        if (!(EndS > StartS))
+        {
+            return false;
+        }
+        Catches.push_back({StartS, EndS});
+        return true;
+    }
+
+    bool IsAntiRollbackAt(double S) const
+    {
+        for (const std::pair<double, double>& C : Catches)
+        {
+            if (S >= C.first && S <= C.second)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // How many times the catch has ENGAGED — rising edges, not steps held, so it
+    // is a number that means the same thing at any timestep. Reported rather than
+    // hidden, because a train being held by a ratchet means the ride FAILED to get
+    // round: the device did its job and the layout did not. Same reasoning as
+    // FRideProfile reporting a stall instead of quietly restarting.
+    int GetRollbacksCaught() const { return RollbacksCaught; }
+
+    // Right now, this instant. What a control panel lamp would read.
+    bool IsHeldByCatch() const { return bHeldByCatch; }
 
     // The zone at S that can both STOP a train and START it again — brakes with
     // drive tyres, which is what a real block brake is. -1 if there is none.
@@ -461,9 +503,44 @@ public:
         // the default, because a valley stall is a design error to surface
         // rather than a state to simulate. With rollback on, the same
         // arithmetic simply keeps its sign.
-        if (!Config.bAllowRollback)
+        //
+        // ANTI-ROLLBACK is that same clamp applied to one stretch of track rather
+        // than to the whole ride. It is the most universal safety device on a
+        // coaster — every lift hill ever built has ratchets, dogs or a catch car —
+        // and it does not slow a train or hold it at a speed. It makes backward
+        // movement IMPOSSIBLE, which is exactly what throwing away a negative
+        // advance already does, so the behaviour is inherited rather than invented.
+        //
+        // Modelled as a continuous ratchet: infinitely fine dog spacing, so a
+        // caught train gives up nothing at all. A real ratchet lets it fall back to
+        // the last dog first, typically under 150 mm. Give the span a pitch when
+        // somebody wants to hear the clack.
+        const bool bCaught = Advance < 0.0 && IsAntiRollbackAt(S0);
+        if (!Config.bAllowRollback || bCaught)
         {
             Advance = std::max(0.0, Advance);
+        }
+        if (bCaught)
+        {
+            // Counted on the RISING EDGE, so this is "the catch engaged once",
+            // not "the catch was engaged for 56,685 steps". A held train trips the
+            // test every step it is held, and a number that grows with the
+            // timestep is not a number anybody can report.
+            if (!bHeldByCatch)
+            {
+                ++RollbacksCaught;
+            }
+            bHeldByCatch = true;
+            // ARRESTED, not merely stopped from moving. Throwing the advance away
+            // on its own leaves the train with its backward velocity intact and
+            // nowhere to spend it — pinned in place at 4 m/s for ever, which is
+            // not a state any hardware can be in. A dog takes the kinetic energy
+            // into the structure, so the train's is gone.
+            bStopsThisStep = true;
+        }
+        else
+        {
+            bHeldByCatch = false;
         }
 
         // On a circuit the advance is never clipped, so the distance travelled is
@@ -628,6 +705,13 @@ private:
     const FTrack& Track;
     FTrainConfig Config;
     std::vector<FTrackZone> Zones;
+
+    // Arc-length spans a train cannot roll back through. A pair rather than a
+    // struct because that is genuinely all a catch is — no speed, no authority,
+    // no state. If it ever grows a dog pitch it earns a struct.
+    std::vector<std::pair<double, double>> Catches;
+    int RollbacksCaught = 0;
+    bool bHeldByCatch = false;
 
     double DistanceAlong = 0.0;
     // SIGNED. GetSpeed() reports the magnitude, so callers written before

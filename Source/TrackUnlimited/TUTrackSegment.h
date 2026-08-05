@@ -220,6 +220,23 @@ struct FTUTrackSegment
 	UPROPERTY(EditAnywhere, Category = "Zone", meta = (ClampMin = "0.0", UIMax = "60.0",
 		EditCondition = "Zone != ETUSegmentZone::None", EditConditionHides))
 	float ZoneSpeed = 4.f;
+
+	/**
+	 * Ratchets, chain dogs or a catch car: a train cannot roll backwards through
+	 * this segment.
+	 *
+	 * NOT a zone, and deliberately a separate field rather than another
+	 * ETUSegmentZone. A zone is a control device — it has a speed, an authority,
+	 * and something commanding it. This is a SAFETY device: no speed, nothing to
+	 * command, and it fails closed by being passive. They also overlap freely,
+	 * because a lift hill is both at once.
+	 *
+	 * It does nothing at all while a ride works, which is the point. It only
+	 * matters the day a hill is too tall, and then it is the difference between a
+	 * train held on the lift and a train loose on the track going the wrong way.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Zone")
+	bool bAntiRollback = false;
 };
 
 // Reflected editor struct -> the authored model the prototypes understand.

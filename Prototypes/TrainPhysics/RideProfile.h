@@ -69,6 +69,17 @@ struct FRideProfile
     bool bRolledBack = false;
     double RolledBackAtS = 0.0;
 
+    // Held by an anti-rollback catch: ratchets, chain dogs, a catch car. A THIRD
+    // distinct outcome, not a softer rollback.
+    //
+    // A stall says the hill is too tall. A rollback says that AND that the train
+    // is loose heading the wrong way. A catch says the hill is too tall and the
+    // SAFETY DEVICE DID ITS JOB — the train is held, nobody is in danger, and the
+    // layout is still wrong. Reporting it as a success because nothing bad
+    // happened would be exactly the wrong lesson: the ride does not get round.
+    bool bCaughtByAntiRollback = false;
+    double CaughtAtS = 0.0;
+
     double Duration = 0.0; // seconds
 
     // Extremes, each with where it happened. "4.25 g" is a number; "4.25 g at
@@ -172,6 +183,15 @@ inline FRideProfile RunRideProfile(FTrain& Train, const FTrack& Track,
             P.StalledAtS = S;
             P.StalledHeight = F.Position.Z;
             break;
+        }
+
+        // Checked BEFORE the stall counter, because a caught train reads exactly
+        // like a stall — stopped, and staying stopped — and the two want different
+        // words. The device engaging is the more specific fact, so it wins.
+        if (Train.GetRollbacksCaught() > 0 && !P.bCaughtByAntiRollback)
+        {
+            P.bCaughtByAntiRollback = true;
+            P.CaughtAtS = S;
         }
 
         if (Train.GetSpeed() < StallSpeed)

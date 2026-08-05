@@ -207,4 +207,22 @@ for a powered section (lift chain, tyre launch): target frequency, actual motor
 feedback, torque draw, ramp rate. The thing an operator would actually be
 looking at.
 
+**Block brake** — a brake run *with drive tyres*. It can bring a train to a stop,
+hold it there, and start it again. That last part is what separates it from a
+**trim brake**, which can only ever slow a train down: park one on a trim and it
+stays there for good. Only block brakes bound a block, and only block brakes
+count toward how many trains a circuit can carry.
+
+**Anti-rollback** — ratchets, chain dogs, a catch car. A train cannot roll
+backwards through a stretch fitted with them. A *safety* device rather than a
+control one: no speed, no authority, nothing commanding it, and it works by being
+passive. Every lift hill ever built has it. Being caught is a distinct outcome
+from stalling and from rolling back — it means the hill was too tall **and** the
+hardware did its job.
+
+**Evacuation zone** — somewhere riders can actually be got *off*: needs a walkway,
+access, an egress route, not merely somewhere a train can stop. A large ride has
+far more of these than it has blocks, and they answer a different question. Not
+modelled yet.
+
 `Prototypes/BlockSignal/`.

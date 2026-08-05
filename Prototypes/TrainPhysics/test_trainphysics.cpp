@@ -526,6 +526,88 @@ static void TestRollbackReturnsExactlyTheEnergyItSpent()
     std::printf("  rollback: left at 15.000 m/s, came back at %.3f m/s\n", ReturnSpeed);
 }
 
+static void TestAnAntiRollbackCatchHoldsTheTrainDead()
+{
+    // The most universal safety device on a coaster — ratchets, chain dogs, a
+    // catch car — and until now the model had none, so the ONE failure mode the
+    // physics can actually produce had nothing standing in front of it.
+    //
+    // Same uncrestable climb, rollback ON, but the hill is fitted with a catch.
+    // The train must not come back at all: not slowly, not eventually, not at
+    // all. A catch does not slow a train or hold it at a speed; it makes backward
+    // movement impossible.
+    const FTrack Climb = UncrestableClimb();
+    FTrainConfig C = Frictionless();
+    C.bAllowRollback = true;
+
+    FTrain Train(Climb, C);
+    assert(Train.AddAntiRollback(0.0, 500.0));
+    assert(!Train.AddAntiRollback(90.0, 20.0));   // inverted spans are refused
+    assert(Train.IsAntiRollbackAt(10.0));
+    assert(!Train.IsAntiRollbackAt(600.0));
+
+    Train.Place(10.0, 15.0);
+    double Highest = 0.0;
+    for (int i = 0; i < 60000; ++i)
+    {
+        Train.Step(1.0 / 480.0);
+        Highest = std::max(Highest, Train.GetDistance());
+        assert(!Train.IsRollingBack());          // never, at any point
+        assert(Train.GetDistance() >= 10.0);     // and never behind where it began
+    }
+
+    // It went up, ran out, and STOPPED. Held, not oscillating and not creeping.
+    assert(Highest > 10.0);
+    assert(Train.GetSpeed() < 1e-9);
+    assert(Train.GetRollbacksCaught() == 1);   // ONE engagement, not one per step
+    assert(Train.IsHeldByCatch());
+
+    // Without the catch, the same train on the same track comes back down. That
+    // comparison is the test: otherwise this passes on a train that simply never
+    // rolled back for some other reason.
+    FTrain Loose(Climb, C);
+    Loose.Place(10.0, 15.0);
+    bool bCameBack = false;
+    for (int i = 0; i < 60000 && !bCameBack; ++i)
+    {
+        Loose.Step(1.0 / 480.0);
+        bCameBack = Loose.IsRollingBack();
+    }
+    assert(bCameBack);
+    assert(Loose.GetRollbacksCaught() == 0);
+
+    std::printf("  anti-rollback: held at %.3f m after %d engagement(s); "
+                "the same train without one rolls back\n",
+                Train.GetDistance(), Train.GetRollbacksCaught());
+}
+
+static void TestACatchOnlyGuardsItsOwnSpan()
+{
+    // A catch is a stretch of track, not a property of the ride. Fit one to the
+    // bottom half of a climb and a train that runs out ABOVE it must still roll
+    // back — down to the catch, and no further. That is what a real lift hill
+    // does at the top of its chain.
+    const FTrack Climb = UncrestableClimb();
+    FTrainConfig C = Frictionless();
+    C.bAllowRollback = true;
+
+    FTrain Train(Climb, C);
+    assert(Train.AddAntiRollback(0.0, 40.0));   // only the lower stretch
+    Train.Place(60.0, 8.0);
+
+    bool bRolled = false;
+    for (int i = 0; i < 60000; ++i)
+    {
+        Train.Step(1.0 / 480.0);
+        if (Train.IsRollingBack()) { bRolled = true; }
+        if (Train.GetSpeed() < 1e-9 && bRolled) { break; }
+    }
+    assert(bRolled);                            // above the catch it is free
+    assert(Train.GetDistance() <= 40.0 + 1e-6); // and it got down into the catch
+    assert(Train.GetRollbacksCaught() > 0);     // where it was stopped
+    assert(Train.GetSpeed() < 1e-9);
+}
+
 static void TestRollbackIsOffByDefaultAndChangesNothingWhenItIs()
 {
     // Same track, same train, rollback off: it stops dead where it ran out, and
@@ -990,6 +1072,8 @@ int main()
     TestStallsInsteadOfProducingNaN();
     TestStepRejectsBadDeltas();
     TestRollbackReturnsExactlyTheEnergyItSpent();
+    TestAnAntiRollbackCatchHoldsTheTrainDead();
+    TestACatchOnlyGuardsItsOwnSpan();
     TestRollbackIsOffByDefaultAndChangesNothingWhenItIs();
     TestRollingBackIntoAValleySettlesRatherThanOscillatingForever();
     TestTrainLengthIsBitIdenticalAtZero();

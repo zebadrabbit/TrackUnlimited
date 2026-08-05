@@ -149,11 +149,28 @@ running far fewer trains than that, because those counts answer *"can everyone g
 *"what happens when something fails"*, not *"how many trains fit"*. Only the first row feeds the
 capacity formula.
 
-**None of this is modelled yet.** `FTrackZone` describes powered track and nothing else: there is no
-evacuation zone, no walkway, no anti-rollback device. The gap that bites first is the third row —
-`FTrainConfig::bAllowRollback` simulates a train running backwards, and **nothing anywhere catches
-it**, because a catch is hardware the vocabulary cannot describe. Today a rollback is reported by the
-ride profile and then simply continues.
+**The third row is now built.** `FTUTrackSegment::bAntiRollback` marks a segment as ratcheted, the
+actor derives contiguous runs into arc-length spans exactly as it does zones, and `FTrain` refuses to
+let a train move backwards through one. It is deliberately **not** a zone and not a block boundary:
+
+- Not a zone, because a zone is a *control* device — it has a speed, an authority, and something
+  commanding it every frame. A catch has none of those and nothing to command. It also **overlaps**
+  zones freely, since a lift hill is a powered run and a ratchet at the same time, which one
+  enumerator could not say.
+- Not a block boundary, because it cannot *release* a train. It is no more a place to park one than a
+  trim brake is, for exactly the same reason.
+
+A caught train is **arrested**, not merely stopped from moving: throwing away the backward advance on
+its own would leave it pinned in place carrying its backward velocity for ever, which is not a state
+any hardware can be in. The dog takes the energy into the structure.
+
+`FRideProfile::bCaughtByAntiRollback` reports it as a **third distinct outcome**. A stall says the
+hill is too tall. A rollback says that *and* that the train is loose heading the wrong way. A catch
+says the hill is too tall and **the safety device did its job** — nobody is in danger and the layout
+is still wrong. Reporting that as a success because nothing bad happened would be the wrong lesson.
+
+**Evacuation zones are still not modelled at all** — they want walkway geometry, which is Phase 4
+meshing territory, and a definition of *reachable* that nothing here has.
 
 Asking for more trains than the layout can carry is refused with a log line rather than granted onto
 open course.

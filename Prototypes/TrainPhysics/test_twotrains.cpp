@@ -728,6 +728,64 @@ FRunResult RunTrains(std::size_t N, std::size_t Lookahead, double Seconds)
     return R;
 }
 
+void TestTheCatchHoldsAFailedLaunchOnTheRealLayout()
+{
+    // The preset fits anti-rollback over the launch and the whole climb, which is
+    // where a real launched coaster puts it. It does NOTHING while the ride works
+    // — the train crests at 12.14 m/s with margin — so this has to detune the
+    // launch to make the device matter at all. That property is the point: a
+    // safety device that changes the ride when the ride is fine is not a safety
+    // device, it is a bug.
+    const FCircuit Shape = BuildCircuit(nullptr);
+    const FTrack T = BuildTrack(Shape.Doc);
+
+    FTrainConfig Cfg;
+    Cfg.TrainLength = TrainLen;
+    Cfg.bAllowRollback = true;      // the honest physics, so there is something to catch
+
+    // Launch and climb, matching the preset: station 26, launch 150, and the pull
+    // up and climb that follow.
+    const double CatchEnd = 400.0;
+
+    FTrain Caught(T, Cfg);
+    BuildCircuit(&Caught);
+    assert(Caught.AddAntiRollback(26.0, CatchEnd));
+    // Half the launch speed: nowhere near enough to reach the turnaround.
+    Caught.Place(30.0, 19.0);
+
+    FTrain Loose(T, Cfg);
+    BuildCircuit(&Loose);
+    Loose.Place(30.0, 19.0);
+
+    // Both zones are live, so the launch will push. Shut them, because what is
+    // under test is what happens when the train runs out on the climb.
+    CloseAllHolds(Caught, Shape.Boundaries, T.TotalLength());
+    CloseAllHolds(Loose, Shape.Boundaries, T.TotalLength());
+    for (std::size_t z = 0; z < Shape.Authored.size(); ++z)
+    {
+        Caught.SetZoneTargetSpeed(z, 0.0);
+        Loose.SetZoneTargetSpeed(z, 0.0);
+    }
+
+    for (int i = 0; i < 240 * 120; ++i)
+    {
+        Caught.Step(1.0 / 240.0);
+        Loose.Step(1.0 / 240.0);
+    }
+
+    // The caught train is HELD on the climb, above where it started, stopped.
+    assert(Caught.GetRollbacksCaught() >= 1);
+    assert(Caught.IsHeldByCatch());
+    assert(Caught.GetSpeed() < 1e-6);
+    assert(Caught.GetDistance() > 30.0);
+    assert(Caught.GetDistance() < CatchEnd);
+
+    // The loose one came back down past where it began — into the station, at
+    // speed, backwards, which is the outcome the device exists to prevent.
+    assert(Loose.GetRollbacksCaught() == 0);
+    assert(Loose.GetDistance() < Caught.GetDistance());
+}
+
 void TestAHeldTrainParksInsideItsBlock()
 {
     // Commanded to plain zero, a holding device stops the train within ~0.3 m of
@@ -906,6 +964,7 @@ int main()
     TestClearanceMustBeMeasuredTheShortWayRound();
     TestEveryHoldingBlockCanActuallyStopWhatArrives();
     TestTwoTrainsQueueBeforeTheStation();
+    TestTheCatchHoldsAFailedLaunchOnTheRealLayout();
     TestAHeldTrainParksInsideItsBlock();
     TestTheCircuitCarriesFourTrains();
     TestTheActorsOwnLoopRunsTwoTrains();

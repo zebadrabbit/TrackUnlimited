@@ -317,6 +317,18 @@ TArray<FTUTrackSegment> ATUCoasterRide::TwoTrainCircuitLayout()
 	AddStraight(Out, 40.0);            // curvature on the track. 0.0130 holds it
 	AddEasedPitch(Out, -Up, 0.0130);   // to +3.08 g. Levels off 48.5 m up.
 
+	// ANTI-ROLLBACK over the launch and the whole climb, which is where a real
+	// launched coaster puts it: a train that fails to make the top comes back down
+	// this stretch and arrives in the station at speed, backwards.
+	//
+	// It changes NOTHING while the ride works — the train crests at 12.14 m/s with
+	// margin — and that is exactly the property a safety device should have. Detune
+	// the launch and it is the difference between a held train and a loose one.
+	for (int32 i = 1; i < Out.Num(); ++i)
+	{
+		Out[i].bAntiRollback = true;
+	}
+
 	// ---- TURN 1, level, at the top, taken at 12.1 m/s. Being slow here is the
 	// whole point of putting it at the top: a turnaround at launch speed would
 	// need R ~ 119 m to stay under 2 g, and that radius doubles into the circuit.
@@ -650,6 +662,19 @@ void ATUCoasterRide::RebuildFromSegments()
 			ZoneReleaseSpeed.Add(Speed);
 		};
 
+		// Anti-rollback runs, walked in the SAME pass and by the same rule as
+		// zones — contiguous segments carrying the flag become one span — but kept
+		// in their own list, because a catch is not a zone. It has no speed and
+		// nothing commands it, and it overlaps zones freely: a lift hill is a
+		// powered run and a ratchet at the same time, which a single enumerator
+		// could not say.
+		//
+		// Deliberately NOT a block boundary either. A catch cannot release a train,
+		// so it is no more a place to park one than a trim brake is.
+		TArray<TPair<double, double>> CatchSpans;
+		bool bCatchOpen = false;
+		double CatchStartS = 0.0;
+
 		for (int32 i = 0; i < Segments.Num(); ++i)
 		{
 			const double SegLength =
@@ -657,6 +682,15 @@ void ATUCoasterRide::RebuildFromSegments()
 			if (!(SegLength > 0.0))
 			{
 				continue; // AddSegment refused it, so it occupies no arc length
+			}
+			if (Segments[i].bAntiRollback != bCatchOpen)
+			{
+				if (bCatchOpen)
+				{
+					CatchSpans.Add(TPair<double, double>(CatchStartS, AccS));
+				}
+				bCatchOpen = Segments[i].bAntiRollback;
+				CatchStartS = AccS;
 			}
 			if (Segments[i].Zone != Open)
 			{
@@ -690,6 +724,10 @@ void ATUCoasterRide::RebuildFromSegments()
 			AccS += SegLength;
 		}
 		Close(AccS);
+		if (bCatchOpen)
+		{
+			CatchSpans.Add(TPair<double, double>(CatchStartS, AccS));
+		}
 
 		// Reported before it is used, not repaired silently — FRideSignals will
 		// repair it either way, but a walk that produced something malformed is a
@@ -823,6 +861,10 @@ void ATUCoasterRide::RebuildFromSegments()
 			for (const FTrackZone& Z : Zones)
 			{
 				New->AddZone(Z);
+			}
+			for (const TPair<double, double>& C : CatchSpans)
+			{
+				New->AddAntiRollback(C.Key, C.Value);
 			}
 			// Mid-device, every one of them including the station — the same place
 			// the dispatcher parks a held train, and the only placement that puts
@@ -1487,6 +1529,27 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 				GEngine->AddOnScreenDebugMessage(10, 0.f, FColor::Red,
 					FString::Printf(TEXT("%d SIGNALLING VIOLATION(S)"),
 						static_cast<int32>(Signals->Violations())));
+			}
+
+			// A caught train is a THIRD outcome, and it needs its own words. The
+			// device did its job and the ride still failed: nobody is in danger and
+			// the layout is still wrong. Reporting it as "held" would read as the
+			// signalling working; reporting nothing would read as the ride working.
+			FString CaughtRow;
+			for (int32 t = 0; t < Trains.Num(); ++t)
+			{
+				if (Trains[t]->GetRollbacksCaught() > 0)
+				{
+					CaughtRow += FString::Printf(TEXT("train %d %s at %.0f m   "), t,
+						Trains[t]->IsHeldByCatch() ? TEXT("HELD BY ANTI-ROLLBACK")
+												   : TEXT("was caught"),
+						Trains[t]->GetDistance());
+				}
+			}
+			if (!CaughtRow.IsEmpty())
+			{
+				GEngine->AddOnScreenDebugMessage(11, 0.f, FColor(255, 90, 60),
+					CaughtRow + TEXT("— the catch worked, the layout did not"));
 			}
 		}
 
