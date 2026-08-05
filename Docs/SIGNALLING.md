@@ -16,6 +16,7 @@ trips no block. That and the generated control panel are Phase 3 — see [`ROADM
 - [What the system actually knows](#what-the-system-actually-knows)
 - [The block state machine](#the-block-state-machine)
 - [Dispatch permissives](#dispatch-permissives)
+- [The station, which is a process rather than a place](#the-station-which-is-a-process-rather-than-a-place)
 - [Circuit topology, and what it does not cover yet](#circuit-topology-and-what-it-does-not-cover-yet)
 - [Automatic and manual dispatch](#automatic-and-manual-dispatch)
 - [The generated control panel](#the-generated-control-panel)
@@ -212,6 +213,65 @@ would need 66.2 m to stop it inside a 45 m block, so it is authored as a trim an
 authoring it as a block brake would build a device that closes and is then run straight through, which
 is worse than a trim because it *looks* like an interlock. The three pre-station devices pass the same
 test with room to spare (4.8, 1.5 and 0.9 m needed) and are the ones that hold.
+
+## The station, which is a process rather than a place
+
+A train arrives, riders get off, riders get on, restraints are closed and checked, the platform is
+confirmed clear, and **only then** may a dispatch happen. The block signalling is the *last* link in
+that chain, not the whole of it — a real dispatch permissive is an AND of the interlocking and every
+one of those steps, and on a working ride the block is usually the term that went green first while an
+operator was still walking the train. Before `FStationProcess`, a train left the instant the track
+ahead was free, which is a ride with nobody in it.
+
+**Every gate is an input, not a timer.** On real hardware each is a physical contact: the stop mark,
+a restraint lock sensor per car (ANDed into one signal), airgate switches, the operators' all-clear.
+Minimum dwell exists, but it is a throughput target rather than what gates the dispatch — model the
+gates and the dwell falls out; model the dwell and the gates never get built. `FAutoStationCrew` is the
+stand-in that asserts those contacts on timers because nothing here simulates a person, and it is a
+separate object precisely so it can be deleted.
+
+**Readiness is continuous; the release is latched.** These sound contradictory and are not. Every
+condition is re-derived each scan right up to the moment of release, so a restraint popping open in
+`Ready` takes the permission away the same frame — a station that latched readiness would show "ready"
+on the panel while the machine refused to dispatch. But once the train is *moving*, there is no such
+thing as un-dispatching it.
+
+Leaving that second half out **deadlocked the circuit**, and the failure is worth keeping: a released
+train rolls off its stop mark, so it is no longer "in position", so the sequence is no longer complete,
+so the permissive drops, so the dispatcher re-commands the brake — and the train stops with its tail
+still over its own mark and sits there for the rest of the session with nothing reporting anything
+wrong. Measured: the launch drive never saw a single train in seven minutes.
+
+**One process is one POSITION, not one platform.** That is what makes the large operations expressible
+later without a rewrite — see below.
+
+### Split platforms, and what is not built yet
+
+High-throughput rides put riders **off** at one platform and **on** at another, with track between
+them, often themed as different scenes even though they are a wall apart. They have to be separate
+zones and separate blocks, since the entire point is emptying one train while another is still being
+filled. The roles differ in what they require, and not decoratively:
+
+| role | requires |
+|---|---|
+| `Unload` | riders out, platform clear. **Not** restraints locked — the train runs empty to the load platform ready to board, and demanding locked restraints would deadlock it, because nobody is aboard to close them. |
+| `Load` | riders in, restraints locked, platform clear. No unload step to wait on. |
+| `Combined` | all of it, in one place, which is what a small ride has. |
+
+`ETUSegmentZone::StationUnload` and `StationLoad` exist and the process handles all three roles. What
+does **not** exist, in rough order of how much it would change:
+
+- **A multi-position platform.** A load platform holding three trains, dispatched individually so a
+  rider who needs longer to board does not hold up the two in front. Each position is one
+  `FStationProcess` already, so this is three of them in series and a rule that the front one leaves
+  first — but nothing sequences them yet.
+- **A storage buffer.** Ten or so trains stacked nose to tail behind the scenes, deployed one at a
+  time. **The current interlocking cannot express this**: a block holding two trains is a collision,
+  by definition and by the counter that detects it. A storage track is a deliberately non-interlocked
+  low-speed queue and needs to be a different kind of thing, not a block with the rule relaxed.
+- **A turnout, and a maintenance spur.** A switch is not a zone: it changes which track a train is on,
+  which the whole arc-length model currently has no way to say. This is the largest of the three and
+  is properly Phase 4 or later.
 
 ## How many trains a circuit carries
 

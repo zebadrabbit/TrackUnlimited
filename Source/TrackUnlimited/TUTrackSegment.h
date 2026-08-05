@@ -94,6 +94,18 @@ enum class ETUSegmentZone : uint8
 	// into every level that has a track in it; inserting in the middle would
 	// silently renumber every zone already authored.
 	Station UMETA(DisplayName = "Station (drive tyres, riders board)"),
+
+	// A platform split in two. High-throughput rides put riders OFF at one and ON
+	// at another, with track between them, often themed as different scenes — and
+	// they have to be separate blocks, because the entire point is emptying one
+	// train while another is still being filled.
+	//
+	// The difference is not decorative: an UNLOAD platform releases its train with
+	// the restraints still OPEN, since it runs empty to the load platform ready to
+	// board. Demanding locked restraints there would deadlock the ride — nobody is
+	// aboard to close them.
+	StationUnload UMETA(DisplayName = "Station: unload only"),
+	StationLoad UMETA(DisplayName = "Station: load only"),
 };
 
 // Starter layouts. Each one is a worked example of the authored vocabulary

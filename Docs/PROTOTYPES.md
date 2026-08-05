@@ -113,6 +113,7 @@ tests. See [`SIGNALLING.md`](SIGNALLING.md) for what the states mean and why the
 | `RideSignals.h` | The mapping layer: arc length → block index, each train's nose-and-tail range, one permissive keyed to the destination |
 | `TrackSensors.h` | The sensors a PLC actually reads, and a train counter that derives occupancy from their trips alone |
 | `TrackDrives.h` | The motors it commands, on the output side: ramp, feedback, torque, and a fault that stays quiet on a healthy ride |
+| `StationProcess.h` | What has to happen at a platform before a train may leave it. One position, gated by contacts rather than a clock |
 
 `RideSignals.h` consumes **doubles and a train index, not an `FTrain`** — `RearS`, `FrontS`, `dt`.
 That keeps it independent of the physics, lets the assert suite drive it with bare numbers, and makes
@@ -245,6 +246,32 @@ of them. A ramp only changes anything if it is slower than the zone's own grip.
 One thing it fixed on the way past: zones live on each `FTrain`, so before this every train carried its
 own private idea of what every brake on the ride was doing. A drive is one device, and its output goes
 to every train's copy each frame.
+
+### `StationProcess.h` — what has to happen before a train may leave
+
+A station is a *process*, not a place: arrive, unload, load, restraints closed and checked, platform
+confirmed clear, and only then a dispatch. The block signalling is the last link in that chain rather
+than the whole of it, so the permissive became an **AND** — before this a train left the instant the
+track ahead was free, which is a ride with nobody in it.
+
+**Every gate is a contact, not a timer.** The stop mark, a restraint lock sensor per car, airgate
+switches, the operators' all-clear. `FAutoStationCrew` asserts them on dwell timers because nothing
+here simulates a person, and it is a **separate object precisely so it can be deleted**.
+
+**Proves:** that readiness is continuous and the release is latched, which reads like a contradiction
+until it deadlocks the ride. A restraint opening in `Ready` takes the permission away the same frame —
+but leaving `Departing` out of the permissive killed the real circuit, because a released train rolls
+off its stop mark, is no longer "in position", loses the permissive, gets re-braked, and stops with its
+tail over its own mark for the rest of the session with nothing reporting anything wrong. Measured: the
+launch drive saw no train at all in seven minutes. Also that an unload-only platform must **not** wait
+for locked restraints (nobody is aboard to close them), that a load-only platform must not wait for an
+unload confirmation that will never come, and that the next train redoes every check — a station that
+remembered the last train's would dispatch this one on them.
+
+**One process is one POSITION, not one platform**, so a three-position load platform is three of these
+in series. See [`SIGNALLING.md`](SIGNALLING.md#split-platforms-and-what-is-not-built-yet) for the rest
+of that shape — multi-position platforms, the storage buffer and the turnout — none of which is built,
+and one of which the current interlocking cannot express at all.
 
 ## `NL2Csv/` — validation fixtures
 

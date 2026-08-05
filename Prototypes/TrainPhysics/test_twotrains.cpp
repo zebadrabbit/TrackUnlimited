@@ -26,6 +26,7 @@
 // real fix is S -= TotalLength once FTrack can say it is a circuit.
 
 #include "../BlockSignal/RideSignals.h"
+#include "../BlockSignal/StationProcess.h"
 #include "../BlockSignal/TrackDrives.h"
 #include "../BlockSignal/TrackSensors.h"
 #include "../TrackSpline/TrackIO.h"
@@ -177,6 +178,17 @@ struct FCircuit
     std::vector<double> Authored;    // per zone, the speed it releases at
     std::vector<double> HoldMidS;    // where a train may stand: mid-device
     std::vector<double> StopMarkS;   // per zone, the switch that says "far enough"
+    std::vector<EZone> Kinds;        // per zone, what it was authored as
+};
+
+// One platform position, with everything it needs to run its own sequence. A
+// three-position load platform would be three of these; this circuit has one.
+struct FPlatform
+{
+    std::size_t Zone = 0;
+    FStationProcess Process{EStationRole::Combined};
+    FAutoStationCrew Crew;
+    FStationInputs Inputs;
 };
 
 // Tr is optional so the shape can be asked for without a train to hang zones on
@@ -229,6 +241,7 @@ FCircuit BuildCircuit(FTrain* Tr)
             return;
         }
         C.Authored.push_back(OpenSpeed);
+        C.Kinds.push_back(Open);
 
         // THE STOP MARK, and it is a PHYSICAL SWITCH rather than a sum. One per
         // zone so its index is the zone's own; a zone with no drive tyres can
@@ -280,12 +293,14 @@ FCircuit BuildCircuit(FTrain* Tr)
 // It asks about the train's CENTRE because that is what FTrain::Step tests a zone
 // against, and because zones and blocks come from the same walk, so a zone never
 // straddles a block boundary and "the block my centre is in" is unambiguous.
+bool StationSaysGo(const std::vector<FPlatform>& Platforms, std::size_t Zone);
+
 // It writes to a DRIVE, not to the track. A command is a request; how fast the
 // drive gets there, and whether it manages to, is the drive's business and the
 // panel's story. This is the whole of the PLC's authority over the ride.
 void ServeHolds(FTrain& Tr, const FRideSignals& Sig, std::size_t Id,
                 const std::vector<double>& Authored, const FTrackSensors& Marks,
-                FTrackDrives& Drives)
+                FTrackDrives& Drives, const std::vector<FPlatform>& Platforms)
 {
     const int Z = Tr.FindHoldZoneAt(Tr.GetDistance());
     if (Z < 0)
@@ -293,7 +308,14 @@ void ServeHolds(FTrain& Tr, const FRideSignals& Sig, std::size_t Id,
         return;   // not standing at a holding device; nothing to command
     }
     const std::size_t Zi = static_cast<std::size_t>(Z);
-    if (Sig.CanRelease(Id, Tr.GetDistance()))
+
+    // THE PERMISSIVE IS AN AND, and the interlocking is only one term of it. A
+    // real dispatch needs the blocks clear AND the riders aboard AND the
+    // restraints locked AND the platform confirmed, and on a working ride the
+    // block is usually the term that went green first while an operator was still
+    // walking the train. Before this, a train left the station the instant the
+    // track ahead was free, which is a ride with nobody in it.
+    if (Sig.CanRelease(Id, Tr.GetDistance()) && StationSaysGo(Platforms, Zi))
     {
         Drives.Command(Zi, Authored[Zi]);
         return;
@@ -356,6 +378,61 @@ void ServeHolds(FTrain& Tr, const FRideSignals& Sig, std::size_t Id,
     // ponytail: 1.5 m/s of crawl, a maintenance-pace guess.
     const double Convey = std::min(Authored[Zi], 1.5);
     Drives.Command(Zi, Marks.IsBlocked(Zi) ? 0.0 : Convey);
+}
+
+// One platform per station zone. Combined here — riders off and on in one place,
+// which is what every preset in this project has.
+std::vector<FPlatform> BuildPlatforms(const FCircuit& C)
+{
+    std::vector<FPlatform> Out;
+    for (std::size_t z = 0; z < C.Kinds.size(); ++z)
+    {
+        if (C.Kinds[z] == EZone::Station)
+        {
+            FPlatform P;
+            P.Zone = z;
+            Out.push_back(P);
+        }
+    }
+    return Out;
+}
+
+// The station's inputs, from instruments, once per scan. Only two of the six are
+// real here and both are readings a control system genuinely has: the train is in
+// the zone, and it is stopped ON ITS MARK. The other four are the crew's, which
+// is the part that goes away when there are riders.
+//
+// "In position" is the stop mark AND a motor reading nothing, because a train
+// running through the platform covers the same switch. Two instruments, and the
+// pair means something neither does alone.
+void ServeStations(std::vector<FPlatform>& Platforms, const std::vector<FTrain*>& Trains,
+                   const FTrackSensors& Marks, const FTrackDrives& Drives, double Dt)
+{
+    for (FPlatform& P : Platforms)
+    {
+        bool bPresent = false;
+        for (const FTrain* Tr : Trains)
+        {
+            if (Tr->IsInZone(P.Zone, Tr->GetDistance())) { bPresent = true; }
+        }
+        P.Inputs.bTrainPresent = bPresent;
+        P.Inputs.bTrainInPosition = bPresent && Marks.IsBlocked(P.Zone)
+            && std::fabs(Drives.Read(P.Zone).Actual) < 1e-6;
+
+        P.Process.Update(P.Inputs);
+        P.Crew.Serve(P.Process, P.Inputs, Dt);
+    }
+}
+
+// Whether the station at this zone, if there is one, will let its train go. No
+// station means nothing to ask, which is every device that is not a platform.
+bool StationSaysGo(const std::vector<FPlatform>& Platforms, std::size_t Zone)
+{
+    for (const FPlatform& P : Platforms)
+    {
+        if (P.Zone == Zone) { return P.Process.IsReadyToDispatch(); }
+    }
+    return true;
 }
 
 // The drives as the ride opens: every one already running at its authored speed,
@@ -716,15 +793,17 @@ void TestTwoTrainsQueueBeforeTheStation()
     FTrackSensors Marks(C.StopMarkS);
     FTrackDrives Drives = OpenDrives(A, C);
     const std::vector<FTrain*> Both = {&A, &B};
+    std::vector<FPlatform> Platforms = BuildPlatforms(C);
 
     for (int Frame = 0; Frame < 240 * 120; ++Frame)
     {
         ScanStopMarks(Marks, Both, false, T.TotalLength());
+        ServeStations(Platforms, Both, Marks, Drives, Dt);
         if (Frame >= Release)
         {
-            ServeHolds(A, Sig, 0, C.Authored, Marks, Drives);
+            ServeHolds(A, Sig, 0, C.Authored, Marks, Drives, Platforms);
         }
-        ServeHolds(B, Sig, 1, C.Authored, Marks, Drives);
+        ServeHolds(B, Sig, 1, C.Authored, Marks, Drives, Platforms);
         Drives.Tick(Dt);
         DriveTheTrack(Drives, Both);
 
@@ -869,14 +948,16 @@ FRunResult RunTrains(std::size_t N, std::size_t Lookahead, double Seconds)
     FTrackDrives Drives = OpenDrives(*Owned[0], C);
     std::vector<FTrain*> All;
     for (std::size_t t = 0; t < N; ++t) { All.push_back(Owned[t].get()); }
+    std::vector<FPlatform> Platforms = BuildPlatforms(C);
 
     const double Dt = 1.0 / 240.0;
     for (int F = 0; F < static_cast<int>(240.0 * Seconds); ++F)
     {
         ScanStopMarks(Marks, All, true, T.TotalLength());
+        ServeStations(Platforms, All, Marks, Drives, Dt);
         for (std::size_t t = 0; t < N; ++t)
         {
-            ServeHolds(*Owned[t], Sig, t, C.Authored, Marks, Drives);
+            ServeHolds(*Owned[t], Sig, t, C.Authored, Marks, Drives, Platforms);
         }
         Drives.Tick(Dt);
         DriveTheTrack(Drives, All);
@@ -1052,6 +1133,10 @@ void TestTheDrivesTellTheStoryOfTheRide()
     //    job, which is a thing a panel would show an engineer.
     for (std::size_t z = 0; z < R.PeakLoad.size(); ++z)
     {
+        if (!(R.PeakLoad[z] > 0.99))
+        {
+            std::fprintf(stderr, "drive %zu peaked at only %.3f\n", z, R.PeakLoad[z]);
+        }
         assert(R.PeakLoad[z] > 0.99);
     }
 }
@@ -1157,6 +1242,7 @@ void TestTheActorsOwnLoopRunsTwoTrains()
     FTrackSensors Marks(C.StopMarkS);
     FTrackDrives Drives = OpenDrives(A, C);
     const std::vector<FTrain*> All = {&A, &B};
+    std::vector<FPlatform> Platforms = BuildPlatforms(C);
 
     for (int Frame = 0; Frame < 240 * 600; ++Frame)
     {
@@ -1166,9 +1252,10 @@ void TestTheActorsOwnLoopRunsTwoTrains()
         // with the physics — serving train 1 after train 0 has already moved — is
         // what a game does and what a PLC cannot.
         ScanStopMarks(Marks, All, true, T.TotalLength());
+        ServeStations(Platforms, All, Marks, Drives, Dt);
         for (std::size_t t = 0; t < 2; ++t)
         {
-            ServeHolds(*Trains[t], Sig, t, C.Authored, Marks, Drives);
+            ServeHolds(*Trains[t], Sig, t, C.Authored, Marks, Drives, Platforms);
         }
         Drives.Tick(Dt);
         DriveTheTrack(Drives, All);

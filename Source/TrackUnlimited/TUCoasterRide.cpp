@@ -654,6 +654,8 @@ void ATUCoasterRide::RebuildFromSegments()
 				break;
 			case ETUSegmentZone::BlockBrake:
 			case ETUSegmentZone::Station:
+			case ETUSegmentZone::StationUnload:
+			case ETUSegmentZone::StationLoad:
 				// Brakes AND drive tyres, so identical in shape to a lift chain.
 				// The separate enumerators exist for the block boundary and for
 				// the Details panel, not for the physics — what makes them hold a
@@ -836,6 +838,32 @@ void ATUCoasterRide::RebuildFromSegments()
 		// that changes anything.
 		Drives = MakeUnique<FTrackDrives>(static_cast<std::size_t>(ZoneReleaseSpeed.Num()));
 		ReportedDriveFault.Reset();   // new motors, so old faults are not this ride's
+
+		// A platform for every station zone. One position each — a split operation
+		// authors its unload and load as separate zones, which is why they are
+		// separate kinds, and each gets its own sequence here.
+		Platforms.Reset();
+		for (int32 z = 0; z < ZoneSpans.Num(); ++z)
+		{
+			// NOT "Role": AActor has one, it is the network role, and shadowing it
+			// is a warning-as-error here. The same class of collision CLAUDE.md
+			// records for FFrame and FField, met on a member name instead of a type.
+			EStationRole PlatformRole;
+			switch (ZoneSpans[z].Kind)
+			{
+			case ETUSegmentZone::Station:       PlatformRole = EStationRole::Combined; break;
+			case ETUSegmentZone::StationUnload: PlatformRole = EStationRole::Unload;   break;
+			case ETUSegmentZone::StationLoad:   PlatformRole = EStationRole::Load;     break;
+			default: continue;
+			}
+			FTUPlatform P;
+			P.Zone = z;
+			P.Process = FStationProcess(PlatformRole);
+			P.Crew.UnloadSeconds = UnloadSeconds;
+			P.Crew.LoadSeconds = LoadSeconds;
+			P.Crew.SecureSeconds = RestraintCheckSeconds;
+			Platforms.Add(P);
+		}
 
 		Signals = MakeUnique<FRideSignals>(BlockStarts, BlockBufferSeconds,
 			static_cast<std::size_t>(FMath::Max(1, DispatchLookahead)),
@@ -1188,6 +1216,49 @@ void ATUCoasterRide::BeginPlay()
 	DrawRideProfile();
 }
 
+void ATUCoasterRide::ServeStations(float DeltaSeconds)
+{
+	// The station's inputs, from instruments, once per scan. Only two of the six
+	// are real here and both are readings a control system genuinely has: a train
+	// is in the zone, and it is stopped ON ITS MARK. The other four are the crew's,
+	// which is the part that goes away when there are riders.
+	//
+	// "In position" is the stop mark AND a motor reading nothing, because a train
+	// running through the platform covers the same switch. Two instruments, and the
+	// pair means something neither of them does alone.
+	for (FTUPlatform& P : Platforms)
+	{
+		const std::size_t Z = static_cast<std::size_t>(P.Zone);
+		bool bPresent = false;
+		for (int32 t = 0; t < Trains.Num(); ++t)
+		{
+			if (Trains[t]->IsInZone(Z, Trains[t]->GetDistance()))
+			{
+				bPresent = true;
+			}
+		}
+		P.Inputs.bTrainPresent = bPresent;
+		P.Inputs.bTrainInPosition = bPresent && StopMarks && Z < StopMarks->Num()
+			&& StopMarks->IsBlocked(Z)
+			&& Drives && FMath::Abs(Drives->Read(Z).Actual) < 1e-6;
+
+		P.Process.Update(P.Inputs);
+		P.Crew.Serve(P.Process, P.Inputs, DeltaSeconds);
+	}
+}
+
+bool ATUCoasterRide::StationSaysGo(std::size_t Zone) const
+{
+	for (const FTUPlatform& P : Platforms)
+	{
+		if (static_cast<std::size_t>(P.Zone) == Zone)
+		{
+			return P.Process.IsReadyToDispatch();
+		}
+	}
+	return true;   // not a platform; nothing to ask
+}
+
 FColor ATUCoasterRide::RailColourAt(double S) const
 {
 	// A debug view, and the reason it earns its keep is that the DEVICES are the
@@ -1205,7 +1276,12 @@ FColor ATUCoasterRide::RailColourAt(double S) const
 		}
 		switch (Z.Kind)
 		{
-		case ETUSegmentZone::Station:    return FColor(35, 70, 165);    // dark blue
+		case ETUSegmentZone::Station:
+		case ETUSegmentZone::StationLoad: return FColor(35, 70, 165);   // dark blue
+		// Distinguishable from the load platform without ceasing to read as a
+		// station, because on a split operation they are different rooms and
+		// telling them apart at a glance is the point of the view.
+		case ETUSegmentZone::StationUnload: return FColor(70, 110, 200);
 		case ETUSegmentZone::Lift:
 		case ETUSegmentZone::Launch:     return FColor(70, 210, 95);    // green
 		case ETUSegmentZone::Brake:
@@ -1363,7 +1439,14 @@ void ATUCoasterRide::ServeHolds(std::size_t TrainIndex)
 		return;   // not standing at a holding device; nothing to command
 	}
 	const std::size_t Zi = static_cast<std::size_t>(Z);
-	if (Signals->CanRelease(TrainIndex, T.GetDistance()))
+
+	// THE PERMISSIVE IS AN AND, and the interlocking is only one term of it. A real
+	// dispatch needs the blocks clear AND the riders aboard AND the restraints
+	// locked AND the platform confirmed — and on a working ride the block is
+	// usually the term that went green first, while an operator was still walking
+	// the train. Before the station process existed a train left the instant the
+	// track ahead was free, which is a ride with nobody in it.
+	if (Signals->CanRelease(TrainIndex, T.GetDistance()) && StationSaysGo(Zi))
 	{
 		Drives->Command(Zi, ZoneReleaseSpeed[Z]);
 		return;
@@ -1472,6 +1555,7 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 		}
 		StopMarks->EndScan();
 	}
+	ServeStations(DeltaSeconds);
 
 	for (int32 t = 0; t < Trains.Num(); ++t)
 	{
@@ -1754,6 +1838,42 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 			{
 				GEngine->AddOnScreenDebugMessage(11, 0.f, FColor(255, 90, 60),
 					CaughtRow + TEXT("— the catch worked, the layout did not"));
+			}
+
+			// WHAT IS HOLDING THE DISPATCH, named. This is the whole reason the
+			// station's gates are modelled one at a time instead of as a single
+			// "platform ready" flag: "the station is not ready" is useless to
+			// somebody standing on it, and "restraints not locked" is somewhere to
+			// go and look. It is also the first piece of the control panel that
+			// exists, and it is a view over data the PLC layer already had.
+			FString StationRow;
+			for (const FTUPlatform& P : Platforms)
+			{
+				static const TCHAR* PhaseName[] = {
+					TEXT("empty"), TEXT("arriving"), TEXT("unloading"), TEXT("loading"),
+					TEXT("securing"), TEXT("READY"), TEXT("departing")};
+				const int32 Ph = static_cast<int32>(P.Process.GetPhase());
+				StationRow += FString::Printf(TEXT("zone %d %s"), P.Zone,
+					Ph >= 0 && Ph < UE_ARRAY_COUNT(PhaseName) ? PhaseName[Ph] : TEXT("?"));
+
+				const FString Holding = UTF8_TO_TCHAR(P.Process.WhatIsHolding());
+				if (!Holding.IsEmpty())
+				{
+					StationRow += FString::Printf(TEXT(" — %s"), *Holding);
+				}
+				else if (P.Process.IsReadyToDispatch())
+				{
+					// Ready but still standing means the OTHER half of the AND is
+					// the one saying no, which is exactly the distinction an
+					// operator wants and cannot otherwise see.
+					StationRow += Signals && !Signals->CanRelease(0, ZoneSpans[P.Zone].StartS)
+						? TEXT(" — waiting on the block ahead") : TEXT("");
+				}
+				StationRow += TEXT("   ");
+			}
+			if (!StationRow.IsEmpty())
+			{
+				GEngine->AddOnScreenDebugMessage(12, 0.f, FColor(120, 170, 255), StationRow);
 			}
 		}
 

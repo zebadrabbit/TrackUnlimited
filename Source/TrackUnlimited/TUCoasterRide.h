@@ -16,6 +16,7 @@
 #include "TrainPhysics/RideProfile.h"
 #include "TrackSpline/TrackProfile.h"
 #include "BlockSignal/RideSignals.h"
+#include "BlockSignal/StationProcess.h"
 #include "BlockSignal/TrackDrives.h"
 #include "BlockSignal/TrackSensors.h"
 #include "TUTrackSegment.h"
@@ -202,6 +203,33 @@ public:
 	float HoldNoseClearanceM = 1.f;
 
 	/**
+	 * How long the platform takes, in seconds: riders off, riders on, then
+	 * restraints closed and the operators' walk-round.
+	 *
+	 * THESE ARE NOT WHAT GATES THE DISPATCH. Every step of a station sequence is a
+	 * physical contact — a restraint lock sensor, an airgate switch, an operator's
+	 * all-clear — and the process waits on those, not on a clock. There are no
+	 * riders in this simulation, so something has to assert the contacts a person
+	 * would, and these are that stand-in. They go away when riders arrive.
+	 *
+	 * Treat them as throughput targets, which is what they are on a real
+	 * operation: the whole business of running a coaster is making them smaller,
+	 * and a rider who needs longer to board is a load figure, not a fault.
+	 */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Station",
+		meta = (ClampMin = "0.0", UIMax = "60.0"))
+	float UnloadSeconds = 6.f;
+
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Station",
+		meta = (ClampMin = "0.0", UIMax = "120.0"))
+	float LoadSeconds = 12.f;
+
+	/** Restraints closed, then checked. The all-clear comes at the end of it. */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Station",
+		meta = (ClampMin = "0.0", UIMax = "60.0"))
+	float RestraintCheckSeconds = 4.f;
+
+	/**
 	 * Metres, nose to tail. Zero is a point mass at the heartline.
 	 *
 	 * A train's speed is governed by the height of its centre of mass, so a
@@ -323,6 +351,28 @@ private:
 		ETUSegmentZone Kind = ETUSegmentZone::None;
 	};
 	TArray<FTUZoneSpan> ZoneSpans;
+
+	// One PLATFORM POSITION, with everything it needs to run its own sequence.
+	// Per position rather than per platform, because a high-throughput ride holds
+	// several trains on one platform and dispatches them individually — a rider
+	// who needs longer to board must not hold up the two trains in front. Three
+	// positions would be three of these; every preset here has one.
+	struct FTUPlatform
+	{
+		int32 Zone = INDEX_NONE;
+		FStationProcess Process{EStationRole::Combined};
+		FAutoStationCrew Crew;
+		FStationInputs Inputs;
+	};
+	TArray<FTUPlatform> Platforms;
+
+	// Reads every platform's instruments and runs its crew. Once per frame, at the
+	// top of the scan with the other inputs.
+	void ServeStations(float DeltaSeconds);
+
+	// Will the station at this zone let its train go? True where there is no
+	// station, which is every device that is not a platform.
+	bool StationSaysGo(std::size_t Zone) const;
 
 	// The STOP MARK of each zone: a physical switch bolted to the track that tells
 	// the PLC a trucking train has come far enough. One per zone, so the index is
