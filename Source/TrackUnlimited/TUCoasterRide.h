@@ -473,6 +473,29 @@ private:
 	/** Registration handle for the debug-canvas draw. */
 	FDelegateHandle PanelDrawHandle;
 
+	/**
+	 * THE EVENT LOG, and it is the difference between a status display and a
+	 * record. The panel can say what is holding a train right NOW; without this it
+	 * cannot say what tripped the E-stop thirty seconds ago, and "what happened
+	 * just before it stopped" is the first question anybody asks.
+	 *
+	 * A ring, so it cannot grow without bound on a ride left running overnight, and
+	 * short because a control-room screen shows the last few and an operator scrolls
+	 * for the rest. Appended by the same places that log — a violation, a drive
+	 * fault, an E-stop, a detection disagreement — so there is one story rather than
+	 * two that can disagree.
+	 */
+	struct FTURideEvent
+	{
+		float AtSeconds = 0.f;
+		FString Text;
+		bool bBad = true;
+	};
+	TArray<FTURideEvent> EventLog;
+	float RideClock = 0.f;
+
+	void LogEvent(const FString& Text, bool bBad = true);
+
 	void ToggleControlPanel() { bShowControlPanel = !bShowControlPanel; }
 
 	// Will the station at this zone let its train go? True where there is no

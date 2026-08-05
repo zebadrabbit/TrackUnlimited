@@ -1569,7 +1569,8 @@ void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/
 	const float StripH = 46.f;                     // the schematic, however many blocks
 	const int32 Rows = 2                           // title, status
 		+ 1 + NumDrives                            // DRIVES heading + VFD modules
-		+ (Platforms.Num() > 0 ? 1 + Platforms.Num() + 2 : 0);   // + CONSOLE heading, lamps
+		+ (Platforms.Num() > 0 ? 1 + Platforms.Num() + 2 : 0)    // + CONSOLE heading, lamps
+		+ (EventLog.Num() > 0 ? 1 + FMath::Min(EventLog.Num(), 4) : 0);
 	// The console row sat on the bottom edge, half off it: the section gaps are
 	// worth about a row and a half between them and were not being counted.
 	const float H = Pad * 2.f + Rows * Row + StripH + 34.f;
@@ -1951,8 +1952,35 @@ void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/
 		Lamp(Lx + 186.f, TEXT("DISPATCH READY"),
 			Console != nullptr && Console->Process.IsReadyToDispatch(), PanelGreen);
 		Lamp(Lx + 300.f, TEXT("E-STOP"), bStop, PanelRed);
-		Lamp(Lx + 372.f, TEXT("RESET"), bStop, PanelCyan);
+		// RESET is only a live control once everything has been acknowledged, so it
+		// lights differently from the thing it cannot yet do.
+		Lamp(Lx + 372.f, bStop && Drives->AnyUnacknowledged() ? TEXT("ACK") : TEXT("RESET"),
+			bStop, bStop && Drives->AnyUnacknowledged() ? PanelAmber : PanelCyan);
 		Ty += Row;
+
+		// ---- THE EVENT LOG ------------------------------------------------
+		//
+		// The difference between a status display and a RECORD. Everything above
+		// says what is true now; this says what happened, which is the first thing
+		// anybody asks after a ride stops. Newest first, and fed by the same places
+		// that log, so there is one story rather than two that can disagree.
+		if (EventLog.Num() > 0)
+		{
+			Ty += 4.f;
+			PanelTile(Canvas, Lx, Ty + 5.f, W - Pad * 2.f, 1.f, PanelRule);
+			PanelLabel(Canvas, Lx, Ty, TEXT("EVENTS"), PanelDim);
+			Ty += Row;
+
+			const int32 Show = FMath::Min(EventLog.Num(), 4);
+			for (int32 e = 0; e < Show; ++e)
+			{
+				const FTURideEvent& Ev = EventLog[e];
+				PanelLabel(Canvas, Lx, Ty,
+					FString::Printf(TEXT("%6.1f s"), Ev.AtSeconds), PanelDim);
+				PanelLabel(Canvas, Lx + 56.f, Ty, Ev.Text, Ev.bBad ? PanelRed : PanelDim);
+				Ty += Row;
+			}
+		}
 	}
 }
 
@@ -1962,6 +1990,20 @@ void ATUCoasterRide::PressEmergencyStop()
 	if (Drives && Drives->TripEmergencyStop("operator"))
 	{
 		UE_LOG(LogTemp, Error, TEXT("TrackUnlimited: EMERGENCY STOP — operator."));
+		LogEvent(TEXT("EMERGENCY STOP — operator"));
+	}
+}
+
+void ATUCoasterRide::LogEvent(const FString& Text, bool bBad)
+{
+	// Newest first, capped. Oldest falls off the end rather than the ring wrapping
+	// in place, because the panel wants "the last few" and a wrapped array has to
+	// be unwrapped to give it.
+	EventLog.Insert(FTURideEvent{RideClock, Text, bBad}, 0);
+	const int32 Keep = 8;
+	if (EventLog.Num() > Keep)
+	{
+		EventLog.SetNum(Keep);
 	}
 }
 
@@ -1976,6 +2018,8 @@ void ATUCoasterRide::AcknowledgeFaults()
 		if (Drives->IsFaulted(z) && !Drives->IsAcknowledged(z))
 		{
 			Drives->AcknowledgeFault(z);
+			LogEvent(FString::Printf(TEXT("zone %d fault acknowledged"),
+				static_cast<int32>(z)), false);
 			UE_LOG(LogTemp, Warning,
 				TEXT("TrackUnlimited: drive %d fault ACKNOWLEDGED — seen, not fixed. "
 					"[End] to reset once it is."),
@@ -2013,6 +2057,7 @@ void ATUCoasterRide::ResetEmergencyStop()
 	}
 	ReportedDriveFault.Reset();
 	UE_LOG(LogTemp, Warning, TEXT("TrackUnlimited: emergency stop reset."));
+	LogEvent(TEXT("emergency stop RESET"), false);
 }
 
 void ATUCoasterRide::ServeStations(float DeltaSeconds)
@@ -2132,6 +2177,7 @@ void ATUCoasterRide::CrossCheckOccupancy()
 		if (Why != nullptr && Drives && Drives->TripEmergencyStop("detection disagreement"))
 		{
 			bEmergencyStop = true;
+			LogEvent(FString::Printf(TEXT("block %d: %s"), static_cast<int32>(b), Why));
 			UE_LOG(LogTemp, Error,
 				TEXT("TrackUnlimited: EMERGENCY STOP — block %d: %s. The interlocking says "
 					"%s and the counter says %d train(s)."),
@@ -2491,6 +2537,11 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 		}
 		StopMarks->EndScan();
 	}
+	// Session time, for the event log. Not the wall clock: what matters is how long
+	// before the stop something happened, and a relative figure survives a paused
+	// PIE session where a wall clock does not.
+	RideClock += DeltaSeconds;
+
 	// The Details-panel checkbox, so the stop can be tripped without playing. Read
 	// here rather than in a PostEditChangeProperty because it has to work in PIE.
 	if (bEmergencyStop && Drives && !Drives->IsEmergencyStopped())
@@ -2539,6 +2590,8 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 			// and nothing else: the interlocking detected the one thing it is for
 			// and then let the ride carry on into it. A violation is the definition
 			// of an E-stop condition on real hardware.
+			LogEvent(FString::Printf(TEXT("SIGNALLING VIOLATION — train %d at %.0f m"),
+				t, Trains[t]->GetDistance()));
 			if (Drives && Drives->TripEmergencyStop("signalling violation"))
 			{
 				bEmergencyStop = true;
@@ -2591,6 +2644,8 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 				// ride an operator has to walk out to. The DRIVE still only reports
 				// — deciding what a ride does about a failed motor is the PLC's job,
 				// and this is the PLC doing it.
+				LogEvent(FString::Printf(TEXT("DRIVE FAULT — zone %d, full torque, not gaining"),
+					static_cast<int32>(z)));
 				if (Drives->TripEmergencyStop("drive fault"))
 				{
 					bEmergencyStop = true;
