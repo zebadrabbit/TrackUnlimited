@@ -689,7 +689,7 @@ panel telling its first lie:
 | control | what it is |
 |---|---|
 | `PANEL ENABLE`, `HMI ENABLE` | the console is not authoritative until enabled |
-| `ACKNOWLEDGE` | a fault must be *seen* before it can be reset; ours latch until an E-stop reset |
+| ~~`ACKNOWLEDGE`~~ | **built** — a fault is raised unacknowledged, `[Home]` says "I have seen this", and a reset is REFUSED until it has been. Acknowledging fixes nothing; the two controls are separate because a reset nobody had to read first clears faults nobody knows about. |
 | `MAINTENANCE BYPASS`, `E-STOP LOCKOUT` | lockout/tagout for work on the ride |
 | `OPERATION MODE: TRANSFER` | moving trains on and off the transfer track — needs turnouts |
 | `RIDE START/STOP`, `LIFT START/STOP` | controlled stops, distinct from the emergency one |

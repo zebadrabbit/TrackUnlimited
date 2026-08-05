@@ -1387,6 +1387,16 @@ void ATUCoasterRide::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 		&ATUCoasterRide::ResetEmergencyStop);
 	PlayerInputComponent->BindKey(EKeys::P, IE_Pressed, this,
 		&ATUCoasterRide::ToggleControlPanel);
+	// NOT [A] — that is strafe-left, and acknowledging a fault every time somebody
+	// moved the free camera is exactly the kind of accidental press the whole
+	// acknowledge/reset ordering exists to prevent.
+	//
+	// A real console separates ACKNOWLEDGE and RESET physically, onto different
+	// coloured fields. On a keyboard that separation cannot be meaningful, so the
+	// ordering is enforced in software instead: a reset is REFUSED while anything
+	// is unacknowledged.
+	PlayerInputComponent->BindKey(EKeys::Home, IE_Pressed, this,
+		&ATUCoasterRide::AcknowledgeFaults);
 
 	PlayerInputComponent->BindAxisKey(EKeys::W, this, &ATUCoasterRide::AxisForward);
 	PlayerInputComponent->BindAxisKey(EKeys::S, this, &ATUCoasterRide::AxisBack);
@@ -1955,12 +1965,43 @@ void ATUCoasterRide::PressEmergencyStop()
 	}
 }
 
+void ATUCoasterRide::AcknowledgeFaults()
+{
+	if (!Drives || !Drives->AnyUnacknowledged())
+	{
+		return;
+	}
+	for (std::size_t z = 0; z < Drives->Num(); ++z)
+	{
+		if (Drives->IsFaulted(z) && !Drives->IsAcknowledged(z))
+		{
+			Drives->AcknowledgeFault(z);
+			UE_LOG(LogTemp, Warning,
+				TEXT("TrackUnlimited: drive %d fault ACKNOWLEDGED — seen, not fixed. "
+					"[End] to reset once it is."),
+				static_cast<int32>(z));
+		}
+	}
+}
+
 void ATUCoasterRide::ResetEmergencyStop()
 {
 	// Cleared only here, never because the condition passed. Same reasoning as a
 	// drive fault needing a reset: a stop nobody has looked at has not been dealt
 	// with. Drive faults are cleared with it, because an operator resetting the
 	// ride has been to look at what tripped it.
+	// REFUSED WHILE ANYTHING IS UNACKNOWLEDGED. Every real console has ACKNOWLEDGE
+	// and RESET as two separate controls, and the order between them is the point:
+	// acknowledging says "I have seen this", resetting says "I have dealt with it".
+	// A reset nobody had to read first clears faults nobody knows about.
+	if (Drives && Drives->AnyUnacknowledged())
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("TrackUnlimited: reset REFUSED — a drive fault has not been acknowledged. "
+				"[A] to acknowledge, then [End]."));
+		return;
+	}
+
 	bEmergencyStop = false;
 	if (Drives)
 	{
@@ -2806,8 +2847,11 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 				GEngine->AddOnScreenDebugMessage(13, 0.f, FColor::Red,
 					FString::Printf(
 						TEXT("*** EMERGENCY STOP — %s ***   power is cut to every drive; ")
-						TEXT("trains run to the next brake and hold.   [End] to reset"),
-						UTF8_TO_TCHAR(Drives->EmergencyStopReason())));
+						TEXT("trains run to the next brake and hold.   %s"),
+						UTF8_TO_TCHAR(Drives->EmergencyStopReason()),
+						Drives->AnyUnacknowledged()
+							? TEXT("[Home] acknowledge, then [End] to reset")
+							: TEXT("[End] to reset")));
 			}
 			else
 			{

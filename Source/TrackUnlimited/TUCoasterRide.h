@@ -500,6 +500,9 @@ private:
 	void PressEmergencyStop();
 	void ResetEmergencyStop();
 
+	/** "I have seen this." Silences the alarm; fixes nothing. Reset needs it first. */
+	void AcknowledgeFaults();
+
 	bool bDispatchHeld = false;
 
 	// The STOP MARK of each zone: a physical switch bolted to the track that tells

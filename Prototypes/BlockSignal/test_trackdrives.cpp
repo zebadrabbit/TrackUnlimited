@@ -261,9 +261,27 @@ void TestAFaultDoesNotClearItself()
     }
     assert(D.IsFaulted(0));
 
-    D.ResetFault(0);
+    // AND A RESET IS REFUSED UNTIL IT HAS BEEN ACKNOWLEDGED. Every real console
+    // has ACKNOWLEDGE and RESET as two separate controls, usually not even on the
+    // same coloured field, and the order between them is the point: acknowledging
+    // says "I have SEEN this", resetting says "I have DEALT with it". A reset that
+    // could be pressed without anyone reading what tripped clears faults nobody
+    // knows about, and the two controls become the same button twice.
+    assert(D.IsFaulted(0));
+    assert(!D.IsAcknowledged(0));
+    assert(D.AnyUnacknowledged());
+    assert(!D.ResetFault(0));            // refused - nobody has looked
+    assert(D.IsFaulted(0));
+
+    D.AcknowledgeFault(0);
+    assert(D.IsAcknowledged(0));
+    assert(!D.AnyUnacknowledged());      // seen, but NOT fixed
+    assert(D.IsFaulted(0));              // acknowledging changes nothing else
+
+    assert(D.ResetFault(0));
     assert(!D.IsFaulted(0));
     assert(!D.AnyFaulted());
+    assert(!D.IsAcknowledged(0));        // cleared with the fault, ready for the next
 }
 
 void TestAFaultIsReportedAndNotActedOn()

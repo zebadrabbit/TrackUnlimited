@@ -84,6 +84,12 @@ struct FDriveReading
     double SlippingFor = 0.0;   // seconds of slip AT full torque, consecutively
     bool bLoaded = false;       // is there anything on this drive at all
     bool bFaulted = false;
+
+    // Somebody has SEEN this fault. Not that it is fixed, and not that it has
+    // stopped — only that it is no longer news. A fault is raised unacknowledged
+    // and cannot be reset until it is, because a reset nobody had to read first
+    // clears faults nobody knows about.
+    bool bAcknowledged = false;
 };
 
 class FTrackDrives
@@ -379,16 +385,62 @@ public:
         return false;
     }
 
-    // Manual, and deliberately so — a fault an operator has not looked at is a
-    // fault that has not been dealt with. Same reasoning as a real drive needing a
-    // reset rather than clearing itself once the condition passes.
-    void ResetFault(std::size_t Drive)
+    // ACKNOWLEDGE AND RESET ARE TWO DIFFERENT THINGS, and every real console has
+    // them as two different controls — a blue ACKNOWLEDGE button and a separate
+    // E-STOP RESET, usually not even on the same coloured field.
+    //
+    // Acknowledging says "I have SEEN this". It silences the alarm and nothing
+    // else: the fault is still there, the drive is still faulted, and nothing has
+    // been fixed. Resetting says "I have DEALT with it", and a reset that could be
+    // pressed without the operator ever having read what tripped is a reset that
+    // clears faults nobody knows about.
+    //
+    // So a fault must be acknowledged BEFORE it can be reset. That ordering is the
+    // whole point; without it the two controls are the same button twice.
+    void AcknowledgeFault(std::size_t Drive)
     {
         if (Drive < State.size())
         {
-            State[Drive].bFaulted = false;
-            State[Drive].SlippingFor = 0.0;
+            State[Drive].bAcknowledged = true;
         }
+    }
+
+    bool IsAcknowledged(std::size_t Drive) const
+    {
+        return Drive < State.size() && State[Drive].bAcknowledged;
+    }
+
+    // Any fault nobody has looked at yet. What an alarm horn would be wired to, and
+    // what a panel flashes rather than merely colours.
+    bool AnyUnacknowledged() const
+    {
+        for (const FDriveReading& R : State)
+        {
+            if (R.bFaulted && !R.bAcknowledged) { return true; }
+        }
+        return false;
+    }
+
+    // Manual, and deliberately so — a fault an operator has not looked at is a
+    // fault that has not been dealt with. Same reasoning as a real drive needing a
+    // reset rather than clearing itself once the condition passes.
+    //
+    // REFUSED IF UNACKNOWLEDGED, and returns false so a caller can say why. This is
+    // the one place the two controls are forced into their real order.
+    bool ResetFault(std::size_t Drive)
+    {
+        if (Drive >= State.size() || !State[Drive].bFaulted)
+        {
+            return false;
+        }
+        if (!State[Drive].bAcknowledged)
+        {
+            return false;   // read it first
+        }
+        State[Drive].bFaulted = false;
+        State[Drive].bAcknowledged = false;
+        State[Drive].SlippingFor = 0.0;
+        return true;
     }
 
 private:
