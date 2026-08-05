@@ -850,6 +850,51 @@ void ATUCoasterRide::RebuildFromSegments()
 			CatchSpans.Add(TPair<double, double>(CatchStartS, AccS));
 		}
 
+		// AN INVENTORY OF WHAT IS ACTUALLY ON THIS TRACK. The devices are the part
+		// of a layout you cannot see, and the coloured rails only help once you are
+		// looking at the right thing — so the build says what it found.
+		//
+		// It exists because of a specific confusion that is easy to hit and hard to
+		// diagnose from the viewport: a station authored as a Lift is a lift. It
+		// runs, it holds a train, it is drawn green, and it is wrong in nothing
+		// except what it MEANS — no station process, no boarding sequence, and the
+		// dispatch permissive missing its whole other half. A level saved before a
+		// zone kind existed keeps the old kind until its preset is reloaded, and
+		// nothing about that announces itself.
+		{
+			int32 ByKind[8] = {};
+			for (const FTUZoneSpan& Z : ZoneSpans)
+			{
+				const int32 K = static_cast<int32>(Z.Kind);
+				if (K >= 0 && K < 8) { ++ByKind[K]; }
+			}
+			const int32 Platforms_ =
+				ByKind[static_cast<int32>(ETUSegmentZone::Station)]
+				+ ByKind[static_cast<int32>(ETUSegmentZone::StationUnload)]
+				+ ByKind[static_cast<int32>(ETUSegmentZone::StationLoad)];
+
+			UE_LOG(LogTemp, Log,
+				TEXT("TrackUnlimited: devices — %d station, %d unload, %d load, %d lift, "
+					"%d launch, %d trim brake, %d block brake"),
+				ByKind[static_cast<int32>(ETUSegmentZone::Station)],
+				ByKind[static_cast<int32>(ETUSegmentZone::StationUnload)],
+				ByKind[static_cast<int32>(ETUSegmentZone::StationLoad)],
+				ByKind[static_cast<int32>(ETUSegmentZone::Lift)],
+				ByKind[static_cast<int32>(ETUSegmentZone::Launch)],
+				ByKind[static_cast<int32>(ETUSegmentZone::Brake)],
+				ByKind[static_cast<int32>(ETUSegmentZone::BlockBrake)]);
+
+			if (Platforms_ == 0 && ZoneSpans.Num() > 0)
+			{
+				UE_LOG(LogTemp, Warning,
+					TEXT("TrackUnlimited: no station on this track, so nothing runs a boarding "
+						"sequence and the dispatch permissive is the interlocking alone. If it "
+						"HAS a station, it is authored as a lift or a block brake — which works "
+						"and is drawn green rather than blue. Reload the preset to fix a layout "
+						"saved before the Station kind existed."));
+			}
+		}
+
 		// Reported before it is used, not repaired silently — FRideSignals will
 		// repair it either way, but a walk that produced something malformed is a
 		// bug upstream and should say so rather than be absorbed.
