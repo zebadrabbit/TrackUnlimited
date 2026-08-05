@@ -112,6 +112,7 @@ tests. See [`SIGNALLING.md`](SIGNALLING.md) for what the states mean and why the
 | `BlockSignal.h` | The per-block state machine and the permissive. Knows about blocks and nothing else |
 | `RideSignals.h` | The mapping layer: arc length → block index, each train's nose-and-tail range, one permissive keyed to the destination |
 | `TrackSensors.h` | The sensors a PLC actually reads, and a train counter that derives occupancy from their trips alone |
+| `TrackDrives.h` | The motors it commands, on the output side: ramp, feedback, torque, and a fault that stays quiet on a healthy ride |
 
 `RideSignals.h` consumes **doubles and a train index, not an `FTrain`** — `RearS`, `FrontS`, `dt`.
 That keeps it independent of the physics, lets the assert suite drive it with bare numbers, and makes
@@ -212,6 +213,38 @@ first rather than against a track the first has already moved along.
 built and proven equivalent, so the switch-over has a net to fall into, but it has not happened. See
 [`SIGNALLING.md#what-the-system-actually-knows`](SIGNALLING.md#what-the-system-actually-knows) for the
 full ledger of what still cheats.
+
+### `TrackDrives.h` — the output side, and what a motor can disagree about
+
+The mirror of `TrackSensors.h`. Sensors are the PLC's inputs; drives are its outputs, and the output
+side was a lie in exactly the way the input side had been — `ServeHolds` wrote a speed straight into
+`FTrain`, the track was at that speed the same instant, and there was nothing to disagree with.
+
+A VFD is the muscle for **one** motor: it takes a speed command, ramps its output toward it, and turns
+a tyre or a chain at whatever that means in m/s. Writing a command is the PLC's entire authority over
+the ride — how fast the drive gets there is the drive's business. One drive per zone, indexed the same
+way, so a friction-only trim brake keeps its slot with no motor in it.
+
+**Three numbers that can disagree:** `Commanded` ≠ `Output` is ramping, `Output` ≠ `Actual` is slipping,
+and `Load` = 1 is full torque. Load costs nothing to produce: `FTrain::Step` already clamps what a zone
+asks for to what the zone *has*, and that clamped value is the force on the train.
+
+**Proves:** that a fault needs slip *and* torque *and* time *and* **not gaining**, which is the term
+that took a measurement to find. A launch is sustained slip at full torque *by definition* — 0 to
+38 m/s at 6 m/s² is 6.3 seconds of it — so the first three alone report a healthy launch as a failure,
+and did: the two-train circuit faulted drive 1, its launch, on the first dispatch. Removing the
+"gaining" term still fails that assertion, so the guard is confirmed to bite. Also that an unloaded
+drive cannot slip (without the feedback sweep, every drive faults seconds after its train leaves), that
+a fault does not clear itself, and that a faulted drive keeps driving — what a ride does about a failed
+motor is an E-stop policy, not a property of the motor.
+
+**Records one deliberate default:** no ramp. Output follows command instantly, because every number
+measured before drives existed was measured that way and a default that ramped would silently move all
+of them. A ramp only changes anything if it is slower than the zone's own grip.
+
+One thing it fixed on the way past: zones live on each `FTrain`, so before this every train carried its
+own private idea of what every brake on the ride was doing. A drive is one device, and its output goes
+to every train's copy each frame.
 
 ## `NL2Csv/` — validation fixtures
 

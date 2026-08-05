@@ -16,6 +16,7 @@
 #include "TrainPhysics/RideProfile.h"
 #include "TrackSpline/TrackProfile.h"
 #include "BlockSignal/RideSignals.h"
+#include "BlockSignal/TrackDrives.h"
 #include "BlockSignal/TrackSensors.h"
 #include "TUTrackSegment.h"
 
@@ -319,6 +320,23 @@ private:
 	//
 	// Null until the track builds, exactly like Signals.
 	TUniquePtr<FTrackSensors> StopMarks;
+
+	// ONE DRIVE PER ZONE — the motor at each lift, launch and brake run, and the
+	// only thing the dispatcher is allowed to write to. It takes a speed command,
+	// ramps its output toward it, and reports back what the motor is really doing
+	// and how much torque that is taking; those readings can DISAGREE with the
+	// command, which is the entire reason a control panel exists.
+	//
+	// It also settles something that used to be wrong by construction: zones live
+	// on each FTrain, so before this every train carried its own private idea of
+	// what every brake on the ride was doing. A drive is ONE device, and its output
+	// is written to every train's copy each frame, so they cannot disagree.
+	TUniquePtr<FTrackDrives> Drives;
+
+	// Which drive faults have already been logged. A fault is a standing condition
+	// until an operator resets it, so without this it would print every frame for
+	// the rest of the session and bury everything else in the log.
+	TSet<int32> ReportedDriveFault;
 
 	// Which of those zones can HOLD a train — both push and hold, so drive tyres
 	// and block brakes, never a trim brake or a launch. Also the list of places a

@@ -220,7 +220,15 @@ describes the tiers it would be split across.
 takes a speed command and drives a tyre or chain motor to it, reporting frequency,
 current and torque back. A ride has one per powered device and a PLC telling all
 of them what to do — so "the VFD decided to hold the train" is a category error;
-the PLC decided, the VFD carried it out.
+the PLC decided, the VFD carried it out. `FTrackDrives` is the model: one drive per
+zone, and writing a command is the whole of the PLC's authority over the ride.
+
+**Slip** — a drive's output speed disagreeing with what its load is actually doing.
+The tyres are turning at 5 m/s and the train is doing 2. Ordinary on its own — it
+is how a train gets up to chain speed in the first place — and only a problem
+combined with full torque, time, *and* a gap that is not closing. A launch is
+sustained slip at full torque by definition, which is why "the drive is slipping"
+is not a fault report and "the drive is slipping and losing" is.
 
 **VFD module** — the generated control-panel element for one of those drives:
 target frequency, actual motor feedback, torque draw, ramp rate. The faceplate an

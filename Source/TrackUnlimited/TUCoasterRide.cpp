@@ -573,6 +573,7 @@ void ATUCoasterRide::RebuildFromSegments()
 		StoppedForS.Reset();
 		Signals.Reset();
 		StopMarks.Reset();
+		Drives.Reset();
 		return;
 	}
 
@@ -821,6 +822,18 @@ void ATUCoasterRide::RebuildFromSegments()
 		// the blocks are: move a brake run and you have moved its stop mark.
 		StopMarks = MakeUnique<FTrackSensors>(StopMarkS);
 
+		// And the motors, one per zone. A friction-only trim brake has no motor but
+		// keeps its slot: an index that means the same thing in the zone list and
+		// the drive list is worth more than the empty entry.
+		//
+		// ponytail: no ramp configured, so every output follows its command
+		// instantly and nothing measured before drives existed moves. Give a device
+		// a real FDriveSpec when a gentle station release is worth authoring, not
+		// before — and note that a ramp slower than the zone's grip is the only kind
+		// that changes anything.
+		Drives = MakeUnique<FTrackDrives>(static_cast<std::size_t>(ZoneReleaseSpeed.Num()));
+		ReportedDriveFault.Reset();   // new motors, so old faults are not this ride's
+
 		Signals = MakeUnique<FRideSignals>(BlockStarts, BlockBufferSeconds,
 			static_cast<std::size_t>(FMath::Max(1, DispatchLookahead)),
 			static_cast<std::size_t>(Running), bTrackIsCircuit);
@@ -985,6 +998,19 @@ void ATUCoasterRide::RebuildFromSegments()
 	// profile walks arc length forwards and stops at the end, so on a lapping
 	// train it would never stop and its samples would overwrite each other. The
 	// ride profile is one lap, measured open; the ride itself laps.
+	// Shut at the DRIVE now, not on each train. Every drive is preset — commanded
+	// and already at its output, because a ride opens with its motors running and
+	// one that ramps up from zero on the first frame of the session is a lift chain
+	// standing still when the first train reaches it. Holding devices preset to
+	// zero; everything else to what it was authored at.
+	if (Drives)
+	{
+		for (int32 z = 0; z < ZoneReleaseSpeed.Num(); ++z)
+		{
+			Drives->Preset(static_cast<std::size_t>(z),
+				HoldZoneIndices.Contains(z) ? 0.0 : ZoneReleaseSpeed[z]);
+		}
+	}
 	for (const TUniquePtr<FTrain>& T : Trains)
 	{
 		for (const int32 Zi : HoldZoneIndices)
@@ -1287,7 +1313,10 @@ void ATUCoasterRide::ServeHolds(std::size_t TrainIndex)
 	// A device with nobody standing at it is left where it was, which is closed:
 	// brakes-on is the resting state, and a device that opens because nobody is
 	// asking is a device that fails open.
-	if (!Signals || TrainIndex >= static_cast<std::size_t>(Trains.Num()))
+	// It writes to a DRIVE, not to the track. A command is a request; how fast the
+	// drive gets there, and whether it manages to, is the drive's business and the
+	// panel's story. This is the whole of the PLC's authority over the ride.
+	if (!Signals || !Drives || TrainIndex >= static_cast<std::size_t>(Trains.Num()))
 	{
 		return;
 	}
@@ -1300,7 +1329,7 @@ void ATUCoasterRide::ServeHolds(std::size_t TrainIndex)
 	const std::size_t Zi = static_cast<std::size_t>(Z);
 	if (Signals->CanRelease(TrainIndex, T.GetDistance()))
 	{
-		T.SetZoneTargetSpeed(Zi, ZoneReleaseSpeed[Z]);
+		Drives->Command(Zi, ZoneReleaseSpeed[Z]);
 		return;
 	}
 
@@ -1360,7 +1389,7 @@ void ATUCoasterRide::ServeHolds(std::size_t TrainIndex)
 	// told when to stop must not be told to go. Same direction as every other rule
 	// in this system: fail closed.
 	const bool bAtMark = !StopMarks || Zi >= StopMarks->Num() || StopMarks->IsBlocked(Zi);
-	T.SetZoneTargetSpeed(Zi, bAtMark ? 0.0 : Convey);
+	Drives->Command(Zi, bAtMark ? 0.0 : Convey);
 }
 
 void ATUCoasterRide::Tick(float DeltaSeconds)
@@ -1373,21 +1402,30 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 	}
 	FTrain* const Train = Trains[0].Get();   // the rider's train: camera, readout
 
-	// Every train, then ONE tick. Overlaps live on blocks rather than on trains,
-	// so ticking per train would age a 5 s overlap in 5/N seconds and nothing
-	// anywhere would say so.
+	// THE SCAN CYCLE, and it is the whole shape of this function. IEC 61131-3 runs
+	// a PLC as read inputs -> execute the program -> write outputs, and each step
+	// below is one of those:
+	//
+	//   1. read every switch on the track, once
+	//   2. run the dispatcher for every train against that ONE snapshot
+	//   3. let the drives ramp toward what they were just commanded
+	//   4. write those outputs to the track
+	//   5. step the world, and tell the signalling where everything ended up
+	//   6. read the motors back
+	//
+	// Interleaving 2 with 5 — serving train 1 after train 0 has already moved — is
+	// what a game does and what a PLC cannot: a program that re-reads its inputs
+	// mid-scan acts on two different worlds in one pass.
+	//
+	// Overlaps live on blocks rather than on trains, so Signals->Tick is ONCE PER
+	// FRAME: ticking per train would age a 5 s overlap in 5/N seconds and nothing
+	// anywhere would say so. Same contract for Drives->Tick, which ramps at a rate.
 	//
 	// Holding is done by GATING THE ZONE, not by declining to integrate. The old
 	// version held the train at the station by simply not stepping it, which
 	// worked for exactly one train in exactly one place; a zone commanded to zero
 	// holds a train anywhere there is a device to hold it, and the station stops
 	// being a special case.
-	// THE INPUT HALF OF A PLC SCAN: every switch on the track read ONCE, before any
-	// logic runs. IEC 61131-3 works exactly this way — read inputs, execute the
-	// program, write outputs — and the reason is that a program which re-reads a
-	// sensor mid-scan acts on two different worlds in one pass. It is also why the
-	// second train is served against the same snapshot as the first, rather than
-	// against a track the first has already moved along.
 	if (StopMarks)
 	{
 		StopMarks->BeginScan();
@@ -1402,6 +1440,26 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 	for (int32 t = 0; t < Trains.Num(); ++t)
 	{
 		ServeHolds(static_cast<std::size_t>(t));
+	}
+
+	// One drive, every train's copy of the zone. Zones live on each FTrain, so
+	// before drives existed every train carried its own private idea of what every
+	// brake on the ride was doing; a real brake is ONE device acting on whatever is
+	// in it, and this is what makes them agree.
+	if (Drives)
+	{
+		Drives->Tick(DeltaSeconds);
+		for (int32 t = 0; t < Trains.Num(); ++t)
+		{
+			for (std::size_t z = 0; z < Drives->Num(); ++z)
+			{
+				Trains[t]->SetZoneTargetSpeed(z, Drives->Output(z));
+			}
+		}
+	}
+
+	for (int32 t = 0; t < Trains.Num(); ++t)
+	{
 		Trains[t]->Step(DeltaSeconds);
 
 		// The return is the only record a signalling violation leaves besides the
@@ -1419,6 +1477,44 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 	if (Signals)
 	{
 		Signals->Tick(DeltaSeconds);
+	}
+
+	// The motors report back: what each is actually turning at, and how much of its
+	// authority that is taking. A drive with no train on it goes unreported, which
+	// is how EndFeedback learns it is free-running rather than slipping against a
+	// stale reading from the last train through.
+	if (Drives)
+	{
+		Drives->BeginFeedback();
+		for (int32 t = 0; t < Trains.Num(); ++t)
+		{
+			const double At = Trains[t]->GetDistance();
+			for (std::size_t z = 0; z < Drives->Num(); ++z)
+			{
+				if (Trains[t]->IsInZone(z, At))
+				{
+					Drives->ReportFeedback(z, Trains[t]->GetSpeed(), Trains[t]->GetZoneLoad(z));
+				}
+			}
+		}
+		Drives->EndFeedback();
+
+		// A drive that trips is a ride an operator has to go and look at, so it says
+		// so once rather than every frame. Reported, never acted on: what a ride does
+		// about a failed drive is an E-stop policy and the PLC's decision, not a
+		// property of the motor.
+		for (std::size_t z = 0; z < Drives->Num(); ++z)
+		{
+			if (Drives->IsFaulted(z) && !ReportedDriveFault.Contains(static_cast<int32>(z)))
+			{
+				ReportedDriveFault.Add(static_cast<int32>(z));
+				UE_LOG(LogTemp, Error,
+					TEXT("TrackUnlimited: DRIVE FAULT — zone %d commanded %.1f m/s, output "
+						"%.1f, motor reading %.1f, at full torque and not gaining."),
+					static_cast<int32>(z), Drives->Read(z).Commanded, Drives->Read(z).Output,
+					Drives->Read(z).Actual);
+			}
+		}
 	}
 
 	// Where the rider is sitting, which is a real choice now that cars differ.

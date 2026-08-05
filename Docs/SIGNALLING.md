@@ -44,7 +44,8 @@ PLC has no idea where a train is. It knows that a switch at 872.1 m went high, a
 So the layering is deliberate, and each arrow discards information on purpose:
 
 ```
-FTrain span  →  SENSORS (physical)  →  PLC (logical)  →  VFD (one drive)
+FTrain span  →  SENSORS (physical)  →  PLC (logical)  →  DRIVES (physical)  →  the track
+                                                      ←     feedback       ←
 ```
 
 **`FTrackSensors` is the only layer entitled to a position,** because a proximity switch genuinely *is*
@@ -74,22 +75,63 @@ is not a quirk of this implementation — it is exactly why a real ride is swept
 with every train at a known place before it opens. A negative count is reported separately from an
 over-count, because one means a missed trip and the other means two trains.
 
+### Drives, on the output side
+
+`FTrackDrives` is the mirror of the sensors, and it exists because the output side was a lie in exactly
+the way the input side had been: `ServeHolds` wrote a speed straight into `FTrain`, the track was at
+that speed the same instant, and there was nothing to disagree with and nothing to report back.
+
+A **VFD** is the muscle for one motor. It takes a speed command, ramps its output frequency toward it
+at a configured rate, and turns a tyre or a chain at whatever that frequency means in m/s. **The PLC's
+only authority over the ride is to write a command** — a command is a request, and how fast the drive
+gets there is the drive's business. There is one PLC and many VFDs; one drive per zone, indexed the
+same way, because a zone is where exactly one motor lives.
+
+**Three numbers that can disagree**, and each disagreement means something different:
+
+| | means |
+|---|---|
+| `Commanded` ≠ `Output` | the drive is **ramping**. Normal, and transient. |
+| `Output` ≠ `Actual` | the drive is **slipping** — the tyres are turning at a speed the train is not doing. |
+| `Load` = 1 | the drive is at **full torque** and has nothing left. |
+
+Load is not invented for the panel: `FTrain::Step` already clamps the acceleration a zone asks for to
+what that zone *has*, and the clamped value is the force on the train. Reporting it is the whole of it.
+A chain holding a train at steady speed up a gradient sits at whatever fraction the gradient and the
+losses need, which is the reading that says how close a hill is to being too steep for its chain.
+
+**A fault needs slip *and* torque *and* time *and* not gaining** — and that last term took a
+measurement to find. A **launch is sustained slip at full torque by definition**: 0 to 38 m/s at
+6 m/s² is 6.3 seconds of the drive flat out against a train nowhere near its output speed. Slip,
+torque and time alone report that healthy launch as a failure, and did — the two-train circuit faulted
+its launch drive on the first dispatch. What separates a launch from a stall is not how big the gap is
+or how long it lasts, but whether it is **closing**. A drive that is winning is doing its job, however
+hard it is working; a drive at full torque making no progress is a stalled lift, a failed launch, or a
+brake that is not biting.
+
+A fault is **reported, never acted on**. A real VFD trips its output and coasts; this one raises a flag
+and keeps driving, because what a ride does about a failed drive is an E-stop policy and the PLC's
+decision, not a property of the motor.
+
+Ramping defaults to **off** — output follows command instantly — because every number this project
+measured before drives existed was measured that way, and a default that ramped would silently move all
+of them. A ramp only changes anything if it is *slower* than the zone's own grip.
+
+Drives also settled something that was wrong by construction. Zones live on each `FTrain`, so before
+this every train carried its own private idea of what every brake on the ride was doing. A drive is one
+device, and its output is written to every train's copy each frame, so they cannot disagree.
+
 **Inputs are read once per scan.** IEC 61131-3 programs run *read inputs → execute → write outputs*,
-and the model does the same: every switch is sampled at the top of the frame, before any logic runs, so
-the second train is served against the same snapshot as the first rather than against a track the first
-has already moved along. `FRideSignals` plus `ServeHolds` **is** the PLC program.
+and the tick is that shape end to end: read every switch once, run the dispatcher for every train
+against that one snapshot, let the drives ramp, write the outputs, step the world, read the motors
+back. Interleaving the program with the physics — serving train 1 after train 0 has already moved — is
+what a game does and what a PLC cannot. `FRideSignals` plus `ServeHolds` **is** the PLC program.
 
 **What still cheats, honestly.** `FRideSignals` is still handed each train's nose-and-tail span every
 frame rather than reading the counter; the sensor layer is built and proven equivalent underneath it,
 but the switch-over has not happened. `ServeHolds` still asks `FindHoldZoneAt(GetDistance())` to decide
-which device it is standing at, which a PLC would get from block occupancy. And zones are owned
-**per train** rather than by the track, where a real brake is one device acting on whatever is in it.
-None of the three is hidden by a wrapper that would make it look solved.
-
-**VFDs are not modelled yet.** A zone target speed is currently a command that takes effect
-instantaneously and reports nothing back. A real drive has a ramp rate, a torque limit, a current draw
-and a feedback signal that can disagree with the command — which is exactly the disagreement a control
-panel exists to show. See [the generated control panel](#the-generated-control-panel).
+which device it is standing at, which a PLC would get from block occupancy. Neither is hidden behind a
+wrapper that would make it look solved.
 
 ## The block state machine
 

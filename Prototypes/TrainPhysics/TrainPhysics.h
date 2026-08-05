@@ -289,6 +289,44 @@ public:
         return -1;
     }
 
+    // Is this train's centre inside that zone? Deliberately the plain span test
+    // FindHoldZoneAt does WITHOUT the both-authorities filter — a drive wants to
+    // know whether it has a train on it, which a trim brake and a launch also do.
+    bool IsInZone(std::size_t Index, double S) const
+    {
+        return Index < Zones.size() && S >= Zones[Index].StartS && S <= Zones[Index].EndS;
+    }
+
+    // THE MOTOR'S FEEDBACK. What that zone's drive actually delivered on the last
+    // step, in m/s^2 of tractive acceleration — positive pushing, negative holding
+    // back. Nothing new is computed for this: Step already clamps the acceleration
+    // a zone asks for to what the zone HAS, and that clamped value is the force on
+    // the train. Reporting it is the whole of it.
+    double GetZoneAppliedAccel(std::size_t Index) const
+    {
+        return Index < ZoneApplied.size() ? ZoneApplied[Index] : 0.0;
+    }
+
+    // The same number as a fraction of that zone's authority, which is TORQUE —
+    // the bar on a VFD panel. One is the drive flat out with nothing left to give;
+    // a lift chain holding a train at steady speed on a gradient sits at whatever
+    // fraction the gradient and the losses need, which is the reading that says
+    // how close a hill is to being too steep for its chain.
+    //
+    // NOT reliable for OVERLAPPING zones: each reports what it asked for, and only
+    // the most restrictive one actually acted. Overlaps are an authoring error the
+    // validator already reports, and resolving them here would hide it.
+    double GetZoneLoad(std::size_t Index) const
+    {
+        if (Index >= ZoneApplied.size())
+        {
+            return 0.0;
+        }
+        const double A = ZoneApplied[Index];
+        const double Authority = A >= 0.0 ? Zones[Index].MaxAccel : Zones[Index].MaxDecel;
+        return Authority > 0.0 ? std::min(1.0, std::fabs(A) / Authority) : 0.0;
+    }
+
     void Place(double S, double Speed)
     {
         DistanceAlong = std::max(0.0, std::min(Track.TotalLength(), S));
@@ -454,14 +492,19 @@ public:
         // fails to hold the train, which is the physically correct outcome.
         bool bInZone = false;
         double ZoneAccel = 0.0;
-        for (const FTrackZone& Zone : Zones)
+        // Per-zone tractive force, kept so a drive can report its own torque. An
+        // assign on a same-sized vector does not reallocate, so this costs a fill.
+        ZoneApplied.assign(Zones.size(), 0.0);
+        for (std::size_t zi = 0; zi < Zones.size(); ++zi)
         {
+            const FTrackZone& Zone = Zones[zi];
             if (S0 < Zone.StartS || S0 > Zone.EndS)
             {
                 continue;
             }
             const double Needed = (Zone.TargetSpeed - VelocityMs) / DeltaSeconds - GravityAccel + Resistive;
             const double Applied = std::max(-Zone.MaxDecel, std::min(Zone.MaxAccel, Needed));
+            ZoneApplied[zi] = Applied;
             // Overlapping zones are an authoring error, but a ride control
             // system should fail toward the slower answer, so the most
             // restrictive one wins rather than whichever was added last.
@@ -708,6 +751,12 @@ private:
     const FTrack& Track;
     FTrainConfig Config;
     std::vector<FTrackZone> Zones;
+
+    // Tractive acceleration each zone delivered on the last step, so a drive can
+    // report its own torque without the physics having to be asked twice. Written
+    // by Step, sized from Zones there — a zone added mid-run therefore reads zero
+    // until the next step rather than indexing out of range.
+    std::vector<double> ZoneApplied;
 
     // Arc-length spans a train cannot roll back through. A pair rather than a
     // struct because that is genuinely all a catch is — no speed, no authority,

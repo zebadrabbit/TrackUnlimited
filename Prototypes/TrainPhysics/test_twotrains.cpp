@@ -26,6 +26,7 @@
 // real fix is S -= TotalLength once FTrack can say it is a circuit.
 
 #include "../BlockSignal/RideSignals.h"
+#include "../BlockSignal/TrackDrives.h"
 #include "../BlockSignal/TrackSensors.h"
 #include "../TrackSpline/TrackIO.h"
 #include "../TrackSpline/TrackProfile.h"
@@ -274,8 +275,12 @@ FCircuit BuildCircuit(FTrain* Tr)
 // It asks about the train's CENTRE because that is what FTrain::Step tests a zone
 // against, and because zones and blocks come from the same walk, so a zone never
 // straddles a block boundary and "the block my centre is in" is unambiguous.
+// It writes to a DRIVE, not to the track. A command is a request; how fast the
+// drive gets there, and whether it manages to, is the drive's business and the
+// panel's story. This is the whole of the PLC's authority over the ride.
 void ServeHolds(FTrain& Tr, const FRideSignals& Sig, std::size_t Id,
-                const std::vector<double>& Authored, const FTrackSensors& Marks)
+                const std::vector<double>& Authored, const FTrackSensors& Marks,
+                FTrackDrives& Drives)
 {
     const int Z = Tr.FindHoldZoneAt(Tr.GetDistance());
     if (Z < 0)
@@ -285,7 +290,7 @@ void ServeHolds(FTrain& Tr, const FRideSignals& Sig, std::size_t Id,
     const std::size_t Zi = static_cast<std::size_t>(Z);
     if (Sig.CanRelease(Id, Tr.GetDistance()))
     {
-        Tr.SetZoneTargetSpeed(Zi, Authored[Zi]);
+        Drives.Command(Zi, Authored[Zi]);
         return;
     }
 
@@ -345,7 +350,59 @@ void ServeHolds(FTrain& Tr, const FRideSignals& Sig, std::size_t Id,
     // margin, which is what a margin is for, and the clearance stays under a metre.
     // ponytail: 1.5 m/s of crawl, a maintenance-pace guess.
     const double Convey = std::min(Authored[Zi], 1.5);
-    Tr.SetZoneTargetSpeed(Zi, Marks.IsBlocked(Zi) ? 0.0 : Convey);
+    Drives.Command(Zi, Marks.IsBlocked(Zi) ? 0.0 : Convey);
+}
+
+// The drives as the ride opens: every one already running at its authored speed,
+// except the holding devices, which rest CLOSED. Preset rather than commanded,
+// because a drive that ramps up from zero on the first frame of the session is a
+// lift chain standing still when the first train reaches it.
+FTrackDrives OpenDrives(const FTrain& Tr, const FCircuit& C)
+{
+    FTrackDrives D(C.Authored.size());
+    for (std::size_t z = 0; z < C.Authored.size(); ++z)
+    {
+        const FTrackZone Zone = Tr.GetZone(z);
+        const bool bHolds = Tr.FindHoldZoneAt(0.5 * (Zone.StartS + Zone.EndS)) >= 0;
+        D.Preset(z, bHolds ? 0.0 : C.Authored[z]);
+    }
+    return D;
+}
+
+// THE OUTPUT HALF OF THE SCAN: one drive, and every train's copy of that zone
+// gets its output. A real brake is ONE device acting on whatever is in it, and
+// this is what makes the per-train zone lists agree about that — before drives
+// existed, each train carried its own independent idea of what every brake on the
+// ride was doing.
+void DriveTheTrack(const FTrackDrives& D, const std::vector<FTrain*>& Trains)
+{
+    for (FTrain* Tr : Trains)
+    {
+        for (std::size_t z = 0; z < D.Num(); ++z)
+        {
+            Tr->SetZoneTargetSpeed(z, D.Output(z));
+        }
+    }
+}
+
+// And the feedback the other way: what the motor is turning at, and how much of
+// its authority that is taking. A drive with no train on it is left unreported,
+// which is how EndFeedback learns it is free-running rather than slipping against
+// a stale reading from the last train through.
+void ReadTheDrives(FTrackDrives& D, const std::vector<FTrain*>& Trains)
+{
+    D.BeginFeedback();
+    for (const FTrain* Tr : Trains)
+    {
+        for (std::size_t z = 0; z < D.Num(); ++z)
+        {
+            if (Tr->IsInZone(z, Tr->GetDistance()))
+            {
+                D.ReportFeedback(z, Tr->GetSpeed(), Tr->GetZoneLoad(z));
+            }
+        }
+    }
+    D.EndFeedback();
 }
 
 // The input half of a PLC scan: every switch on the track read ONCE, before any
@@ -652,6 +709,7 @@ void TestTwoTrainsQueueBeforeTheStation()
     const int Release = 240 * 45;
 
     FTrackSensors Marks(C.StopMarkS);
+    FTrackDrives Drives = OpenDrives(A, C);
     const std::vector<FTrain*> Both = {&A, &B};
 
     for (int Frame = 0; Frame < 240 * 120; ++Frame)
@@ -659,16 +717,23 @@ void TestTwoTrainsQueueBeforeTheStation()
         ScanStopMarks(Marks, Both, false, T.TotalLength());
         if (Frame >= Release)
         {
-            ServeHolds(A, Sig, 0, C.Authored, Marks);
+            ServeHolds(A, Sig, 0, C.Authored, Marks, Drives);
+        }
+        ServeHolds(B, Sig, 1, C.Authored, Marks, Drives);
+        Drives.Tick(Dt);
+        DriveTheTrack(Drives, Both);
+
+        if (Frame >= Release)
+        {
             A.Step(Dt);
         }
-        ServeHolds(B, Sig, 1, C.Authored, Marks);
         B.Step(Dt);
 
         // Both trains, then ONE tick. Overlaps live on blocks, not on trains.
         assert(Sig.Update(0, A.GetRearS(), A.GetFrontS()));
         assert(Sig.Update(1, B.GetRearS(), B.GetFrontS()));
         Sig.Tick(Dt);
+        ReadTheDrives(Drives, Both);
 
         for (std::size_t b = 0; b < Sig.NumBlocks(); ++b)
         {
@@ -749,6 +814,14 @@ struct FRunResult
     // two is the crawl overshoot, and what is left of the clearance after it is
     // the safety margin the ride really achieves. SIGNALLING.md quotes this.
     std::vector<double> ParkedNoseS;
+
+    // Per drive, the most torque it was ever asked for, and whether any drive
+    // tripped. A ride that never faults a drive over a full run is the claim worth
+    // asserting: the fault condition has to be quiet when nothing is wrong, or it
+    // is noise rather than a diagnostic.
+    std::vector<double> PeakLoad;
+    bool bDriveFaulted = false;
+    int FirstFaultedDrive = -1;   // which one, so a fault is a place to go and look
 };
 
 // The actor's tick, N trains, for Seconds of ride. One place, because the only
@@ -783,10 +856,12 @@ FRunResult RunTrains(std::size_t N, std::size_t Lookahead, double Seconds)
     FRunResult R;
     R.Laps.assign(N, 0);
     R.ParkedNoseS.assign(C.Authored.size(), 0.0);
+    R.PeakLoad.assign(C.Authored.size(), 0.0);
     std::vector<double> Prev(N);
     for (std::size_t t = 0; t < N; ++t) { Prev[t] = Owned[t]->GetDistance(); }
 
     FTrackSensors Marks(C.StopMarkS);
+    FTrackDrives Drives = OpenDrives(*Owned[0], C);
     std::vector<FTrain*> All;
     for (std::size_t t = 0; t < N; ++t) { All.push_back(Owned[t].get()); }
 
@@ -796,7 +871,13 @@ FRunResult RunTrains(std::size_t N, std::size_t Lookahead, double Seconds)
         ScanStopMarks(Marks, All, true, T.TotalLength());
         for (std::size_t t = 0; t < N; ++t)
         {
-            ServeHolds(*Owned[t], Sig, t, C.Authored, Marks);
+            ServeHolds(*Owned[t], Sig, t, C.Authored, Marks, Drives);
+        }
+        Drives.Tick(Dt);
+        DriveTheTrack(Drives, All);
+
+        for (std::size_t t = 0; t < N; ++t)
+        {
             Owned[t]->Step(Dt);
             Sig.Update(t, Owned[t]->GetRearS(), Owned[t]->GetFrontS());
 
@@ -822,6 +903,7 @@ FRunResult RunTrains(std::size_t N, std::size_t Lookahead, double Seconds)
             }
         }
         Sig.Tick(Dt);
+        ReadTheDrives(Drives, All);
         for (std::size_t a = 0; a < N; ++a)
         {
             for (std::size_t b = a + 1; b < N; ++b)
@@ -830,6 +912,15 @@ FRunResult RunTrains(std::size_t N, std::size_t Lookahead, double Seconds)
                 {
                     if (Sig.OccupiedBy(a, k) && Sig.OccupiedBy(b, k)) { R.bShared = true; }
                 }
+            }
+        }
+        for (std::size_t z = 0; z < Drives.Num(); ++z)
+        {
+            R.PeakLoad[z] = std::max(R.PeakLoad[z], Drives.Read(z).Load);
+            if (Drives.IsFaulted(z))
+            {
+                if (!R.bDriveFaulted) { R.FirstFaultedDrive = static_cast<int>(z); }
+                R.bDriveFaulted = true;
             }
         }
     }
@@ -927,6 +1018,37 @@ void TestAHeldTrainParksInsideItsBlock()
     assert(R.ClosestToStationStart > TrainLen * 0.5);
     assert(R.ClosestToStationStart < 26.0 - TrainLen * 0.5);
     assert(R.ClosestToStationStart > 26.0 - TrainLen * 0.5 - 2.0);   // near the far end
+}
+
+void TestTheDrivesTellTheStoryOfTheRide()
+{
+    // THE OUTPUT SIDE, on the real circuit. A drive's three numbers — commanded,
+    // output, actual — plus its torque are what a control panel is a picture of,
+    // and this asserts they behave over a full session rather than in isolation.
+    const FRunResult R = RunTrains(4, 1, 420.0);
+
+    // 1. NOT ONE DRIVE FAULTED. This is the claim worth having: a diagnostic that
+    //    fires while the ride is working correctly is noise, not a diagnostic. It
+    //    is also the assertion that caught the launch — slip, torque and time alone
+    //    reported a healthy 0-to-38 launch as a failure, because a launch IS
+    //    sustained slip at full torque. The rule needs "and not gaining".
+    // Named on the way out, on stderr so it survives the abort. A fault that says
+    // only "something tripped" is a fault nobody can act on, and that is as true
+    // of this assertion as it is of a control panel.
+    if (R.bDriveFaulted)
+    {
+        std::fprintf(stderr, "drive %d faulted\n", R.FirstFaultedDrive);
+    }
+    assert(!R.bDriveFaulted);
+
+    // 2. Every drive on the ride was worked to its limit at some point. A block
+    //    brake stopping a train from speed, a launch, a chain starting a train —
+    //    all of them saturate, and a drive that never does is oversized for its
+    //    job, which is a thing a panel would show an engineer.
+    for (std::size_t z = 0; z < R.PeakLoad.size(); ++z)
+    {
+        assert(R.PeakLoad[z] > 0.99);
+    }
 }
 
 void TestTheCircuitCarriesFourTrains()
@@ -1028,17 +1150,26 @@ void TestTheActorsOwnLoopRunsTwoTrains()
     bool bShared = false;
 
     FTrackSensors Marks(C.StopMarkS);
+    FTrackDrives Drives = OpenDrives(A, C);
     const std::vector<FTrain*> All = {&A, &B};
 
     for (int Frame = 0; Frame < 240 * 600; ++Frame)
     {
-        // The scan cycle: inputs first, then the program, then the outputs. Reading
-        // the switches once at the top of the frame is what a PLC does, and it is
-        // why the second train is served against the same snapshot as the first.
+        // THE SCAN CYCLE, and it is the whole shape of the tick: read the inputs,
+        // run the program for every train against that one snapshot, let the drives
+        // ramp, write the outputs, then step the world. Interleaving the program
+        // with the physics — serving train 1 after train 0 has already moved — is
+        // what a game does and what a PLC cannot.
         ScanStopMarks(Marks, All, true, T.TotalLength());
         for (std::size_t t = 0; t < 2; ++t)
         {
-            ServeHolds(*Trains[t], Sig, t, C.Authored, Marks);
+            ServeHolds(*Trains[t], Sig, t, C.Authored, Marks, Drives);
+        }
+        Drives.Tick(Dt);
+        DriveTheTrack(Drives, All);
+
+        for (std::size_t t = 0; t < 2; ++t)
+        {
             Trains[t]->Step(Dt);
             Sig.Update(t, Trains[t]->GetRearS(), Trains[t]->GetFrontS());
 
@@ -1053,6 +1184,7 @@ void TestTheActorsOwnLoopRunsTwoTrains()
             if (Trains[t]->GetFrontS() < Trains[t]->GetRearS()) { ++SeamStraddles[t]; }
         }
         Sig.Tick(Dt);
+        ReadTheDrives(Drives, All);
 
         for (std::size_t b = 0; b < Sig.NumBlocks(); ++b)
         {
@@ -1096,6 +1228,7 @@ int main()
     TestTwoTrainsQueueBeforeTheStation();
     TestTheCatchHoldsAFailedLaunchOnTheRealLayout();
     TestAHeldTrainParksInsideItsBlock();
+    TestTheDrivesTellTheStoryOfTheRide();
     TestTheCircuitCarriesFourTrains();
     TestTheActorsOwnLoopRunsTwoTrains();
 
