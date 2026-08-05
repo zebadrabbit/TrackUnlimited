@@ -645,6 +645,8 @@ void ATUCoasterRide::RebuildFromSegments()
 		Signals.Reset();
 		StopMarks.Reset();
 		Drives.Reset();
+		BlockSensors.Reset();
+		Counter.Reset();
 		return;
 	}
 
@@ -1013,6 +1015,21 @@ void ATUCoasterRide::RebuildFromSegments()
 			static_cast<std::size_t>(FMath::Max(1, DispatchLookahead)),
 			static_cast<std::size_t>(Running), bTrackIsCircuit);
 
+		// The second detection method: a switch at every block boundary, and a
+		// counter that derives occupancy from their trips and nothing else.
+		// Circuits only — see the header for why the ring wrap is a lie on an open
+		// layout. Seeded once the trains are placed, further down.
+		if (bTrackIsCircuit)
+		{
+			BlockSensors = MakeUnique<FTrackSensors>(BlockStarts);
+			Counter = MakeUnique<FBlockCounter>(*BlockSensors);
+		}
+		else
+		{
+			BlockSensors.Reset();
+			Counter.Reset();
+		}
+
 		// THE BRAKING-DISTANCE RULE, expressed at last. Tell the signalling which
 		// blocks contain a device that can stop a train and let it go again, and
 		// its permissive clears all the way to the next one of those rather than a
@@ -1102,6 +1119,22 @@ void ATUCoasterRide::RebuildFromSegments()
 		{
 			Signals->Update(static_cast<std::size_t>(t), Trains[t]->GetRearS(),
 				Trains[t]->GetFrontS());
+		}
+	}
+
+	// And SEED THE COUNTER the same way, which is the operator's sweep: walk the
+	// ride, confirm where every train is, zero the counters. Without it the counter
+	// is right in the middle of a run and wrong at the start of one — a train
+	// beginning inside block 0 sends the block BEHIND it to minus one the moment
+	// its tail leaves the first sensor, counted out of somewhere it was never
+	// counted into. Real rides are swept for exactly this reason.
+	if (Counter && BlockSensors && Signals)
+	{
+		ScanBlockSensors();
+		Counter->Scan();
+		for (int32 t = 0; t < Trains.Num(); ++t)
+		{
+			Counter->Seed(Signals->BlockAt(Trains[t]->GetDistance()));
 		}
 	}
 
@@ -1464,6 +1497,81 @@ void ATUCoasterRide::ServeStations(float DeltaSeconds)
 				TrainLoaded[Who] = true;
 			}
 		}
+	}
+}
+
+void ATUCoasterRide::ScanBlockSensors()
+{
+	if (!BlockSensors)
+	{
+		return;
+	}
+	BlockSensors->BeginScan();
+	for (int32 t = 0; t < Trains.Num(); ++t)
+	{
+		// Always circuit-wrapped: FBlockCounter is a counter over a RING, and this
+		// only exists on a layout that is one.
+		BlockSensors->Cover(Trains[t]->GetRearS(), Trains[t]->GetFrontS(),
+			true, Track.TotalLength());
+	}
+	BlockSensors->EndScan();
+}
+
+void ATUCoasterRide::CrossCheckOccupancy()
+{
+	// TWO INDEPENDENT MEANS OF KNOWING WHERE THE TRAINS ARE, AND THEY MUST AGREE.
+	// FRideSignals is handed each train's exact span every frame; the counter has
+	// nothing but rising and falling edges at the block boundaries. They are
+	// derived from different information, so a disagreement means one of them is
+	// wrong and neither can say which — which is precisely why a real installation
+	// pays for a second detection method rather than a better single one.
+	//
+	// Verified in test_twotrains.cpp: on both circuits, at every train count, the
+	// two agree on every block on every frame. Breaking the counter's falling-edge
+	// rule makes that assertion fail, so the check bites.
+	if (!Counter || !BlockSensors || !Signals)
+	{
+		return;
+	}
+	ScanBlockSensors();
+	Counter->Scan();
+
+	for (std::size_t b = 0; b < Counter->NumBlocks(); ++b)
+	{
+		const TCHAR* Why = nullptr;
+		if (Counter->IsOverOccupied(b))
+		{
+			// Two trains counted into a block nothing has counted out of. Derived
+			// from switches alone, so it is a collision detected without anything
+			// ever having known a position.
+			Why = TEXT("two trains counted into one block");
+		}
+		else if (Counter->IsOccupied(b) != Signals->Occupies(b))
+		{
+			Why = TEXT("occupancy disagrees with the train counter");
+		}
+		if (Why != nullptr && Drives && Drives->TripEmergencyStop("detection disagreement"))
+		{
+			bEmergencyStop = true;
+			UE_LOG(LogTemp, Error,
+				TEXT("TrackUnlimited: EMERGENCY STOP — block %d: %s. The interlocking says "
+					"%s and the counter says %d train(s)."),
+				static_cast<int32>(b), Why,
+				Signals->Occupies(b) ? TEXT("occupied") : TEXT("clear"),
+				Counter->TrainsIn(b));
+		}
+	}
+
+	// Below zero is not a collision, it is a LIE: the counter has been told a train
+	// left somewhere it was never told one arrived. Seeding is wrong or a trip was
+	// missed, and either way it can no longer be trusted to detect anything.
+	if (Counter->IsInconsistent() && Drives
+		&& Drives->TripEmergencyStop("train counter inconsistent"))
+	{
+		bEmergencyStop = true;
+		UE_LOG(LogTemp, Error,
+			TEXT("TrackUnlimited: EMERGENCY STOP — a block counted below zero. A trip was "
+				"missed or the counters were seeded wrong; sweep the ride and reset."));
 	}
 }
 
@@ -1833,6 +1941,7 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 	{
 		Signals->Tick(DeltaSeconds);
 	}
+	CrossCheckOccupancy();
 
 	// The motors report back: what each is actually turning at, and how much of its
 	// authority that is taking. A drive with no train on it goes unreported, which

@@ -413,6 +413,12 @@ private:
 	// top of the scan with the other inputs.
 	void ServeStations(float DeltaSeconds);
 
+	/** Covers the block-boundary switches with every train's span. Once per scan. */
+	void ScanBlockSensors();
+
+	/** Compares the counter against the interlocking; a difference stops the ride. */
+	void CrossCheckOccupancy();
+
 	// Will the station at this zone let its train go? True where there is no
 	// station, which is every device that is not a platform.
 	bool StationSaysGo(std::size_t Zone) const;
@@ -452,6 +458,25 @@ private:
 	// what every brake on the ride was doing. A drive is ONE device, and its output
 	// is written to every train's copy each frame, so they cannot disagree.
 	TUniquePtr<FTrackDrives> Drives;
+
+	// A SECOND, INDEPENDENT MEANS OF KNOWING WHERE THE TRAINS ARE. One sensor per
+	// block boundary, and a counter deriving occupancy from their trips alone — no
+	// position, no train identity, nothing the interlocking is reading.
+	//
+	// The point is the DISAGREEMENT. FRideSignals is handed each train's exact span
+	// every frame; this has nothing but rising and falling edges. Two ways of
+	// knowing the same fact, arrived at from different information, and if they
+	// ever differ then one of them is wrong and neither can say which. That is what
+	// a real installation buys with a second detection method, and it is what turns
+	// the sensor layer from a proven-equivalent curiosity into something the ride's
+	// safety actually rests on.
+	//
+	// CIRCUITS ONLY. FBlockCounter is a counter over a RING — block N-1 is bounded
+	// by sensor N-1 and sensor 0 — and on a point-to-point layout that wrap is a
+	// lie: sensor 0 going low is a train being placed at the start, not one leaving
+	// the end. Null on an open layout, deliberately.
+	TUniquePtr<FTrackSensors> BlockSensors;
+	TUniquePtr<FBlockCounter> Counter;
 
 	// Which drive faults have already been logged. A fault is a standing condition
 	// until an operator resets it, so without this it would print every frame for

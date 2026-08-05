@@ -617,6 +617,19 @@ void ScanStopMarks(FTrackSensors& Marks, const std::vector<FTrain*>& Trains,
     Marks.EndScan();
 }
 
+// The other switches: one at every block boundary, feeding the train counter.
+// Always circuit-wrapped, because a counter over a ring is the only shape
+// FBlockCounter has — block N-1 is bounded by sensor N-1 and sensor 0.
+void ScanBlockSensors(FTrackSensors& S, const std::vector<FTrain*>& Trains, double Total)
+{
+    S.BeginScan();
+    for (const FTrain* Tr : Trains)
+    {
+        S.Cover(Tr->GetRearS(), Tr->GetFrontS(), true, Total);
+    }
+    S.EndScan();
+}
+
 // Brakes on, before anyone asks. A holding device that starts at its authored
 // speed is open for the frame it takes a dispatcher to notice a train arriving,
 // and that frame is a train being pushed through a red signal.
@@ -1025,6 +1038,13 @@ struct FRunResult
     int FirstViolationTrain = -1;
     double FirstViolationS = 0.0;
 
+    // The two independent means of knowing where the trains are, disagreeing.
+    // Either one of them is wrong, and neither can say which.
+    double FirstDivergence = -1.0;
+    int FirstDivergenceBlock = -1;
+    bool bCounterOverOccupied = false;
+    bool bCounterInconsistent = false;
+
     std::vector<double> FinalSpeed;     // per train, at the end of the run
     std::vector<double> FinalS;
     std::vector<int> FinalHoldZone;     // -1 if it did not stop at a holding device
@@ -1079,6 +1099,30 @@ FRunResult RunTrains(std::size_t N, std::size_t Lookahead, double Seconds,
     // ride is empty, and everything at a platform is boarded before it opens.
     std::vector<bool> Loaded(N, true);
 
+    // A SECOND, INDEPENDENT MEANS OF KNOWING WHERE THE TRAINS ARE. One sensor per
+    // block boundary, and a counter deriving occupancy from their trips alone —
+    // no position, no train identity, nothing the interlocking is reading.
+    //
+    // The point is the DISAGREEMENT. Two ways of knowing the same fact, arrived at
+    // from different information, and if they ever differ then one of them is
+    // wrong and neither can say which. That is what a real installation buys with
+    // its second detection method, and it is worth more than either method alone:
+    // the counter proved equal to perfect knowledge over three laps in its own
+    // suite, and this is what keeps it equal on every layout after.
+    FTrackSensors BlockSensors(C.Boundaries);
+    FBlockCounter Counter(BlockSensors);
+    {
+        // SEEDED from where the trains actually are, which is the operator's sweep
+        // before the ride opens. Without it the counter is right in the middle of a
+        // run and wrong at the start of one.
+        ScanBlockSensors(BlockSensors, All, T.TotalLength());
+        Counter.Scan();
+        for (std::size_t t = 0; t < N; ++t)
+        {
+            Counter.Seed(Sig.BlockAt(Owned[t]->GetDistance()));
+        }
+    }
+
     const double Dt = 1.0 / 240.0;
     for (int F = 0; F < static_cast<int>(240.0 * Seconds); ++F)
     {
@@ -1129,6 +1173,22 @@ FRunResult RunTrains(std::size_t N, std::size_t Lookahead, double Seconds,
         }
         Sig.Tick(Dt);
         ReadTheDrives(Drives, All);
+
+        // THE CROSS-CHECK, every frame, on every block. The interlocking is handed
+        // each train's span; the counter has only edges. They must agree.
+        ScanBlockSensors(BlockSensors, All, T.TotalLength());
+        Counter.Scan();
+        if (Counter.IsInconsistent()) { R.bCounterInconsistent = true; }
+        for (std::size_t b = 0; b < Sig.NumBlocks(); ++b)
+        {
+            if (Counter.IsOverOccupied(b)) { R.bCounterOverOccupied = true; }
+            if (Counter.IsOccupied(b) != Sig.Occupies(b) && R.FirstDivergence < 0.0)
+            {
+                R.FirstDivergence = F * Dt;
+                R.FirstDivergenceBlock = static_cast<int>(b);
+            }
+        }
+
         for (std::size_t a = 0; a < N; ++a)
         {
             for (std::size_t b = a + 1; b < N; ++b)
@@ -1299,6 +1359,40 @@ void TestSeveralHoldingDevicesInARowStaySeveral()
     AddStraight(Same, 20.0, EZone::Lift, 4.0);
     const FCircuit M = BuildCircuitFrom(nullptr, Same);
     assert(M.Authored.size() == 1);
+}
+
+void TestTwoIndependentMeansOfKnowingAgreeOnEveryBlock()
+{
+    // THE SENSOR LAYER DOING SAFETY WORK RATHER THAN SITTING DECORATIVE. Until
+    // this, FBlockCounter was proven equal to perfect knowledge in its own suite —
+    // one train, a synthetic ring, three laps — and then nothing read it. The
+    // interlocking went on being handed each train's exact span.
+    //
+    // Now both run, on the real circuit, and their DISAGREEMENT is the product.
+    // One knows where every train is because it is told; the other has nothing but
+    // rising and falling edges at ten switches. If they ever differ then one of
+    // them is wrong and neither can say which, which is exactly what a second
+    // detection method buys a real installation.
+    //
+    // It is also the only thing that keeps the counter honest on layouts nobody
+    // wrote a bespoke test for: every run through this harness now checks it.
+    for (std::size_t N = 1; N <= 4; ++N)
+    {
+        const FRunResult R = RunTrains(N, 1, 420.0);
+        assert(R.FirstDivergence < 0.0);
+        assert(!R.bCounterOverOccupied);
+        assert(!R.bCounterInconsistent);
+        assert(R.Violations == 0);
+    }
+
+    // And on the small-batch circuit, whose platform is four short blocks in a row
+    // — the shape most likely to catch a counter out, because a 6 m train crosses
+    // three boundaries in the time a 15 m one crosses two.
+    const std::vector<FItem> Items = SmallBatchCircuitLayout();
+    const FRunResult B = RunTrains(5, 1, 420.0, -1.0, &Items, BatchTrainLen);
+    assert(B.FirstDivergence < 0.0);
+    assert(!B.bCounterOverOccupied);
+    assert(!B.bCounterInconsistent);
 }
 
 void TestTheDrivesTellTheStoryOfTheRide()
@@ -1802,6 +1896,7 @@ int main()
     TestTheCatchHoldsAFailedLaunchOnTheRealLayout();
     TestAHeldTrainParksInsideItsBlock();
     TestSeveralHoldingDevicesInARowStaySeveral();
+    TestTwoIndependentMeansOfKnowingAgreeOnEveryBlock();
     TestTheDrivesTellTheStoryOfTheRide();
     TestTheSmallBatchCircuitIsTheSameOvalAndStillCloses();
     TestASmallBatchPlatformWorksThreeTrainsAtOnce();

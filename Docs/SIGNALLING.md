@@ -128,11 +128,37 @@ against that one snapshot, let the drives ramp, write the outputs, step the worl
 back. Interleaving the program with the physics — serving train 1 after train 0 has already moved — is
 what a game does and what a PLC cannot. `FRideSignals` plus `ServeHolds` **is** the PLC program.
 
-**What still cheats, honestly.** `FRideSignals` is still handed each train's nose-and-tail span every
-frame rather than reading the counter; the sensor layer is built and proven equivalent underneath it,
-but the switch-over has not happened. `ServeHolds` still asks `FindHoldZoneAt(GetDistance())` to decide
-which device it is standing at, which a PLC would get from block occupancy. Neither is hidden behind a
-wrapper that would make it look solved.
+### Two independent means of knowing, and they must agree
+
+`FRideSignals` is still handed each train's exact span every frame. Rather than rewrite the safety core
+to fix that, the counter runs **alongside** it: same blocks, same frame, nothing in common but the
+answer. One knows where every train is because it is told; the other has nothing but rising and falling
+edges at the block boundaries.
+
+**The disagreement is the product.** Two ways of knowing the same fact, derived from different
+information, so if they ever differ then one of them is wrong and neither can say which — and that is
+precisely why a real installation pays for a *second detection method* rather than a better single one.
+A difference trips the [emergency stop](#emergency-stop), as does a block counted twice (a collision,
+detected without anything ever having known a position) and a block counted below zero (not a
+collision — a **lie**, meaning a missed trip or a bad seed, after which the counter cannot be trusted
+to detect anything).
+
+It also turns the sensor layer from a proven-equivalent curiosity into something the ride's safety
+rests on. The counter was verified against perfect knowledge once, on a synthetic ring, with one train;
+now every run of every layout checks it. Measured: on both circuits, at every train count, the two
+agree on **every block on every frame** — and breaking the counter's falling-edge rule makes that fail,
+so the check bites rather than passing vacuously.
+
+**Circuits only.** `FBlockCounter` is a counter over a *ring* — block N−1 is bounded by sensor N−1 and
+sensor 0 — and on a point-to-point layout that wrap is a lie: sensor 0 going low is a train being
+placed at the start, not one leaving the end.
+
+**What still cheats, honestly.** The interlocking's own occupancy is still the span, with the counter
+checking it rather than replacing it — flipping which one is primary needs train *identity* inferred
+from the order things trip in, which is a rewrite of the safety core rather than an addition to it.
+`ServeHolds` still asks `FindHoldZoneAt(GetDistance())` to decide which device it is standing at, which
+a PLC would get from block occupancy. Neither is hidden behind a wrapper that would make it look
+solved.
 
 ## The block state machine
 
