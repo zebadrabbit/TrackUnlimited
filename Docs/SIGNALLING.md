@@ -214,6 +214,20 @@ authoring it as a block brake would build a device that closes and is then run s
 is worse than a trim because it *looks* like an interlock. The three pre-station devices pass the same
 test with room to spare (4.8, 1.5 and 0.9 m needed) and are the ones that hold.
 
+**A run ends where the device changes, and the device is its kind *and* its speed.** Kind alone was the
+original rule, and it meant a brake run at 6 m/s followed immediately by one at 2 m/s became a single
+zone targeting 6, with the 2 discarded — a typed number the build threw away, which this project treats
+as a defect everywhere else. It was logged as a warning and worked around by wedging a different zone
+kind between the two. Splitting on the speed as well is both the smaller rule and the honest one: two
+speeds is two devices, so it is two zones and two blocks.
+
+That is also what lets **several holding devices be authored in a row**, which is all a backstage
+buffer keeping trains fed to a platform ever was — brake sections with drive tyres, one train each, ten
+of them being ten ordinary blocks rather than anything the interlocking cannot express. Until this,
+ten in a row authored as one zone holding one train. Same kind *and* same speed still merges, which is
+the rule doing what it says: that really is one device spanning several segments, and it is how every
+lift hill here is authored. No preset changed.
+
 ## The station, which is a process rather than a place
 
 A train arrives, riders get off, riders get on, restraints are closed and checked, the platform is
@@ -274,14 +288,10 @@ does **not** exist, in rough order of how much it would change:
   rider who needs longer to board does not hold up the two in front. Each position is one
   `FStationProcess` already, so this is three of them in series and a rule that the front one leaves
   first — but nothing sequences them yet.
-- **Authoring several holding devices in a row.** A backstage buffer that keeps trains fed to the
-  platform is not a new kind of thing — it is **brake sections with drive tyres**, one train each,
-  which is a block brake and is already exactly what the model expresses. What it needs is the ability
-  to *say* it: a run is a contiguous stretch of the same **kind**, so ten block brakes in a row author
-  as **one** zone and therefore one block, which holds one train rather than ten. The same rule already
-  discards a speed change inside a run and already logs a warning about it — that warning and this are
-  the same wart, and the fix is in how runs are split rather than in a new concept. Nothing about the
-  interlocking needs to change.
+- **A multi-position platform.** A load platform holding three trains, dispatched individually so a
+  rider who needs longer to board does not hold up the two in front. Each position is one
+  `FStationProcess` already, and they can now be *authored* as separate zones — what is missing is the
+  rule that sequences them, so the front one leaves first and the others advance behind it.
 - **A turnout, and a maintenance spur.** A switch is not a zone: it changes which track a train is on,
   which the whole arc-length model currently has no way to say. This is the largest of the three and
   is properly Phase 4 or later.

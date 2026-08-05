@@ -714,34 +714,33 @@ void ATUCoasterRide::RebuildFromSegments()
 				bCatchOpen = Segments[i].bAntiRollback;
 				CatchStartS = AccS;
 			}
-			if (Segments[i].Zone != Open)
+			// A RUN ENDS WHERE THE DEVICE CHANGES, and the device is its kind AND
+			// its speed. The speed half used to be missing: a run was defined by
+			// kind alone, so a brake at 6 m/s followed immediately by one at 2 m/s
+			// became a single zone targeting 6 and the 2 never existed. That is a
+			// typed number the build throws away, which is exactly what this
+			// project validates against everywhere else — and it was logged as a
+			// warning rather than fixed, with the suggested workaround being to
+			// wedge a different zone kind between the two.
+			//
+			// Splitting on it instead is both the smaller rule and the honest one:
+			// two speeds is two devices, so it is two zones and two BLOCKS. That is
+			// also what lets several holding devices be authored in a row at all —
+			// a queue of brake sections keeping trains fed to a platform is not a
+			// missing concept, it is block brakes, and until now ten of them in a
+			// row authored as one block holding one train.
+			//
+			// No preset changes: every run in all four is a single speed already.
+			const bool bKindChanged = Segments[i].Zone != Open;
+			const bool bSpeedChanged = Open != ETUSegmentZone::None
+				&& !FMath::IsNearlyEqual(Segments[i].ZoneSpeed, OpenSpeed);
+			if (bKindChanged || bSpeedChanged)
 			{
 				Close(AccS);
 				AddBoundary(AccS);
 				Open = Segments[i].Zone;
 				OpenS = AccS;
 				OpenSpeed = Segments[i].ZoneSpeed;
-			}
-			else if (Open != ETUSegmentZone::None
-				&& !FMath::IsNearlyEqual(Segments[i].ZoneSpeed, OpenSpeed))
-			{
-				// A run is defined by its KIND, so this segment joins the one
-				// already open and its own ZoneSpeed is DISCARDED. Measured: a
-				// brake run at 6 m/s followed immediately by one at 2 m/s becomes
-				// a single zone targeting 6, and the 2 never existed.
-				//
-				// That is a typed number the build throws away, which is exactly
-				// what this project validates against elsewhere. Reported, not
-				// repaired: guessing which speed was meant would be worse, and the
-				// fix an author actually wants is usually a short powered section
-				// between the two — that both splits the run and gives a stopped
-				// train something to move it, since a friction brake can hold a
-				// train but cannot start one.
-				UE_LOG(LogTemp, Warning,
-					TEXT("TrackUnlimited: segment %d continues the run that began at %.1f m, "
-						"so its zone speed %.1f m/s is IGNORED — the run keeps %.1f m/s. "
-						"Separate them with a different zone kind if two devices were meant."),
-					i, OpenS, Segments[i].ZoneSpeed, OpenSpeed);
 			}
 			AccS += SegLength;
 		}

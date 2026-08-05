@@ -194,9 +194,8 @@ struct FPlatform
 // Tr is optional so the shape can be asked for without a train to hang zones on
 // — FTrain wants a built track in its constructor, and the track comes out of
 // this same walk.
-FCircuit BuildCircuit(FTrain* Tr)
+FCircuit BuildCircuitFrom(FTrain* Tr, const std::vector<FItem>& Items)
 {
-    const std::vector<FItem> Items = Layout();
     FCircuit C;
     C.Doc.HeartlineHeight = 1.1;
     for (const FItem& I : Items)
@@ -266,7 +265,17 @@ FCircuit BuildCircuit(FTrain* Tr)
         {
             continue;   // AddSegment refused it, so it occupies no arc length
         }
-        if (Items[i].Zone != Open)
+        // A RUN ENDS WHERE THE DEVICE CHANGES, and the device is its kind AND its
+        // speed. Kind alone was the old rule, and it meant a brake at 6 m/s
+        // followed immediately by one at 2 m/s became ONE zone targeting 6, with
+        // the 2 discarded — a typed number thrown away, which this project treats
+        // as a defect everywhere else. Two speeds is two devices, so two zones and
+        // two blocks. It is also what lets several holding devices be authored in
+        // a row at all.
+        const bool bKindChanged = Items[i].Zone != Open;
+        const bool bSpeedChanged = Open != EZone::None
+            && std::fabs(Items[i].Speed - OpenSpeed) > 1e-9;
+        if (bKindChanged || bSpeedChanged)
         {
             Close(AccS);
             if (AccS > C.Boundaries.back())
@@ -282,6 +291,8 @@ FCircuit BuildCircuit(FTrain* Tr)
     Close(AccS);
     return C;
 }
+
+FCircuit BuildCircuit(FTrain* Tr) { return BuildCircuitFrom(Tr, Layout()); }
 
 // THE DISPATCHER, in four lines, and the same four the actor runs.
 //
@@ -1106,6 +1117,56 @@ void TestAHeldTrainParksInsideItsBlock()
     assert(R.ClosestToStationStart > 26.0 - TrainLen * 0.5 - 2.0);   // near the far end
 }
 
+void TestSeveralHoldingDevicesInARowStaySeveral()
+{
+    // A QUEUE OF BLOCK BRAKES, which is all a backstage buffer keeping trains fed
+    // to a platform ever was — not a new kind of track, and not something the
+    // interlocking cannot express. Ten trains stacked is ten trains in ten
+    // consecutive blocks, which is ordinary.
+    //
+    // What was missing was the ability to SAY it. A run used to be a contiguous
+    // stretch of the same KIND, so four brake sections in a row became one zone
+    // and one block, holding one train instead of four.
+    std::vector<FItem> Items;
+    AddStraight(Items, 26.0, EZone::Station, 1.5);
+    AddStraight(Items, 30.0, EZone::BlockBrake, 5.0);
+    AddStraight(Items, 30.0, EZone::BlockBrake, 4.0);
+    AddStraight(Items, 30.0, EZone::BlockBrake, 3.0);
+    AddStraight(Items, 30.0, EZone::BlockBrake, 2.0);
+    AddStraight(Items, 60.0);
+
+    const FCircuit C = BuildCircuitFrom(nullptr, Items);
+
+    // Five devices, five blocks, five places a train can stand — plus the plain
+    // stretch at the end, which is a block with nothing in it.
+    assert(C.Authored.size() == 5);
+    assert(C.HoldMidS.size() == 5);
+    assert(C.Boundaries.size() == 6);
+
+    // And every one kept the speed it was TYPED at. Under the old rule the four
+    // brakes were a single zone at 5.0 and the 4, 3 and 2 never existed.
+    assert(std::fabs(C.Authored[1] - 5.0) < 1e-9);
+    assert(std::fabs(C.Authored[2] - 4.0) < 1e-9);
+    assert(std::fabs(C.Authored[3] - 3.0) < 1e-9);
+    assert(std::fabs(C.Authored[4] - 2.0) < 1e-9);
+
+    // Boundaries fall where the devices meet, so a train in one is not in another.
+    const double Want[6] = {0.0, 26.0, 56.0, 86.0, 116.0, 146.0};
+    for (std::size_t b = 0; b < 6; ++b)
+    {
+        assert(std::fabs(C.Boundaries[b] - Want[b]) < 1e-9);
+    }
+
+    // Same kind AND same speed still merges, which is the rule doing what it says
+    // rather than an oversight: that really is one device spanning two segments,
+    // and it is how every lift hill in this project is authored.
+    std::vector<FItem> Same;
+    AddStraight(Same, 20.0, EZone::Lift, 4.0);
+    AddStraight(Same, 20.0, EZone::Lift, 4.0);
+    const FCircuit M = BuildCircuitFrom(nullptr, Same);
+    assert(M.Authored.size() == 1);
+}
+
 void TestTheDrivesTellTheStoryOfTheRide()
 {
     // THE OUTPUT SIDE, on the real circuit. A drive's three numbers — commanded,
@@ -1320,6 +1381,7 @@ int main()
     TestTwoTrainsQueueBeforeTheStation();
     TestTheCatchHoldsAFailedLaunchOnTheRealLayout();
     TestAHeldTrainParksInsideItsBlock();
+    TestSeveralHoldingDevicesInARowStaySeveral();
     TestTheDrivesTellTheStoryOfTheRide();
     TestTheCircuitCarriesFourTrains();
     TestTheActorsOwnLoopRunsTwoTrains();
