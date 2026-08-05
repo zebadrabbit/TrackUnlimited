@@ -179,6 +179,27 @@ public:
 	int32 DispatchLookahead = 1;
 
 	/**
+	 * Where a held train parks: its NOSE this far short of the far end of the
+	 * block it is held in.
+	 *
+	 * About a metre is typical, and the margin IS the number's reason for
+	 * existing — it is what stops a train ever protruding into the next zone, a
+	 * lift or a launch or open course, through a defect or a mistake. So it is
+	 * measured from the END of the block and applied to the NOSE, rather than
+	 * being an offset from the start applied to the centre.
+	 *
+	 * The brake does not put the train here. It stops it well short, wherever the
+	 * pad lands it, and the drive tyres then truck it the rest of the way — which
+	 * is why a holding device needs both.
+	 *
+	 * Clamped so a device barely longer than the train still parks it wholly
+	 * inside rather than solving to a position behind its own entrance.
+	 */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Signalling",
+		meta = (ClampMin = "0.0", UIMax = "5.0"))
+	float HoldNoseClearanceM = 1.f;
+
+	/**
 	 * Metres, nose to tail. Zero is a point mass at the heartline.
 	 *
 	 * A train's speed is governed by the height of its centre of mass, so a

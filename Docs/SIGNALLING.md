@@ -194,6 +194,28 @@ The dispatcher says both in one number — a crawl speed — because a zone clos
 using its full authority: from 26 m/s the pad bites with everything it has, and from rest the tyres
 push. The sequence falls out.
 
+**Where it parks: the nose about a metre short of the far end of the block.** Measured from the *end*
+and applied to the *nose*, because what the margin prevents is the train protruding into the next
+zone — a lift, a launch, open course — through a defect or a mistake. The margin is the reason the
+number exists, so it is expressed as the margin (`HoldNoseClearanceM`, default 1 m) rather than as an
+offset from the start.
+
+It is deliberately not the middle. Mid-device was the minimum fix for the seam straddle and is
+arbitrary everywhere else — on the 130 m mid-course brake it parked a train 65 m in with 65 m of empty
+brake ahead of it, where a real one holds near the exit.
+
+Measured on the circuit, and the two stages are visible in it:
+
+| device | block | arrives | pad stops | trucked to | trucked |
+|---|---|---|---|---|---|
+| station | 0–26 | 0.0 | 0.0 | 17.4 | 17.4 m |
+| mid-course | 872–1002 | 26.4 | 926.4 | 993.5 | **67.1 m** |
+| outer | 1186–1223 | 15.5 | 1204.9 | 1214.9 | 10.0 m |
+| transfer | 1223–1250 | 5.8 | 1226.0 | 1241.9 | 15.9 m |
+| inner | 1250–1288 | 2.8 | 1251.0 | 1279.4 | 28.5 m |
+
+Every one parks its nose 1.1 m from the block end — the extra 0.1 is the crawl's dead band.
+
 **The conveying stage is not cosmetic.** Brake alone and the train stops about 0.3 m past the zone
 start; the station's start is the circuit's seam, so that leaves the back half in the *last* block, a
 dwelling train holds two, and three trains deadlock — each denied by the tail of the one in front,

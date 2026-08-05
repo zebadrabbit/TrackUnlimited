@@ -1303,11 +1303,23 @@ void ATUCoasterRide::ServeHolds(std::size_t TrainIndex)
 	// circuit's seam, so that leaves its back half in the LAST block, a dwelling
 	// train holds two, and three trains deadlock — each denied by the tail of the
 	// one in front. Real rides reposition for exactly the same reason.
+	// WHERE it parks: the nose HoldNoseClearanceM short of the far end of the
+	// block. Measured from the end and applied to the nose, because the thing
+	// being prevented is a train protruding into the next zone through a defect —
+	// the margin is the whole point, so it is expressed as the margin.
+	//
+	// Not the middle. Mid-device was the minimum fix for the seam straddle and is
+	// arbitrary everywhere else: on the 130 m mid-course brake it parked a train
+	// 65 m in with 65 m of empty brake ahead of it, where a real one holds near
+	// the exit.
+	//
+	// Clamped so a device barely longer than the train still parks it wholly
+	// inside rather than solving to a position behind its own entrance.
 	const FTrackZone Zone = T.GetZone(Zi);
-	const double StopS = 0.5 * (Zone.StartS + Zone.EndS);
-	// ponytail: 1.5 m/s of crawl, and mid-device for the mark. The speed is a
-	// maintenance-pace guess; the mark wants authoring, because mid is right for a
-	// station and arbitrary for a 130 m brake run.
+	const double Half = 0.5 * T.GetLength();
+	const double StopS = FMath::Max(Zone.StartS + Half,
+		Zone.EndS - HoldNoseClearanceM - Half);
+	// ponytail: 1.5 m/s of crawl, a maintenance-pace guess.
 	const double Convey = FMath::Min(ZoneReleaseSpeed[Z], 1.5);
 	T.SetZoneTargetSpeed(Zi, T.GetDistance() + 0.25 < StopS ? Convey : 0.0);
 }

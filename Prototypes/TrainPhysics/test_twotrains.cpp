@@ -45,6 +45,12 @@ const double Pi = 3.14159265358979323846;
 const double Grip = 6.0;          // as ATUCoasterRide sets it for every zone
 const double TrainLen = 15.0;
 
+// Where a held train parks: its NOSE this far short of the far end of the block.
+// About a metre is typical, and the margin is the reason the number exists - it
+// is what stops a train protruding into the next zone through a defect. The
+// brake puts it down well short of here; the tyres truck it the rest of the way.
+const double NoseClearance = 1.0;
+
 double Deg(double D) { return D * Pi / 180.0; }
 
 // Mirrors ETUSegmentZone. BlockBrake is the kind the actor gained for this: a
@@ -294,11 +300,23 @@ void ServeHolds(FTrain& Tr, const FRideSignals& Sig, std::size_t Id,
     // the circuit's seam, that leaves its back half in the LAST block, a dwelling
     // train holds two, and three trains deadlock — each denied by the tail of the
     // one in front. Real rides reposition for the same reason.
+    // WHERE it parks: the train's NOSE about a metre short of the far end of the
+    // block. Measured from the END and applied to the NOSE, because the thing
+    // being prevented is the train protruding into the next zone — a lift, a
+    // launch, open course — through a defect or a mistake. The margin is the
+    // whole point of the number, so it is expressed as the margin.
+    //
+    // That is also why it is not the middle. Mid-device was the minimum fix for
+    // the seam straddle and is arbitrary everywhere else: on a 130 m block brake
+    // it parks a train 65 m in with 65 m of empty brake ahead of it, where a real
+    // one holds near the exit.
+    //
+    // Clamped so a device shorter than the train still parks it wholly inside,
+    // rather than solving to a position behind its own entrance.
     const FTrackZone Zone = Tr.GetZone(Zi);
-    const double StopS = 0.5 * (Zone.StartS + Zone.EndS);
-    // ponytail: 1.5 m/s of crawl, and mid-device for the mark. The speed is a
-    // maintenance-pace guess; the mark wants authoring, since mid is right for a
-    // station and arbitrary for a 130 m brake run.
+    const double Half = 0.5 * Tr.GetLength();
+    const double StopS = std::max(Zone.StartS + Half, Zone.EndS - NoseClearance - Half);
+    // ponytail: 1.5 m/s of crawl, a maintenance-pace guess.
     const double Convey = std::min(Authored[Zi], 1.5);
     Tr.SetZoneTargetSpeed(Zi, Tr.GetDistance() + 0.25 < StopS ? Convey : 0.0);
 }
@@ -582,12 +600,20 @@ void TestTwoTrainsQueueBeforeTheStation()
     bool bBStoppedInOuter = false;
     bool bEverShared = false;
 
-    for (int Frame = 0; Frame < 240 * 90; ++Frame)
-    {
-        ServeHolds(A, Sig, 0, C.Authored);
-        ServeHolds(B, Sig, 1, C.Authored);
+    // A is PARKED for the first half — not served, not stepped — so it is simply
+    // an obstacle standing in block 6. Deterministic on purpose: with both trains
+    // running, whether B finishes being trucked to its mark before A vacates is a
+    // race, and the thing under test is the brake, not the timing.
+    const int Release = 240 * 45;
 
-        A.Step(Dt);
+    for (int Frame = 0; Frame < 240 * 120; ++Frame)
+    {
+        if (Frame >= Release)
+        {
+            ServeHolds(A, Sig, 0, C.Authored);
+            A.Step(Dt);
+        }
+        ServeHolds(B, Sig, 1, C.Authored);
         B.Step(Dt);
 
         // Both trains, then ONE tick. Overlaps live on blocks, not on trains.
@@ -814,10 +840,13 @@ void TestAHeldTrainParksInsideItsBlock()
     const FRunResult R = RunTrains(2, 1, 240.0);
     assert(R.ClosestToStationStart < 1e8);          // somebody did dwell there
 
-    // Mid-station is 13 m, and a 15 m train centred there spans 5.5..20.5 — wholly
-    // inside the 26 m station block, with nothing hanging back over the seam.
+    // The mark is the NOSE a metre short of the block end: on the 26 m station
+    // that centres a 15 m train at 17.5, spanning 10.0..25.0 — wholly inside its
+    // own block, with nothing hanging back over the seam and nothing nosing over
+    // into the launch.
     assert(R.ClosestToStationStart > TrainLen * 0.5);
     assert(R.ClosestToStationStart < 26.0 - TrainLen * 0.5);
+    assert(R.ClosestToStationStart > 26.0 - TrainLen * 0.5 - 2.0);   // near the far end
 }
 
 void TestTheCircuitCarriesFourTrains()

@@ -309,6 +309,9 @@ public:
         Current = Samples[static_cast<std::size_t>(N / 2)];
     }
 
+    /** Metres, nose to tail. Zero for a point mass. */
+    double GetLength() const { return Config.TrainLength; }
+
     /** Centre of the train. Front and rear are half a length either side. */
     double GetDistance() const { return DistanceAlong; }
     double GetFrontS() const { return ClampS(DistanceAlong + Config.TrainLength * 0.5); }
