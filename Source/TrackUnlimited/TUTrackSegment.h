@@ -143,6 +143,22 @@ enum class ETUPresetLayout : uint8
 	// and never start one again. Set TrainCount above 1 on those and the extras are
 	// refused.
 	TwoTrainCircuit UMETA(DisplayName = "Two-train circuit (closed, 8 blocks)"),
+
+	// The same closed oval, re-zoned for a SMALL-BATCH operation: 6 m vehicles, an
+	// unload platform and THREE loading positions, so the ride runs a queue of
+	// trains through a station rather than one at a time.
+	//
+	// Identical geometry, deliberately. That shape closes to 0.000000 m because of
+	// its LEG LENGTHS, and leg A is 176 m of flat whether it is one 26 m station
+	// plus a 150 m launch or four short platforms plus a 136 m one. Keep the total
+	// and the closure comes along unchanged, along with every G figure measured
+	// against it.
+	//
+	// EIGHT places a train may be held against the two-train circuit's five, so it
+	// carries seven. Loading three at once is the point: a rider who needs longer
+	// to board holds up only the trains BEHIND them — measured at 52 extra seconds
+	// costing the ride 5.5 s at the back and the full 52 at the front.
+	SmallBatch UMETA(DisplayName = "Small batch (unload + 3 loading positions)"),
 };
 
 UENUM(BlueprintType)

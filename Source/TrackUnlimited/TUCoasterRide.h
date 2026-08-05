@@ -80,6 +80,12 @@ public:
 	/** Launched, eight blocks. The only preset that can hold more than one train. */
 	static TArray<FTUTrackSegment> TwoTrainCircuitLayout();
 
+	/** The same oval, re-zoned for small vehicles: unload plus three load positions. */
+	static TArray<FTUTrackSegment> SmallBatchLayout();
+
+	/** The train that goes with a preset — a small-batch ride has small vehicles. */
+	void ApplyPresetTrainSetup(ETUPresetLayout Which);
+
 	/** Where to watch from. */
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Camera")
 	ETUCameraMode CameraMode = ETUCameraMode::Rider;

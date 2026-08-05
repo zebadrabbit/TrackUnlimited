@@ -53,7 +53,37 @@ TArray<FTUTrackSegment> ATUCoasterRide::PresetLayout(ETUPresetLayout Which)
 	case ETUPresetLayout::FlatRig:         return FlatRigLayout();
 	case ETUPresetLayout::OutAndBack:      return OutAndBackLayout();
 	case ETUPresetLayout::TwoTrainCircuit: return TwoTrainCircuitLayout();
+	case ETUPresetLayout::SmallBatch:      return SmallBatchLayout();
 	default:                               return ReferenceLayout();
+	}
+}
+
+void ATUCoasterRide::ApplyPresetTrainSetup(ETUPresetLayout Which)
+{
+	// A PRESET IS A WORKED EXAMPLE, AND THE TRAIN IS PART OF THE EXAMPLE. A
+	// small-batch operation has small vehicles, and its platform positions are
+	// sized for them — 10 m each, which fits a 6 m train and its clearance and
+	// nothing longer. Loading that layout with the 15 m train every other preset
+	// uses puts the stop mark PAST the end of every position, where nothing trips
+	// it, and a train sent to park there crawls out of its block into the next
+	// one. Measured: seven signalling violations inside four seconds.
+	//
+	// So the train comes with the layout. Only on an explicit preset load, never
+	// on a rebuild — an author who has since chosen a different train keeps it.
+	switch (Which)
+	{
+	case ETUPresetLayout::SmallBatch:
+		TrainLengthM = 6.f;
+		TrainCount = 5;
+		break;
+	case ETUPresetLayout::TwoTrainCircuit:
+		TrainLengthM = 15.f;
+		TrainCount = 2;
+		break;
+	default:
+		TrainLengthM = 15.f;
+		TrainCount = 1;   // every other preset has one holding place
+		break;
 	}
 }
 
@@ -380,6 +410,47 @@ TArray<FTUTrackSegment> ATUCoasterRide::TwoTrainCircuitLayout()
 	return Out;
 }
 
+TArray<FTUTrackSegment> ATUCoasterRide::SmallBatchLayout()
+{
+	// THE SAME OVAL, RE-ZONED. Derived from TwoTrainCircuitLayout rather than
+	// copied, because the closure is a property of the LEG LENGTHS and a copy
+	// could drift from the shape it depends on with nothing to notice — the seam
+	// would miss by a metre, look fine from the cockpit, and teleport the train
+	// once a lap.
+	//
+	// Leg A opens with a 26 m station and a 150 m launch: 176 m of flat. Replace
+	// that with 40 m of platform and a 136 m launch and it is the same 176 m, so
+	// the circuit still closes to 0.000000 m and every G figure still holds. The
+	// launch reaches its 38 m/s in 120 m either way.
+	//
+	// Verified in Prototypes/TrainPhysics/test_twotrains.cpp against the two-train
+	// layout: identical total length, C2, seam within 1e-3 m, and it still gets
+	// round on a 6 m train — which a shorter train is not guaranteed to do, since
+	// less of it straddles each crest and it pays more of the height.
+	TArray<FTUTrackSegment> Out = TwoTrainCircuitLayout();
+	Out.RemoveAt(0, 2);
+
+	// 10 m positions: a 6 m train plus its 1 m nose clearance, with room to spare.
+	// Any shorter and the stop mark falls past the end of the device, where no
+	// train can ever trip it — which the build now warns about.
+	TArray<FTUTrackSegment> Head;
+	AddStraight(Head, 10.0, ETUSegmentZone::StationUnload, 1.5f);  // riders off
+	AddStraight(Head, 10.0, ETUSegmentZone::StationLoad, 1.5f);    // position 3, rear
+	AddStraight(Head, 10.0, ETUSegmentZone::StationLoad, 1.5f);    // position 2
+	AddStraight(Head, 10.0, ETUSegmentZone::StationLoad, 1.5f);    // position 1, front
+	AddStraight(Head, 136.0, ETUSegmentZone::Launch, 38.f);
+
+	// Identical kind AND identical speed, so nothing the zone walk can see tells
+	// these three apart — they really are the same machine three times over, and
+	// are still three machines. Without this they are one 30 m zone holding one
+	// train, which is a platform that loads one at a time.
+	Head[2].bStartsNewDevice = true;
+	Head[3].bStartsNewDevice = true;
+
+	Out.Insert(Head, 0);
+	return Out;
+}
+
 TArray<FTUTrackSegment> ATUCoasterRide::ReferenceLayout()
 {
 	// The reference ride, as authored data rather than as code. Tuned in the
@@ -680,8 +751,32 @@ void ATUCoasterRide::RebuildFromSegments()
 			//
 			// This is the ONE place train length is allowed to touch the holding
 			// logic. Everything downstream reads a boolean.
-			StopMarkS.push_back(FMath::Max(OpenS + static_cast<double>(TrainLengthM),
-				EndS - HoldNoseClearanceM));
+			const double Mark = FMath::Max(OpenS + static_cast<double>(TrainLengthM),
+				EndS - HoldNoseClearanceM);
+			StopMarkS.push_back(Mark);
+
+			// A DEVICE SHORTER THAN ITS TRAIN CANNOT HOLD IT, and the symptom is
+			// vicious rather than obvious: the mark lands PAST the far end, no train
+			// ever trips it, so a train sent to park there crawls straight out of
+			// its own block into the next one and collides with whatever is
+			// standing in it. Measured — a 10 m platform position and a 15 m train
+			// gave seven signalling violations inside four seconds.
+			//
+			// Reported, not repaired, like every other authored-value check here:
+			// clamping the mark back inside would produce a device that stops a
+			// train with its nose hanging over the boundary, which is worse because
+			// it looks like it worked.
+			if (Mark > EndS && (Open == ETUSegmentZone::Station
+				|| Open == ETUSegmentZone::StationLoad
+				|| Open == ETUSegmentZone::StationUnload
+				|| Open == ETUSegmentZone::BlockBrake || Open == ETUSegmentZone::Lift))
+			{
+				UE_LOG(LogTemp, Warning,
+					TEXT("TrackUnlimited: the device at %.1f–%.1f m is %.1f m long and cannot "
+						"hold a %.1f m train — its stop mark falls at %.1f m, past the end, so "
+						"nothing will ever trip it. Lengthen the device or shorten the train."),
+					OpenS, EndS, EndS - OpenS, TrainLengthM, Mark);
+			}
 		};
 
 		// Anti-rollback runs, walked in the SAME pass and by the same rule as
@@ -1096,6 +1191,7 @@ void ATUCoasterRide::PostEditChangeProperty(FPropertyChangedEvent& Event)
 	{
 		bLoadPreset = false;
 		Segments = PresetLayout(Preset);
+		ApplyPresetTrainSetup(Preset);
 	}
 
 	// Rebuild and redraw happen in OnConstruction, so a typed number gets an

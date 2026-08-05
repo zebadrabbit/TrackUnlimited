@@ -178,6 +178,56 @@ std::vector<FItem> Layout()
     return Out;
 }
 
+// THE SMALL-BATCH CIRCUIT, and it is the two-train oval with a different front
+// end. Deliberately: that shape closes to 0.000000 m because of its LEG LENGTHS,
+// and leg A is 176 m of flat whether that is one 26 m station plus a 150 m launch
+// or four short platforms plus a 136 m one. Keep the total and the closure comes
+// along unchanged, along with every G figure that was measured against it.
+//
+// What changes is the operation. Small vehicles — 6 m rather than 15 — so the same
+// 40 m of platform holds an unload and THREE loading positions instead of one
+// station, and the ride runs a queue of trains through them.
+const double BatchTrainLen = 6.0;
+
+std::vector<FItem> SmallBatchCircuitLayout()
+{
+    const double Up = Deg(26.0);
+    const double Dn = Deg(32.0);
+    const double R = 35.0;
+    const double Ease = 50.0;
+    const double Arc = Pi * R - Ease;
+    const double DropLen = 15.6847323;
+    const double FillLen = 75.5024975;
+
+    std::vector<FItem> Out;
+    // LEG A. 40 m of platform and a 136 m launch: 176 m, exactly as before.
+    AddStraight(Out, 10.0, EZone::StationUnload, 1.5);          // riders off
+    AddStraight(Out, 10.0, EZone::StationLoad, 1.5);            // position 3, rear
+    AddStraight(Out, 10.0, EZone::StationLoad, 1.5, true);      // position 2
+    AddStraight(Out, 10.0, EZone::StationLoad, 1.5, true);      // position 1, front
+    AddStraight(Out, 136.0, EZone::Launch, 38.0);
+    AddEasedPitch(Out, Up, 0.0130);
+    AddStraight(Out, 40.0);
+    AddEasedPitch(Out, -Up, 0.0130);
+    AddBankedTurn(Out, R, Arc, Ease, BankDegreesFor(14.2, R));
+    // LEG B, unchanged.
+    AddEasedPitch(Out, -Dn, 0.0150);
+    AddStraight(Out, DropLen);
+    AddEasedPitch(Out, Dn, 0.0150);
+    AddEasedPitch(Out, Deg(20.0), 0.024);
+    AddEasedPitch(Out, Deg(-40.0), 0.024);
+    AddEasedPitch(Out, Deg(20.0), 0.024);
+    AddStraight(Out, FillLen);
+    AddStraight(Out, 130.0, EZone::BlockBrake, 20.0);
+    AddBankedTurn(Out, R, Arc, Ease, BankDegreesFor(18.1, R));
+    // LEG C, unchanged.
+    AddStraight(Out, 24.0);
+    AddStraight(Out, 37.5, EZone::BlockBrake, 6.0);
+    AddStraight(Out, 27.0, EZone::Lift, 4.0);
+    AddStraight(Out, 37.5, EZone::BlockBrake, 2.0);
+    return Out;
+}
+
 // Everything the walk over the segment list produces, in one place, because zones
 // and block boundaries are the SAME fact derived once: a boundary is only
 // meaningful where there is a device that can hold a train.
@@ -204,7 +254,13 @@ struct FPlatform
 // Tr is optional so the shape can be asked for without a train to hang zones on
 // — FTrain wants a built track in its constructor, and the track comes out of
 // this same walk.
-FCircuit BuildCircuitFrom(FTrain* Tr, const std::vector<FItem>& Items)
+// TrainLenM is what the stop marks are surveyed against, so it has to be the
+// length of the train that will actually stand there. Defaulted for the two-train
+// circuit and passed explicitly by anything running shorter vehicles — getting it
+// wrong puts the mark BEYOND the device, where no train ever trips it, and the
+// train crawls straight out of its block into the next one.
+FCircuit BuildCircuitFrom(FTrain* Tr, const std::vector<FItem>& Items,
+                          double TrainLenM = TrainLen)
 {
     FCircuit C;
     C.Doc.HeartlineHeight = 1.1;
@@ -263,7 +319,7 @@ FCircuit BuildCircuitFrom(FTrain* Tr, const std::vector<FItem>& Items)
         // installer knows at design time, and a PLC does not know at run time.
         // Clamped so a device barely longer than the train still puts the mark
         // where the whole train fits behind it.
-        C.StopMarkS.push_back(std::max(OpenS + TrainLen, EndS - NoseClearance));
+        C.StopMarkS.push_back(std::max(OpenS + TrainLenM, EndS - NoseClearance));
         if (Open == EZone::Lift || Open == EZone::BlockBrake || Open == EZone::Station
             || Open == EZone::StationUnload || Open == EZone::StationLoad)
         {
@@ -963,6 +1019,12 @@ struct FRunResult
     bool bDriveFaulted = false;
     int FirstFaultedDrive = -1;   // which one, so a fault is a place to go and look
 
+    // Where the interlocking first said no, because "22 violations" is a count and
+    // "train 1 at 34.7 m, nine seconds in" is somewhere to go and look.
+    double FirstViolation = -1.0;
+    int FirstViolationTrain = -1;
+    double FirstViolationS = 0.0;
+
     std::vector<double> FinalSpeed;     // per train, at the end of the run
     std::vector<double> FinalS;
     std::vector<int> FinalHoldZone;     // -1 if it did not stop at a holding device
@@ -972,19 +1034,22 @@ struct FRunResult
 // way to trust a capacity number is for the capacity test and the two-train test
 // to be running the SAME policy.
 FRunResult RunTrains(std::size_t N, std::size_t Lookahead, double Seconds,
-                     double EStopAtSeconds = -1.0)
+                     double EStopAtSeconds = -1.0,
+                     const std::vector<FItem>* InItems = nullptr,
+                     double InTrainLen = TrainLen)
 {
-    const FCircuit Shape = BuildCircuit(nullptr);
+    const std::vector<FItem> Items = InItems != nullptr ? *InItems : Layout();
+    const FCircuit Shape = BuildCircuitFrom(nullptr, Items);
     const FTrack T = BuildTrack(Shape.Doc);
     FTrainConfig Cfg;
-    Cfg.TrainLength = TrainLen;
+    Cfg.TrainLength = InTrainLen;
 
     std::vector<std::unique_ptr<FTrain>> Owned;
     FCircuit C;
     for (std::size_t t = 0; t < N; ++t)
     {
         Owned.push_back(std::unique_ptr<FTrain>(new FTrain(T, Cfg)));
-        C = BuildCircuit(Owned.back().get());
+        C = BuildCircuitFrom(Owned.back().get(), Items, InTrainLen);
     }
 
     FRideSignals Sig(C.Boundaries, 5.0, Lookahead, N, true);
@@ -1010,6 +1075,9 @@ FRunResult RunTrains(std::size_t N, std::size_t Lookahead, double Seconds,
     std::vector<FTrain*> All;
     for (std::size_t t = 0; t < N; ++t) { All.push_back(Owned[t].get()); }
     std::vector<FPlatform> Platforms = BuildPlatforms(C);
+    // Trains start the session already loaded: an operator's sweep confirms the
+    // ride is empty, and everything at a platform is boarded before it opens.
+    std::vector<bool> Loaded(N, true);
 
     const double Dt = 1.0 / 240.0;
     for (int F = 0; F < static_cast<int>(240.0 * Seconds); ++F)
@@ -1019,7 +1087,7 @@ FRunResult RunTrains(std::size_t N, std::size_t Lookahead, double Seconds,
             Drives.TripEmergencyStop("test");
         }
         ScanStopMarks(Marks, All, true, T.TotalLength());
-        ServeStations(Platforms, All, Marks, Drives, Dt);
+        ServeStations(Platforms, All, Marks, Drives, Dt, &Loaded);
         for (std::size_t t = 0; t < N; ++t)
         {
             ServeHolds(*Owned[t], Sig, t, C.Authored, Marks, Drives, Platforms);
@@ -1030,7 +1098,13 @@ FRunResult RunTrains(std::size_t N, std::size_t Lookahead, double Seconds,
         for (std::size_t t = 0; t < N; ++t)
         {
             Owned[t]->Step(Dt);
-            Sig.Update(t, Owned[t]->GetRearS(), Owned[t]->GetFrontS());
+            if (!Sig.Update(t, Owned[t]->GetRearS(), Owned[t]->GetFrontS())
+                && R.FirstViolation < 0.0)
+            {
+                R.FirstViolation = F * Dt;
+                R.FirstViolationTrain = static_cast<int>(t);
+                R.FirstViolationS = Owned[t]->GetDistance();
+            }
 
             const double Now = Owned[t]->GetDistance();
             if (Now + 100.0 < Prev[t]) { ++R.Laps[t]; }
@@ -1313,15 +1387,16 @@ FBatchResult RunSmallBatch(double SlowLoadSeconds, std::size_t SlowPosition)
     const FCircuit Shape = BuildCircuitFrom(nullptr, Items);
     const FTrack T = BuildTrack(Shape.Doc);
 
+    const double BatchLen = 8.0;   // small vehicle, and it has to fit a 20 m position
     FTrainConfig Cfg;
-    Cfg.TrainLength = 8.0;   // a small batch train, and it has to fit a 20 m position
+    Cfg.TrainLength = BatchLen;
 
     std::vector<std::unique_ptr<FTrain>> Owned;
     FCircuit C;
     for (std::size_t t = 0; t < 3; ++t)
     {
         Owned.push_back(std::unique_ptr<FTrain>(new FTrain(T, Cfg)));
-        C = BuildCircuitFrom(Owned.back().get(), Items);
+        C = BuildCircuitFrom(Owned.back().get(), Items, BatchLen);
     }
     std::vector<FTrain*> All;
     for (std::size_t t = 0; t < 3; ++t) { All.push_back(Owned[t].get()); }
@@ -1391,6 +1466,66 @@ FBatchResult RunSmallBatch(double SlowLoadSeconds, std::size_t SlowPosition)
     R.Violations = Sig.Violations();
     for (std::size_t t = 0; t < 3; ++t) { R.FinalS.push_back(Owned[t]->GetDistance()); }
     return R;
+}
+
+void TestTheSmallBatchCircuitIsTheSameOvalAndStillCloses()
+{
+    // THE CLOSURE IS A PROPERTY OF THE LEG LENGTHS, so keeping leg A at 176 m
+    // keeps it exactly. Asserted rather than assumed, because "I did not change
+    // the geometry" is the sort of claim that is wrong 5% of the time and silent
+    // when it is — a seam that misses by a metre looks fine from the cockpit and
+    // teleports the train once a lap.
+    const FCircuit Two = BuildCircuitFrom(nullptr, Layout());
+    const FCircuit Batch = BuildCircuitFrom(nullptr, SmallBatchCircuitLayout(), BatchTrainLen);
+    const FTrack T2 = BuildTrack(Two.Doc);
+    const FTrack TB = BuildTrack(Batch.Doc);
+
+    assert(std::fabs(TB.TotalLength() - T2.TotalLength()) < 1e-9);
+    assert(TB.IsCurvatureContinuous(1e-9));
+
+    const FTrackFrame A = TB.EvaluateAt(0.0);
+    const FTrackFrame B = TB.EvaluateAt(TB.TotalLength());
+    assert(Length(B.Position - A.Position) < 1e-3);
+    assert(std::acos(std::min(1.0, Dot(B.Tangent, A.Tangent))) < 1e-4);
+    assert(std::fabs(B.Roll - A.Roll) < 1e-4);
+
+    // EIGHT places a train may stand where the two-train circuit has five: an
+    // unload, three loading positions, and the four it already had.
+    assert(Batch.Authored.size() == 9);
+    assert(Batch.HoldMidS.size() == 8);
+    assert(Batch.Boundaries.size() == 11);   // the two-train circuit's 8, plus 3
+
+    // Every position is longer than a train plus its clearance, or the stop mark
+    // lands outside the device it belongs to and no train ever trips it. This is
+    // the constraint that decides how short the vehicles have to be.
+    for (std::size_t z = 0; z < 4; ++z)
+    {
+        const double Len = Batch.StopMarkS[z] + NoseClearance
+            - (z == 0 ? 0.0 : Batch.Boundaries[z]);
+        assert(Len >= BatchTrainLen + NoseClearance);
+    }
+
+    // And it still gets round, which a shorter train is not guaranteed to: less
+    // of it straddles each crest, so it pays more of the height.
+    FTrainConfig Cfg;
+    Cfg.TrainLength = BatchTrainLen;
+    FTrain Tr(TB, Cfg);
+    BuildCircuitFrom(&Tr, SmallBatchCircuitLayout(), BatchTrainLen);
+    const FRideProfile P = RunRideProfile(Tr, TB, 1.0);
+    assert(P.bCompleted);
+
+    // EIGHT holding places, so seven trains — and the whole point of the layout is
+    // that it can actually run a queue of them. Five, for ten minutes, is a busy
+    // operation rather than a demonstration.
+    const std::vector<FItem> Items = SmallBatchCircuitLayout();
+    const FRunResult R = RunTrains(5, 1, 600.0, -1.0, &Items, BatchTrainLen);
+    assert(R.Violations == 0);
+    assert(!R.bShared);
+    assert(!R.bDriveFaulted);
+    for (std::size_t t = 0; t < 5; ++t)
+    {
+        assert(R.Laps[t] >= 1);   // nobody starved and nothing deadlocked
+    }
 }
 
 void TestASmallBatchPlatformWorksThreeTrainsAtOnce()
@@ -1668,6 +1803,7 @@ int main()
     TestAHeldTrainParksInsideItsBlock();
     TestSeveralHoldingDevicesInARowStaySeveral();
     TestTheDrivesTellTheStoryOfTheRide();
+    TestTheSmallBatchCircuitIsTheSameOvalAndStillCloses();
     TestASmallBatchPlatformWorksThreeTrainsAtOnce();
     TestAnEmergencyStopStopsTheRideNotTheTrains();
     TestTheCircuitCarriesFourTrains();
