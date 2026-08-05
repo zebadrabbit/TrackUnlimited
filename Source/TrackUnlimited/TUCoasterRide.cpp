@@ -1524,8 +1524,21 @@ void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/
 	PanelTile(Canvas, X, Y, 1.f, H, PanelRule);
 	PanelTile(Canvas, X + W - 1.f, Y, 1.f, H, PanelRule);
 
+	// THE COLOUR BANDS, which are the one convention every real console shares:
+	// the operating controls live on a GREEN field and the stop authority on a RED
+	// one, physically separated, so a hand reaching for one is nowhere near the
+	// other. On a screen there is no hand to misplace, but the grouping still does
+	// the work of saying which half of the panel you are reading — and it costs two
+	// tiles.
+	//
+	// The third console adds YELLOW between them for lockout, which is not modelled
+	// here and so is not drawn. A band for a control that does not exist would be
+	// the panel telling its first lie.
+	PanelTile(Canvas, X + 1.f, Y + 1.f, 3.f, H - 2.f, FLinearColor(0.16f, 0.55f, 0.24f, 1.f));
+	PanelTile(Canvas, X + W - 4.f, Y + 1.f, 3.f, 34.f, FLinearColor(0.62f, 0.14f, 0.12f, 1.f));
+
 	float Ty = Y + Pad;
-	const float Lx = X + Pad;
+	const float Lx = X + Pad + 4.f;   // clear of the green field band
 
 	PanelLabel(Canvas, Lx, Ty, TEXT("TRACKUNLIMITED  ·  RIDE CONTROL"), PanelCyan);
 	Ty += Row;
@@ -1790,14 +1803,18 @@ void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/
 		};
 
 		const bool bStop = Drives->IsEmergencyStopped();
-		Lamp(Lx, TEXT("RESTRAINTS"),
+		// LOCK HARNESS / GATES / DISPATCH READY, in the order and the words a real
+		// console uses. "DISPATCH READY" is its own lamp on all three panels rather
+		// than a property of the dispatch button, because the machine granting
+		// permission and a person taking it are two different events.
+		Lamp(Lx, TEXT("HARNESS LOCKED"),
 			Console != nullptr && Console->Inputs.bRestraintsLocked, PanelGreen);
-		Lamp(Lx + 96.f, TEXT("GATES"),
+		Lamp(Lx + 116.f, TEXT("GATES"),
 			Console != nullptr && Console->Inputs.bPlatformClear, PanelGreen);
-		Lamp(Lx + 168.f, TEXT("DISPATCH"),
+		Lamp(Lx + 186.f, TEXT("DISPATCH READY"),
 			Console != nullptr && Console->Process.IsReadyToDispatch(), PanelGreen);
-		Lamp(Lx + 268.f, TEXT("E-STOP"), bStop, PanelRed);
-		Lamp(Lx + 348.f, TEXT("RESET"), bStop, PanelCyan);
+		Lamp(Lx + 300.f, TEXT("E-STOP"), bStop, PanelRed);
+		Lamp(Lx + 372.f, TEXT("RESET"), bStop, PanelCyan);
 		Ty += Row;
 	}
 }

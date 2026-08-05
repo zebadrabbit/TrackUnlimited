@@ -619,6 +619,47 @@ Presentation is staged deliberately: a **2D generated HMI panel first**, which k
 strictly data-driven and cheap to build, with an optional 3D-modelled control booth as a later
 presentation layer over the same underlying data — not a separate system.
 
+### What three real consoles taught it
+
+Built first from the description above, then corrected against photographs of three operator panels.
+Two corrections, one confirmation, and a list of what is still missing.
+
+**A real HMI draws the track and puts the lamps on it.** The first version was a table of blocks; every
+real screen is a *schematic*, with the zones, the transfer and the storage drawn in place. So the
+blocks are a strip with widths **proportional to block length** — the 130 m mid-course brake looks like
+the long block it is, the four 10 m platform positions look like the tight cluster they are — with the
+device under each ticked in the same colours the rails use, and every train drawn at its real position.
+
+**Colour bands group by authority, not by topic.** All three panels put the operating controls on a
+green field and the stop controls on a red one, physically separated, so a hand reaching for one is
+nowhere near the other. The third adds yellow for lockout.
+
+**`ADVANCE & DISPATCH` appears twice on every panel**, at opposite ends, far enough apart that one
+person cannot hold both. That is the two-hand rule, and it confirms the anti-tie-down reasoning
+already in the station process — the release-between-trains rule is the cheap half of the same idea.
+
+**`ADVANCE` is not `DISPATCH`,** and they are separate labelled buttons. An advance shuffles a train to
+the next position on the same platform, with riders still boarding behind it; a dispatch sends it onto
+the course and is the last point anybody can change their mind. The model can already tell them apart —
+it is whether the next block along is another platform position or open track.
+
+**Restraints are released per SEGMENT.** One panel's HMI page reads `Unlock Seats Segment 1 / 2 / 3`,
+which is per platform *position* — independent confirmation that a multi-position platform is the
+normal shape rather than an exotic one, and that restraint control follows the positions.
+
+**Not modelled, and so deliberately not drawn** — a lamp for a control that does not exist would be the
+panel telling its first lie:
+
+| control | what it is |
+|---|---|
+| `PANEL ENABLE`, `HMI ENABLE` | the console is not authoritative until enabled |
+| `ACKNOWLEDGE` | a fault must be *seen* before it can be reset; ours latch until an E-stop reset |
+| `MAINTENANCE BYPASS`, `E-STOP LOCKOUT` | lockout/tagout for work on the ride |
+| `OPERATION MODE: TRANSFER` | moving trains on and off the transfer track — needs turnouts |
+| `RIDE START/STOP`, `LIFT START/STOP` | controlled stops, distinct from the emergency one |
+| `FLOOR RAISE/LOWER` | a movable station floor |
+| `GATES`, `RESTRAINTS` as **selectors** | the operator *commands* them and the sensors confirm; ours are asserted on a dwell timer by the stand-in crew. Same command-device-feedback shape the drives already have, and the most substantive of these. |
+
 ## Making the causal chain visible
 
 Just as important as the data model: when a sensor trips, that should visibly propagate.
