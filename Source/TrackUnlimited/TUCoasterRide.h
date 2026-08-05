@@ -16,6 +16,7 @@
 #include "TrainPhysics/RideProfile.h"
 #include "TrackSpline/TrackProfile.h"
 #include "BlockSignal/RideSignals.h"
+#include "BlockSignal/TrackSensors.h"
 #include "TUTrackSegment.h"
 
 #include "TUCoasterRide.generated.h"
@@ -303,6 +304,21 @@ private:
 	// device's live target is overwritten to zero whenever its signal is red — so
 	// this is the only remaining record of what it should release at.
 	TArray<double> ZoneReleaseSpeed;
+
+	// The STOP MARK of each zone: a physical switch bolted to the track that tells
+	// the PLC a trucking train has come far enough. One per zone, so the index is
+	// the zone's own; a zone with no drive tyres can never be commanded to creep,
+	// so its mark is simply never read.
+	//
+	// A SENSOR RATHER THAN A SUM, and that is the entire point of it. Where you
+	// place a switch is something an installer knows at survey time, with a tape
+	// measure and a train in front of them. Where a train's nose is right now is
+	// not something a control system knows at all. HoldNoseClearanceM and
+	// TrainLengthM are therefore consumed HERE, once, at build time — and the
+	// dispatcher never reads a length or a position again.
+	//
+	// Null until the track builds, exactly like Signals.
+	TUniquePtr<FTrackSensors> StopMarks;
 
 	// Which of those zones can HOLD a train — both push and hold, so drive tyres
 	// and block brakes, never a trim brake or a launch. Also the list of places a

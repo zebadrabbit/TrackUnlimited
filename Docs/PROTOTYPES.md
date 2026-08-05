@@ -194,6 +194,25 @@ reports a negative count separately from a collision, because the fix is differe
 rise, no fall, no trace. Real hardware latches the switch so a brief trip survives until the controller
 reads it, and that latch is the fix if it ever matters, not a faster scan.
 
+**The first switch actually wired in is the stop mark.** One per zone, at
+`deviceEnd − HoldNoseClearanceM`, and it turns the dispatcher's parking rule from arithmetic into
+geometry: *truck forward until the mark trips.* `ServeHolds` used to compute
+`zoneEnd − clearance − ½trainLength` and compare it to `GetDistance()` — two quantities a PLC does not
+have. Now train length is consumed once, where the mark is placed, which is where an installer with a
+tape measure consumes it, and the holding logic reads a boolean. Measured at all five devices on the
+two-train circuit: the mark sits 1.00 m short of the block end, the nose parks 0.18 m past the mark,
+and **0.81 m** of the metre survives — identical everywhere, because the overshoot is `v²/2a` at the
+crawl speed and grip. `test_twotrains.cpp` prints the table and asserts the margin directly.
+
+Inputs are scanned **once at the top of the frame**, before any logic runs — read inputs, execute,
+write outputs, as IEC 61131-3 does — so the second train is served against the same snapshot as the
+first rather than against a track the first has already moved along.
+
+**Still handed the answer:** `FRideSignals` reads spans, not the counter. The layer underneath it is
+built and proven equivalent, so the switch-over has a net to fall into, but it has not happened. See
+[`SIGNALLING.md#what-the-system-actually-knows`](SIGNALLING.md#what-the-system-actually-knows) for the
+full ledger of what still cheats.
+
 ## `NL2Csv/` — validation fixtures
 
 Reads and writes NoLimits 2's documented tab-separated spline export — position plus front/left/up

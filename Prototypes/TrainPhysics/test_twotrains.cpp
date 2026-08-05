@@ -26,6 +26,7 @@
 // real fix is S -= TotalLength once FTrack can say it is a circuit.
 
 #include "../BlockSignal/RideSignals.h"
+#include "../BlockSignal/TrackSensors.h"
 #include "../TrackSpline/TrackIO.h"
 #include "../TrackSpline/TrackProfile.h"
 #include "../TrackSpline/TrackValidate.h"
@@ -174,6 +175,7 @@ struct FCircuit
     std::vector<double> Boundaries;
     std::vector<double> Authored;    // per zone, the speed it releases at
     std::vector<double> HoldMidS;    // where a train may stand: mid-device
+    std::vector<double> StopMarkS;   // per zone, the switch that says "far enough"
 };
 
 // Tr is optional so the shape can be asked for without a train to hang zones on
@@ -221,6 +223,17 @@ FCircuit BuildCircuit(FTrain* Tr)
             return;
         }
         C.Authored.push_back(OpenSpeed);
+
+        // THE STOP MARK, and it is a PHYSICAL SWITCH rather than a sum. One per
+        // zone so its index is the zone's own; a zone with no drive tyres can
+        // never be commanded to creep, so its mark is simply never read.
+        //
+        // Train length appears here and NOT in the dispatcher, which is the whole
+        // point of moving it: where you bolt a switch to the track is something an
+        // installer knows at design time, and a PLC does not know at run time.
+        // Clamped so a device barely longer than the train still puts the mark
+        // where the whole train fits behind it.
+        C.StopMarkS.push_back(std::max(OpenS + TrainLen, EndS - NoseClearance));
         if (Open == EZone::Lift || Open == EZone::BlockBrake)
         {
             C.HoldMidS.push_back(0.5 * (OpenS + EndS));
@@ -262,7 +275,7 @@ FCircuit BuildCircuit(FTrain* Tr)
 // against, and because zones and blocks come from the same walk, so a zone never
 // straddles a block boundary and "the block my centre is in" is unambiguous.
 void ServeHolds(FTrain& Tr, const FRideSignals& Sig, std::size_t Id,
-                const std::vector<double>& Authored)
+                const std::vector<double>& Authored, const FTrackSensors& Marks)
 {
     const int Z = Tr.FindHoldZoneAt(Tr.GetDistance());
     if (Z < 0)
@@ -311,14 +324,46 @@ void ServeHolds(FTrain& Tr, const FRideSignals& Sig, std::size_t Id,
     // it parks a train 65 m in with 65 m of empty brake ahead of it, where a real
     // one holds near the exit.
     //
-    // Clamped so a device shorter than the train still parks it wholly inside,
-    // rather than solving to a position behind its own entrance.
-    const FTrackZone Zone = Tr.GetZone(Zi);
-    const double Half = 0.5 * Tr.GetLength();
-    const double StopS = std::max(Zone.StartS + Half, Zone.EndS - NoseClearance - Half);
+    // AND IT IS A SWITCH THAT SAYS SO, not a sum. The rule is "truck forward until
+    // the stop mark trips", which is the whole of it — no train length, no arc
+    // length, no zone extent. A PLC has none of those three and does not need
+    // them: the margin was surveyed into the track when the switch was bolted down,
+    // and thereafter the ride enforces it by geometry rather than by arithmetic.
+    //
+    // The mark trips on the NOSE, because a span covers a point the moment its
+    // front reaches it. That is the same asymmetry the block counter runs on, and
+    // it is the reason a stop mark measures the thing it is named after.
+    //
+    // A mark can be tripped by ANY train, since a switch has no idea which. It is
+    // only unambiguous because the interlocking guarantees the train standing at
+    // this device is the only one that can be in this block — the same mutual
+    // support the sensor layer is built on. Read it for a zone whose block is not
+    // yours and you are reading somebody else's train.
+    //
+    // The train now stops a little PAST the mark rather than on it — about 0.19 m,
+    // being 1.5 m/s against 6 m/s^2 of grip. Real placement absorbs that in the
+    // margin, which is what a margin is for, and the clearance stays under a metre.
     // ponytail: 1.5 m/s of crawl, a maintenance-pace guess.
     const double Convey = std::min(Authored[Zi], 1.5);
-    Tr.SetZoneTargetSpeed(Zi, Tr.GetDistance() + 0.25 < StopS ? Convey : 0.0);
+    Tr.SetZoneTargetSpeed(Zi, Marks.IsBlocked(Zi) ? 0.0 : Convey);
+}
+
+// The input half of a PLC scan: every switch on the track read ONCE, before any
+// logic runs. IEC 61131-3 works exactly this way — read inputs, execute program,
+// write outputs — and the reason is that a program re-reading a sensor mid-scan
+// acts on two different worlds in one pass.
+//
+// A parked train that is not being stepped still covers what it covers. A switch
+// under it reads blocked, which is the physical truth and the whole point.
+void ScanStopMarks(FTrackSensors& Marks, const std::vector<FTrain*>& Trains,
+                   bool bCircuit, double Total)
+{
+    Marks.BeginScan();
+    for (const FTrain* Tr : Trains)
+    {
+        Marks.Cover(Tr->GetRearS(), Tr->GetFrontS(), bCircuit, Total);
+    }
+    Marks.EndScan();
 }
 
 // Brakes on, before anyone asks. A holding device that starts at its authored
@@ -606,14 +651,18 @@ void TestTwoTrainsQueueBeforeTheStation()
     // race, and the thing under test is the brake, not the timing.
     const int Release = 240 * 45;
 
+    FTrackSensors Marks(C.StopMarkS);
+    const std::vector<FTrain*> Both = {&A, &B};
+
     for (int Frame = 0; Frame < 240 * 120; ++Frame)
     {
+        ScanStopMarks(Marks, Both, false, T.TotalLength());
         if (Frame >= Release)
         {
-            ServeHolds(A, Sig, 0, C.Authored);
+            ServeHolds(A, Sig, 0, C.Authored, Marks);
             A.Step(Dt);
         }
-        ServeHolds(B, Sig, 1, C.Authored);
+        ServeHolds(B, Sig, 1, C.Authored, Marks);
         B.Step(Dt);
 
         // Both trains, then ONE tick. Overlaps live on blocks, not on trains.
@@ -694,6 +743,12 @@ struct FRunResult
     bool bShared = false;
     int SeamFrames = 0;
     double ClosestToStationStart = 1e9;   // how far a dwelling train parks past the seam
+
+    // Per zone, the furthest a STOPPED train's nose reached in it — where the stop
+    // mark actually put it, as opposed to where the mark is. The gap between the
+    // two is the crawl overshoot, and what is left of the clearance after it is
+    // the safety margin the ride really achieves. SIGNALLING.md quotes this.
+    std::vector<double> ParkedNoseS;
 };
 
 // The actor's tick, N trains, for Seconds of ride. One place, because the only
@@ -727,15 +782,21 @@ FRunResult RunTrains(std::size_t N, std::size_t Lookahead, double Seconds)
 
     FRunResult R;
     R.Laps.assign(N, 0);
+    R.ParkedNoseS.assign(C.Authored.size(), 0.0);
     std::vector<double> Prev(N);
     for (std::size_t t = 0; t < N; ++t) { Prev[t] = Owned[t]->GetDistance(); }
+
+    FTrackSensors Marks(C.StopMarkS);
+    std::vector<FTrain*> All;
+    for (std::size_t t = 0; t < N; ++t) { All.push_back(Owned[t].get()); }
 
     const double Dt = 1.0 / 240.0;
     for (int F = 0; F < static_cast<int>(240.0 * Seconds); ++F)
     {
+        ScanStopMarks(Marks, All, true, T.TotalLength());
         for (std::size_t t = 0; t < N; ++t)
         {
-            ServeHolds(*Owned[t], Sig, t, C.Authored);
+            ServeHolds(*Owned[t], Sig, t, C.Authored, Marks);
             Owned[t]->Step(Dt);
             Sig.Update(t, Owned[t]->GetRearS(), Owned[t]->GetFrontS());
 
@@ -749,6 +810,15 @@ FRunResult RunTrains(std::size_t N, std::size_t Lookahead, double Seconds)
             if (Owned[t]->GetSpeed() <= 0.0 && Sig.BlockAt(Now) == 0)
             {
                 R.ClosestToStationStart = std::min(R.ClosestToStationStart, Now);
+            }
+            if (Owned[t]->GetSpeed() <= 0.0)
+            {
+                const int Zp = Owned[t]->FindHoldZoneAt(Now);
+                if (Zp >= 0)
+                {
+                    double& Rec = R.ParkedNoseS[static_cast<std::size_t>(Zp)];
+                    Rec = std::max(Rec, Owned[t]->GetFrontS());
+                }
             }
         }
         Sig.Tick(Dt);
@@ -834,11 +904,21 @@ void TestAHeldTrainParksInsideItsBlock()
     // blocks. Measured consequence: three trains DEADLOCK, each denied by the tail
     // of the one in front, with no violation and nothing moving.
     //
-    // The dispatcher therefore brakes to a POSITION — sqrt(2*a*d) is the fastest a
-    // train may travel and still stop in d — and parks mid-zone. No new authored
-    // concept: SetZoneTargetSpeed was already being commanded every frame.
+    // The dispatcher therefore trucks the train forward at a crawl until A SWITCH
+    // SAYS FAR ENOUGH. No new authored concept: SetZoneTargetSpeed was already
+    // being commanded every frame, and the mark is a position on the track rather
+    // than a number in the program.
     const FRunResult R = RunTrains(2, 1, 240.0);
     assert(R.ClosestToStationStart < 1e8);          // somebody did dwell there
+
+    // THE MARGIN, MEASURED, because it is the safety number this whole mechanism
+    // exists to produce. The station block is 0..26 and its mark is at 25, so a
+    // parked nose must be past the switch and still short of the block end. The
+    // gap between those two is the clearance, and the overshoot from crawl speed
+    // is what eats into it — assert it rather than trust it.
+    const double ParkedNose = R.ClosestToStationStart + TrainLen * 0.5;
+    assert(ParkedNose >= 25.0);                     // it went all the way to the mark
+    assert(ParkedNose < 26.0);                      // and never nosed over into the launch
 
     // The mark is the NOSE a metre short of the block end: on the 26 m station
     // that centres a 15 m train at 17.5, spanning 10.0..25.0 — wholly inside its
@@ -891,6 +971,7 @@ void TestTheActorsOwnLoopRunsTwoTrains()
     // cannot be compiled without Unreal and this is the only place its policy can
     // be checked at all. Same order, same defaults:
     //
+    //   scan the stop marks once
     //   for each train: ServeHolds, Step, Signals->Update
     //   Signals->Tick once
     //
@@ -946,11 +1027,18 @@ void TestTheActorsOwnLoopRunsTwoTrains()
     double Prev[2] = {A.GetDistance(), B.GetDistance()};
     bool bShared = false;
 
+    FTrackSensors Marks(C.StopMarkS);
+    const std::vector<FTrain*> All = {&A, &B};
+
     for (int Frame = 0; Frame < 240 * 600; ++Frame)
     {
+        // The scan cycle: inputs first, then the program, then the outputs. Reading
+        // the switches once at the top of the frame is what a PLC does, and it is
+        // why the second train is served against the same snapshot as the first.
+        ScanStopMarks(Marks, All, true, T.TotalLength());
         for (std::size_t t = 0; t < 2; ++t)
         {
-            ServeHolds(*Trains[t], Sig, t, C.Authored);
+            ServeHolds(*Trains[t], Sig, t, C.Authored, Marks);
             Trains[t]->Step(Dt);
             Sig.Update(t, Trains[t]->GetRearS(), Trains[t]->GetFrontS());
 
@@ -1044,6 +1132,34 @@ int main()
                     Crest, Cl.ClosestApproach, P.MaxAbsRollRate, P.Duration);
         std::printf("  %zu blocks, %zu of them able to hold a train, so %zu trains\n",
                     C.Boundaries.size(), C.HoldMidS.size(), C.HoldMidS.size() - 1);
+
+        // The safety margin, as the ride actually achieves it rather than as the
+        // constant asks for it: the mark is surveyed at 1.0 m, and what is left
+        // after the train overshoots at crawl speed is the number that matters.
+        FRunResult R = RunTrains(4, 1, 1200.0);
+        {
+            // Merged with a heavier-headway run, because the shipping configuration
+            // never actually HOLDS a train at the mid-course brake — four trains at
+            // lookahead 1 flow straight through it. A device the traffic never uses
+            // is still a device, and its mark is still worth measuring.
+            const FRunResult H = RunTrains(4, 2, 1200.0);
+            for (std::size_t z = 0; z < R.ParkedNoseS.size(); ++z)
+            {
+                R.ParkedNoseS[z] = std::max(R.ParkedNoseS[z], H.ParkedNoseS[z]);
+            }
+        }
+        std::printf("  stop marks: zone  mark    parked nose   clear of block end\n");
+        for (std::size_t z = 0; z < R.ParkedNoseS.size(); ++z)
+        {
+            if (R.ParkedNoseS[z] <= 0.0)
+            {
+                continue;   // no device, or nothing ever stood at it
+            }
+            // The mark is 1.0 m short of the device end, so the end is mark + 1.
+            const double BlockEnd = C.StopMarkS[z] + NoseClearance;
+            std::printf("              %2zu  %7.2f  %11.2f  %10.2f\n",
+                        z, C.StopMarkS[z], R.ParkedNoseS[z], BlockEnd - R.ParkedNoseS[z]);
+        }
     }
 
     std::printf("\ntest_twotrains: all assertions passed\n");

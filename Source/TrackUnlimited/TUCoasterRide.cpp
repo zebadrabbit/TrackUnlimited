@@ -572,6 +572,7 @@ void ATUCoasterRide::RebuildFromSegments()
 		Trains.Reset();
 		StoppedForS.Reset();
 		Signals.Reset();
+		StopMarks.Reset();
 		return;
 	}
 
@@ -612,7 +613,11 @@ void ATUCoasterRide::RebuildFromSegments()
 			}
 		};
 
-		auto Close = [this, &Zones, &Open, &OpenS, &OpenSpeed](double EndS)
+		// Where each zone's stop mark gets bolted down. Filled in the same walk and
+		// in the same order as ZoneReleaseSpeed, so the index is the zone's own.
+		std::vector<double> StopMarkS;
+
+		auto Close = [this, &Zones, &Open, &OpenS, &OpenSpeed, &StopMarkS](double EndS)
 		{
 			if (Open == ETUSegmentZone::None || !(EndS > OpenS))
 			{
@@ -660,6 +665,17 @@ void ATUCoasterRide::RebuildFromSegments()
 			// most of its life commanded to zero, so this is the only surviving
 			// record of what it should open to.
 			ZoneReleaseSpeed.Add(Speed);
+
+			// THE STOP MARK, surveyed rather than computed. Its nose clearance is
+			// measured back from the far end of the device, because what the margin
+			// exists to prevent is a train protruding into the next zone through a
+			// defect. Clamped so a device barely longer than the train still puts
+			// the mark where the whole train fits behind it.
+			//
+			// This is the ONE place train length is allowed to touch the holding
+			// logic. Everything downstream reads a boolean.
+			StopMarkS.push_back(FMath::Max(OpenS + static_cast<double>(TrainLengthM),
+				EndS - HoldNoseClearanceM));
 		};
 
 		// Anti-rollback runs, walked in the SAME pass and by the same rule as
@@ -800,6 +816,10 @@ void ATUCoasterRide::RebuildFromSegments()
 				bTrackIsCircuit ? TEXT("CLOSED CIRCUIT, trains run laps")
 								: TEXT("open layout, trains return to the station by teleport"));
 		}
+
+		// The switches go in with the track. Rebuilt wholesale for the same reason
+		// the blocks are: move a brake run and you have moved its stop mark.
+		StopMarks = MakeUnique<FTrackSensors>(StopMarkS);
 
 		Signals = MakeUnique<FRideSignals>(BlockStarts, BlockBufferSeconds,
 			static_cast<std::size_t>(FMath::Max(1, DispatchLookahead)),
@@ -1313,15 +1333,34 @@ void ATUCoasterRide::ServeHolds(std::size_t TrainIndex)
 	// 65 m in with 65 m of empty brake ahead of it, where a real one holds near
 	// the exit.
 	//
-	// Clamped so a device barely longer than the train still parks it wholly
-	// inside rather than solving to a position behind its own entrance.
-	const FTrackZone Zone = T.GetZone(Zi);
-	const double Half = 0.5 * T.GetLength();
-	const double StopS = FMath::Max(Zone.StartS + Half,
-		Zone.EndS - HoldNoseClearanceM - Half);
+	// AND A SWITCH IS WHAT SAYS SO, not a sum. The rule is "truck forward until the
+	// stop mark trips" — no train length, no arc length, no zone extent. A PLC has
+	// none of those three and does not need them: the margin was surveyed into the
+	// track when the switch was bolted down, and from then on the ride enforces it
+	// by geometry rather than by arithmetic.
+	//
+	// The mark trips on the NOSE, because a span covers a point the moment its
+	// front reaches it — the same asymmetry the block counter runs on, and the
+	// reason a stop mark measures the thing it is named after.
+	//
+	// A mark can be tripped by ANY train, since a switch has no idea which. It is
+	// unambiguous only because the interlocking guarantees the train standing at
+	// this device is the only one that can be in this block. That mutual support is
+	// the whole sensor layer's premise; read a mark for a block that is not yours
+	// and you are reading somebody else's train.
+	//
+	// MEASURED on the two-train circuit: the station mark sits at 25.00 m, the nose
+	// parks at 25.18 m, and 0.82 m of the metre survives the crawl overshoot.
 	// ponytail: 1.5 m/s of crawl, a maintenance-pace guess.
 	const double Convey = FMath::Min(ZoneReleaseSpeed[Z], 1.5);
-	T.SetZoneTargetSpeed(Zi, T.GetDistance() + 0.25 < StopS ? Convey : 0.0);
+
+	// A MISSING SWITCH IS NOT PERMISSION TO MOVE. No sensor list, or one that
+	// disagrees with the zone list about how many devices there are, means the mark
+	// this train is trucking towards cannot be read — and a device that cannot be
+	// told when to stop must not be told to go. Same direction as every other rule
+	// in this system: fail closed.
+	const bool bAtMark = !StopMarks || Zi >= StopMarks->Num() || StopMarks->IsBlocked(Zi);
+	T.SetZoneTargetSpeed(Zi, bAtMark ? 0.0 : Convey);
 }
 
 void ATUCoasterRide::Tick(float DeltaSeconds)
@@ -1343,6 +1382,23 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 	// worked for exactly one train in exactly one place; a zone commanded to zero
 	// holds a train anywhere there is a device to hold it, and the station stops
 	// being a special case.
+	// THE INPUT HALF OF A PLC SCAN: every switch on the track read ONCE, before any
+	// logic runs. IEC 61131-3 works exactly this way — read inputs, execute the
+	// program, write outputs — and the reason is that a program which re-reads a
+	// sensor mid-scan acts on two different worlds in one pass. It is also why the
+	// second train is served against the same snapshot as the first, rather than
+	// against a track the first has already moved along.
+	if (StopMarks)
+	{
+		StopMarks->BeginScan();
+		for (int32 t = 0; t < Trains.Num(); ++t)
+		{
+			StopMarks->Cover(Trains[t]->GetRearS(), Trains[t]->GetFrontS(),
+				bTrackIsCircuit, Track.TotalLength());
+		}
+		StopMarks->EndScan();
+	}
+
 	for (int32 t = 0; t < Trains.Num(); ++t)
 	{
 		ServeHolds(static_cast<std::size_t>(t));

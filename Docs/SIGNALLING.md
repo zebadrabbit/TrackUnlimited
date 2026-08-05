@@ -13,6 +13,7 @@ trips no block. That and the generated control panel are Phase 3 — see [`ROADM
 ## Contents
 
 - [Why this is worth building](#why-this-is-worth-building)
+- [What the system actually knows](#what-the-system-actually-knows)
 - [The block state machine](#the-block-state-machine)
 - [Dispatch permissives](#dispatch-permissives)
 - [Circuit topology, and what it does not cover yet](#circuit-topology-and-what-it-does-not-cover-yet)
@@ -32,6 +33,63 @@ It is also the *lowest-risk* pillar in the plan, which is not obvious from the o
 from-scratch C++ rebuild of a block-occupancy-plus-buffer system the developer has already designed,
 shipped and validated once in Blueprint. That deserves the confidence that comes with "I have built
 this before", not the caution owed to the untested parts of the architecture.
+
+## What the system actually knows
+
+The difference between a game and a sim, here, is what the control system is allowed to look at. It is
+easy to write signalling that reads `train.position` every frame, and everything downstream of that is
+a simulation of the *answer* a control system would have got rather than of the control system. A real
+PLC has no idea where a train is. It knows that a switch at 872.1 m went high, and nothing else.
+
+So the layering is deliberate, and each arrow discards information on purpose:
+
+```
+FTrain span  →  SENSORS (physical)  →  PLC (logical)  →  VFD (one drive)
+```
+
+**`FTrackSensors` is the only layer entitled to a position,** because a proximity switch genuinely *is*
+a device that a physical train physically covers. It reports a boolean plus edge counts, and it
+deliberately does **not** report *which* train — a switch says "metal is over me" and nothing more.
+Real hardware is a proximity switch tripped by a metal flag under each car; photo eyes and mechanical
+limit switches do the same job less commonly. Two kinds of switch exist in the model so far:
+
+- **Block-boundary sensors**, one per boundary in travel order, which drive occupancy.
+- **Stop marks**, one per zone, at `deviceEnd − HoldNoseClearanceM` — see
+  [holding a train](#holding-a-train-and-where-you-are-allowed-to).
+
+**`FBlockCounter` derives occupancy from trips alone.** Given a sensor at each block boundary,
+
+> trains in block *i* = (times sensor *i* was **entered**) − (times sensor *i+1* was **fully cleared**)
+
+Rising on the way in and *falling* on the way out. That asymmetry is the whole trick: use one edge for
+both ends and a block goes clear while a train is still lying across its boundary. It is a train
+counter, which railways have used for a century, and it carries the property that matters — **a block
+reading two is a collision, detected without anything ever having known a position.** It is proven
+equal to perfect knowledge on every scan of three full laps.
+
+**A counter must be seeded.** Computing occupancy from lifetime edge totals is right in the middle of a
+run and wrong at the start of one: a train beginning inside block 0 sends block 3 to **−1** the moment
+its tail leaves the sensor at 0.0, because it is counted out of a block it was never counted into. That
+is not a quirk of this implementation — it is exactly why a real ride is swept and its counters zeroed
+with every train at a known place before it opens. A negative count is reported separately from an
+over-count, because one means a missed trip and the other means two trains.
+
+**Inputs are read once per scan.** IEC 61131-3 programs run *read inputs → execute → write outputs*,
+and the model does the same: every switch is sampled at the top of the frame, before any logic runs, so
+the second train is served against the same snapshot as the first rather than against a track the first
+has already moved along. `FRideSignals` plus `ServeHolds` **is** the PLC program.
+
+**What still cheats, honestly.** `FRideSignals` is still handed each train's nose-and-tail span every
+frame rather than reading the counter; the sensor layer is built and proven equivalent underneath it,
+but the switch-over has not happened. `ServeHolds` still asks `FindHoldZoneAt(GetDistance())` to decide
+which device it is standing at, which a PLC would get from block occupancy. And zones are owned
+**per train** rather than by the track, where a real brake is one device acting on whatever is in it.
+None of the three is hidden by a wrapper that would make it look solved.
+
+**VFDs are not modelled yet.** A zone target speed is currently a command that takes effect
+instantaneously and reports nothing back. A real drive has a ramp rate, a torque limit, a current draw
+and a feedback signal that can disagree with the command — which is exactly the disagreement a control
+panel exists to show. See [the generated control panel](#the-generated-control-panel).
 
 ## The block state machine
 
@@ -204,17 +262,45 @@ It is deliberately not the middle. Mid-device was the minimum fix for the seam s
 arbitrary everywhere else — on the 130 m mid-course brake it parked a train 65 m in with 65 m of empty
 brake ahead of it, where a real one holds near the exit.
 
+**And a switch is what says so, not a sum.** Each device carries a **stop mark** — a proximity switch
+bolted to the track at `deviceEnd − HoldNoseClearanceM` — and the dispatcher's rule is *truck forward
+until the mark trips.* No train length, no arc length, no zone extent: a PLC has none of those three
+and needs none of them. Where you place a switch is something an installer knows at survey time with a
+tape measure; where a train's nose is right now is not something a control system knows at all. Train
+length is therefore consumed **once, at build time**, when the mark is placed, and the holding logic
+downstream reads a boolean.
+
+The mark trips on the **nose**, because a span covers a point the moment its front reaches it — the
+same edge asymmetry the block counter runs on (see [what the system actually knows](#what-the-system-actually-knows)),
+and the reason a stop mark measures the thing it is named after.
+
+A mark can be tripped by *any* train, because a switch has no idea which. It is unambiguous only
+because the interlocking guarantees the train standing at this device is the only one that can be in
+this block. The interlocking and the identity tracking hold each other up; read a mark for a block that
+is not yours and you are reading somebody else's train.
+
 Measured on the circuit, and the two stages are visible in it:
 
-| device | block | arrives | pad stops | trucked to | trucked |
-|---|---|---|---|---|---|
-| station | 0–26 | 0.0 | 0.0 | 17.4 | 17.4 m |
-| mid-course | 872–1002 | 26.4 | 926.4 | 993.5 | **67.1 m** |
-| outer | 1186–1223 | 15.5 | 1204.9 | 1214.9 | 10.0 m |
-| transfer | 1223–1250 | 5.8 | 1226.0 | 1241.9 | 15.9 m |
-| inner | 1250–1288 | 2.8 | 1251.0 | 1279.4 | 28.5 m |
+| device | block | arrives | pad stops | stop mark | parked nose | clear |
+|---|---|---|---|---|---|---|
+| station | 0–26 | 0.0 | 0.0 | 25.00 | 25.19 | 0.81 m |
+| mid-course | 872–1002 | 26.4 | 926.4 | 1001.06 | 1001.24 | 0.81 m |
+| outer | 1186–1223 | 15.5 | 1204.9 | 1222.52 | 1222.70 | 0.81 m |
+| transfer | 1223–1250 | 5.8 | 1226.0 | 1249.52 | 1249.70 | 0.81 m |
+| inner | 1250–1288 | 2.8 | 1251.0 | 1287.02 | 1287.20 | 0.81 m |
 
-Every one parks its nose 1.1 m from the block end — the extra 0.1 is the crawl's dead band.
+The mid-course figures come from a heavier-headway run (lookahead 2), because at the shipping
+lookahead of 1 four trains flow straight through that brake and never hold there. It is still a device,
+and its mark is still worth measuring.
+
+Every train stops **0.18 m past its mark** and every device is left with **0.81 m** of the metre. That
+uniformity is not a coincidence and is the reason the overshoot is safe to design around: it is
+`v²/2a` at the crawl speed and the grip, both of which are the same at every device. Real placement
+absorbs exactly this in the margin, which is what a margin is for. Push the crawl above about 3.4 m/s
+and the overshoot eats the whole metre — that, not the mark, is the number to watch.
+
+Both stages remain visible in the same run: the mid-course pad puts the train down at 926.4 m and the
+tyres truck it a further **67.3 m** to its mark.
 
 **The conveying stage is not cosmetic.** Brake alone and the train stops about 0.3 m past the zone
 start; the station's start is the circuit's seam, so that leaves the back half in the *last* block, a
