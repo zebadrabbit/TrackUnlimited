@@ -1284,28 +1284,32 @@ void ATUCoasterRide::ServeHolds(std::size_t TrainIndex)
 		return;
 	}
 
-	// Held — and it brakes to a POSITION, not to zero wherever it happens to be.
-	// sqrt(2*a*d) is the fastest a train may travel and still stop in d, so
-	// commanding that as the target eases it down and parks it mid-device.
+	// HELD, and the hardware does this in TWO STAGES rather than one glide.
 	//
-	// Why that matters, measured: commanded to plain zero a train stops within
-	// ~0.3 m of where the ZONE starts, because a zone says "reach this speed" and
-	// zero is reachable immediately. The station's start IS the seam of the
-	// circuit, so that leaves the back half of the train in the LAST block — a
-	// dwelling train holds two blocks, and three trains then DEADLOCK, each denied
-	// by the tail of the one in front, silently and with no violation.
+	// A real block brake is two devices sharing a stretch of track. A sensor sits
+	// just before the pad; the brake trips as the train ENTERS and clamps a fin
+	// under the car, stopping it as hard as it is allowed to — and the limit is
+	// RIDER COMFORT, not distance, because the alternative is whiplash. So the
+	// train stops wherever that lands. Only then do rubber tyres engage and convey
+	// it forward into an acceptable holding position.
+	//
+	// Commanding a crawl speed says both stages in one number, because a zone
+	// closes the gap to its target using its full authority: from 26 m/s the brake
+	// bites at everything it has, and from rest the tyres push. The sequence falls
+	// out — hard stop, creep to the mark, held.
+	//
+	// The conveying stage is also what keeps the train INSIDE ITS OWN BLOCK. Brake
+	// alone and it stops ~0.3 m past the zone start; the station's start is the
+	// circuit's seam, so that leaves its back half in the LAST block, a dwelling
+	// train holds two, and three trains deadlock — each denied by the tail of the
+	// one in front. Real rides reposition for exactly the same reason.
 	const FTrackZone Zone = T.GetZone(Zi);
 	const double StopS = 0.5 * (Zone.StartS + Zone.EndS);
-	const double Remaining = StopS - T.GetDistance();
-	// The device's OWN authority, not a repeat of the grip constant — if a zone is
-	// ever given a weaker brake, the curve has to weaken with it or the dispatcher
-	// would be promising a stop the hardware cannot make.
-	const double Curve = Remaining > 0.0 && Zone.MaxDecel > 0.0
-		? FMath::Sqrt(2.0 * Zone.MaxDecel * Remaining) : 0.0;
-	// ponytail: mid-device, which is right for a station and arbitrary for a long
-	// block brake. Give a holding zone an authored stop offset when somebody wants
-	// a platform marked somewhere other than the middle.
-	T.SetZoneTargetSpeed(Zi, FMath::Min(ZoneReleaseSpeed[Z], Curve));
+	// ponytail: 1.5 m/s of crawl, and mid-device for the mark. The speed is a
+	// maintenance-pace guess; the mark wants authoring, because mid is right for a
+	// station and arbitrary for a 130 m brake run.
+	const double Convey = FMath::Min(ZoneReleaseSpeed[Z], 1.5);
+	T.SetZoneTargetSpeed(Zi, T.GetDistance() + 0.25 < StopS ? Convey : 0.0);
 }
 
 void ATUCoasterRide::Tick(float DeltaSeconds)

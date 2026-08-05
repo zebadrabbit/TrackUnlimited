@@ -270,24 +270,37 @@ void ServeHolds(FTrain& Tr, const FRideSignals& Sig, std::size_t Id,
         return;
     }
 
-    // Held. Brake to a POSITION, not to zero-wherever-you-are: sqrt(2*a*d) is the
-    // fastest a train may be travelling and still stop in d, so commanding that as
-    // the target eases it down and parks it at StopS.
+    // HELD, and the hardware does this in two stages rather than one glide.
     //
-    // Why it matters, measured: commanded to plain zero, a train stops within
-    // ~0.3 m of the zone's start. In the station, whose start IS the seam, that
-    // leaves its back half in the LAST block — so a dwelling train holds two
-    // blocks, and on a ring that tight, three trains deadlock: each is denied by
-    // the tail of the one in front. Stopping mid-zone gives the block back.
+    // A real block brake is TWO devices sharing a stretch of track. A sensor sits
+    // just before the pad; the brake trips as the train ENTERS and clamps a fin
+    // under the car, stopping it as hard as it is allowed to — the limit being
+    // rider comfort, not distance, because the alternative is whiplash. The train
+    // therefore stops WHEREVER THAT LANDS. Only then do rubber tyres engage and
+    // convey it forward into an acceptable holding position.
+    //
+    // Commanding a crawl speed expresses both stages in one number, because a zone
+    // closes the gap to its target using its full authority: from 26 m/s the brake
+    // bites at everything it has, and from rest the tyres push. So the sequence
+    // falls out — hard stop, then creep to the mark, then held.
+    //
+    // The earlier version glided in on sqrt(2*a*d), which arrives at the mark
+    // exactly and is wrong in character: it spreads the deceleration over the whole
+    // approach instead of braking on entry, and it needs the pad to modulate itself
+    // against a distance it has no way to know.
+    //
+    // The conveying stage is ALSO what keeps the train inside its own block. Brake
+    // alone and it stops ~0.3 m past the zone start; in the station, whose start is
+    // the circuit's seam, that leaves its back half in the LAST block, a dwelling
+    // train holds two, and three trains deadlock — each denied by the tail of the
+    // one in front. Real rides reposition for the same reason.
     const FTrackZone Zone = Tr.GetZone(Zi);
     const double StopS = 0.5 * (Zone.StartS + Zone.EndS);
-    const double Remaining = StopS - Tr.GetDistance();
-    // The device's OWN authority, not a repeat of the grip constant: a weaker
-    // brake has to get a gentler curve, or the dispatcher promises a stop the
-    // hardware cannot make.
-    const double Curve = Remaining > 0.0 && Zone.MaxDecel > 0.0
-        ? std::sqrt(2.0 * Zone.MaxDecel * Remaining) : 0.0;
-    Tr.SetZoneTargetSpeed(Zi, std::min(Authored[Zi], Curve));
+    // ponytail: 1.5 m/s of crawl, and mid-device for the mark. The speed is a
+    // maintenance-pace guess; the mark wants authoring, since mid is right for a
+    // station and arbitrary for a 130 m brake run.
+    const double Convey = std::min(Authored[Zi], 1.5);
+    Tr.SetZoneTargetSpeed(Zi, Tr.GetDistance() + 0.25 < StopS ? Convey : 0.0);
 }
 
 // Brakes on, before anyone asks. A holding device that starts at its authored

@@ -202,10 +202,25 @@ the same instant.
 release a train, based on what is clear downstream. On high-speed sections it
 also has to look far enough ahead that the *braking distance* fits.
 
-**VFD module** — variable-frequency drive. The generated control-panel element
-for a powered section (lift chain, tyre launch): target frequency, actual motor
-feedback, torque draw, ramp rate. The thing an operator would actually be
-looking at.
+**PLC** — programmable logic controller. The **brain**: it reads the sensors,
+holds the block states, evaluates the permissives and commands the devices, on a
+fixed scan cycle. A ride's safety interlocking is a PLC program, usually on a
+safety-rated PLC separate from the one running the ordinary sequencing.
+
+**In this project, `FRideSignals` plus the dispatcher IS the PLC program.** Block
+occupancy, overlaps, permissives, and the four lines that command a holding
+device every frame — that is exactly the job. `Docs/CONTROL_ARCHITECTURE.md`
+describes the tiers it would be split across.
+
+**VFD** — variable-frequency drive. The **muscle for one motor**, not the brain: it
+takes a speed command and drives a tyre or chain motor to it, reporting frequency,
+current and torque back. A ride has one per powered device and a PLC telling all
+of them what to do — so "the VFD decided to hold the train" is a category error;
+the PLC decided, the VFD carried it out.
+
+**VFD module** — the generated control-panel element for one of those drives:
+target frequency, actual motor feedback, torque draw, ramp rate. The faceplate an
+operator would actually be looking at.
 
 **Block brake** — a brake run *with drive tyres*. It can bring a train to a stop,
 hold it there, and start it again. That last part is what separates it from a

@@ -179,13 +179,25 @@ Holding devices rest **closed**. A device that opens because nobody is asking is
 open, so the resting state is brakes-on and a permissive is what opens one — for the frames it is
 granted, and no longer.
 
-And a held train is braked to a **position**, not to zero wherever it happens to be. A zone says
-*reach this speed*, and zero is reachable immediately, so a train commanded to hold stops within about
-0.3 m of where the zone starts. In the station — whose start is the seam of the circuit — that leaves
-the back half of the train in the *last* block, so a dwelling train holds two. On a tight ring that is
-enough to deadlock three trains, each denied by the tail of the one in front, with nothing reported.
-Commanding `sqrt(2·a·d)` instead eases the train down and parks it mid-device, which needs no new
-authored concept because the dispatcher was already setting the target every frame.
+And holding a train happens in **two stages**, because the hardware is two devices sharing a stretch
+of track:
+
+1. **The pad stops it.** A sensor sits just before the brake, so it trips as the train *enters* and
+   clamps a fin under the car. It stops the train as hard as it is allowed to — and the limit is
+   **rider comfort, not distance**, because the alternative is whiplash. The train therefore stops
+   wherever that lands. Measured on this circuit: **0.6–0.7 g** fore-aft, which is where real block
+   brakes sit.
+2. **The tyres convey it.** Only once it is stopped do drive tyres engage and move it forward into an
+   acceptable holding position.
+
+The dispatcher says both in one number — a crawl speed — because a zone closes the gap to its target
+using its full authority: from 26 m/s the pad bites with everything it has, and from rest the tyres
+push. The sequence falls out.
+
+**The conveying stage is not cosmetic.** Brake alone and the train stops about 0.3 m past the zone
+start; the station's start is the circuit's seam, so that leaves the back half in the *last* block, a
+dwelling train holds two, and three trains deadlock — each denied by the tail of the one in front,
+with nothing reported. Real rides reposition for exactly the same reason.
 
 ## Two trains, and the three reads that carry identity
 

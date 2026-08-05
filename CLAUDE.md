@@ -89,7 +89,9 @@ One rule from this phase that outlived it, because it has now bitten twice: **th
 - **Heartline** — the reference line (not the rail centerline) that banking and ride-camera calculations are computed around, so felt-G through banked turns is physically correct.
 - **Roll vs bank** — not synonyms, and the difference is a per-segment mode (`ERollMode`). **Roll** is measured from the rotation-minimising path frame: defined everywhere including inverted and vertical track, and what the integrator sees. **Bank** is measured from the horizon — what a spirit level reads — and is undefined pointing straight up. Say which one you mean; `Roll = 0` is not level on non-planar track.
 - **Dispatch permissive** — the logic gate that allows a station/launch to release a train, based on downstream block clearance (and, for high-speed sections, braking-distance lookahead).
-- **VFD module** — the generated control-panel element for a powered segment (lift chain, tire-drive launch): target frequency/speed, actual motor feedback, torque/current draw, ramp rate.
+- **PLC vs VFD** — not interchangeable, and it is an easy slip. The **PLC** is the brain: reads sensors, holds block state, evaluates permissives, commands devices on a scan cycle. A **VFD** is the muscle for *one* motor: it takes a speed command and drives a tyre or chain to it. There is one PLC and many VFDs. **`FRideSignals` plus `ServeHolds` IS the PLC program** — that is the right way to think about what has been built. `Docs/CONTROL_ARCHITECTURE.md` has the tier split and the IEC 61131-3 grounding.
+- **VFD module** — the generated control-panel element for one drive on a powered segment (lift chain, tyre launch): target frequency/speed, actual motor feedback, torque/current draw, ramp rate.
+- **Block brake vs trim brake** — a block brake is a friction pad *and* drive tyres: the pad trips on entry and stops the train as hard as rider comfort allows, then the tyres convey it to a holding position. A trim can only slow a train, so a train parked on one stays there. Only block brakes bound a block or count toward capacity.
 
 ## Conventions in prototype code
 
