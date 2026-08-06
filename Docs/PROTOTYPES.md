@@ -163,6 +163,13 @@ tests. See [`SIGNALLING.md`](SIGNALLING.md) for what the states mean and why the
 | `TrackSensors.h` | The sensors a PLC actually reads, and a train counter that derives occupancy from their trips alone |
 | `TrackDrives.h` | The motors it commands, on the output side: ramp, feedback, torque, and a fault that stays quiet on a healthy ride |
 | `StationProcess.h` | What has to happen at a platform before a train may leave it. One position, gated by contacts rather than a clock |
+| `PlcUnit.h` | The controller as a MACHINE: key switch, watchdog, program identity, power. The standard PLC, not the safety chain |
+| `Cia402.h` | The drive state machine, as specified. Eight states, one of which produces torque |
+| `SignalWatch.h` | Change detection over named channels — edge, not level, with a seeding rule |
+| `SimDigest.h` | A fingerprint of every scan, for proving two runs are the same run |
+| `ShowBus.h` | Tier 3's only connection to the ride. Read-only by shape, not by policy |
+| `Scenario.h` | A timeline of faults against the scan clock, so a fault has a WHEN |
+| `Evacuation.h` | Can everybody get off? Catwalk spans against where trains actually stopped |
 
 `RideSignals.h` consumes **doubles and a train index, not an `FTrain`** — `RearS`, `FrontS`, `dt`.
 That keeps it independent of the physics, lets the assert suite drive it with bare numbers, and makes
