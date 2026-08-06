@@ -821,9 +821,6 @@ void ATUCoasterRide::RebuildFromSegments()
 		TArray<TPair<double, double>> CatchSpans;
 		bool bCatchOpen = false;
 		double CatchStartS = 0.0;
-		ETUWalkway WalkOpen = ETUWalkway::None;
-		double WalkStartS = 0.0;
-		Walkways.clear();
 
 		for (int32 i = 0; i < Segments.Num(); ++i)
 		{
@@ -841,25 +838,6 @@ void ATUCoasterRide::RebuildFromSegments()
 				}
 				bCatchOpen = Segments[i].bAntiRollback;
 				CatchStartS = AccS;
-			}
-
-			// Catwalks, derived exactly as the catches are and for the same
-			// reason: a property of TRACK, not a device. A run ends where the
-			// SIDE changes, so a left-hand walk becoming a right-hand one is two
-			// spans — the evacuation check merges them again, but the authored
-			// distinction survives to be drawn and reported.
-			if (Segments[i].Walkway != WalkOpen)
-			{
-				if (WalkOpen != ETUWalkway::None)
-				{
-					FWalkwaySpan Span;
-					Span.StartS = WalkStartS;
-					Span.EndS = AccS;
-					Span.Side = ToWalkwaySide(WalkOpen);
-					Walkways.push_back(Span);
-				}
-				WalkOpen = Segments[i].Walkway;
-				WalkStartS = AccS;
 			}
 			// A RUN ENDS WHERE THE DEVICE CHANGES, and the device is its kind AND
 			// its speed. The speed half used to be missing: a run was defined by
@@ -901,13 +879,28 @@ void ATUCoasterRide::RebuildFromSegments()
 		{
 			CatchSpans.Add(TPair<double, double>(CatchStartS, AccS));
 		}
-		if (WalkOpen != ETUWalkway::None)
+
+		// THE AUTHORED WALKWAYS, converted rather than derived. A person placed
+		// these; this only turns start/stop/side into what the evacuation check
+		// reads, and rejects the two ways a typed pair can be meaningless.
+		WalkwaySpans.clear();
+		for (const FTUWalkway& W : Walkways)
 		{
+			if (W.Side == ETUWalkway::None || !(W.EndS > W.StartS))
+			{
+				// Reported, never repaired, like every other authored-value check
+				// here. Silently swapping a reversed pair would hide a typo behind
+				// a catwalk that looks placed and is not where anybody put it.
+				UE_LOG(LogTemp, Warning,
+					TEXT("TrackUnlimited: walkway ignored — %.1f to %.1f m is not a span, "
+						"or its side is None."), W.StartS, W.EndS);
+				continue;
+			}
 			FWalkwaySpan Span;
-			Span.StartS = WalkStartS;
-			Span.EndS = AccS;
-			Span.Side = ToWalkwaySide(WalkOpen);
-			Walkways.push_back(Span);
+			Span.StartS = W.StartS;
+			Span.EndS = FMath::Min(static_cast<double>(W.EndS), AccS);
+			Span.Side = ToWalkwaySide(W.Side);
+			WalkwaySpans.push_back(Span);
 		}
 
 		// AN INVENTORY OF WHAT IS ACTUALLY ON THIS TRACK. The devices are the part

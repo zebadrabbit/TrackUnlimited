@@ -64,6 +64,22 @@ public:
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Track")
 	TArray<FTUTrackSegment> Segments;
 
+	/**
+	 * Evacuation catwalks, PLACED BY A PERSON. Start, stop, side.
+	 *
+	 * Deliberately not derived and deliberately not suggested. Where a walkway
+	 * *should* go by the logic of "a train can stop here" may be somewhere
+	 * architecturally impossible to reach, structurally unsupportable, or
+	 * dangerous to stand — none of which this model knows anything about. The
+	 * layout can say where one would HELP; only a person says where one goes.
+	 *
+	 * Empty by default, including on every preset, and that is honest rather than
+	 * unfinished: a shipped layout with catwalks nobody surveyed would be the
+	 * project asserting something it cannot know.
+	 */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Track")
+	TArray<FTUWalkway> Walkways;
+
 	/** Which starter layout the tick-box below loads. */
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Track")
 	ETUPresetLayout Preset = ETUPresetLayout::Reference;
@@ -481,12 +497,8 @@ private:
 	void SampleRestraints();
 	void DrawRestraints() const;
 
-	/**
-	 * Evacuation catwalks, derived from the segment list exactly as the
-	 * anti-rollback catches are — a property of TRACK rather than a device.
-	 * See ETUWalkway and Prototypes/BlockSignal/Evacuation.h.
-	 */
-	std::vector<FWalkwaySpan> Walkways;
+	/** The authored list turned into what the evacuation check reads. Rebuild only. */
+	std::vector<FWalkwaySpan> WalkwaySpans;
 
 	/** Where the block boundaries fall, in world space. Only changes on a rebuild. */
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Signalling")

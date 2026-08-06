@@ -347,36 +347,65 @@ struct FTUTrackSegment
 		EditCondition = "Zone != ETUSegmentZone::None", EditConditionHides))
 	bool bStartsNewDevice = false;
 
+};
+
+/**
+ * A solid decked evacuation catwalk with handrails, running alongside the track
+ * from one point to another.
+ *
+ * A HUMAN PLACES THESE. Not derived, not inferred, and deliberately not offered
+ * as a suggestion: where a walkway *should* go by the logic of "a train can stop
+ * here" may be somewhere architecturally impossible to reach, structurally
+ * unsupportable, or actively dangerous to stand. Guessing would produce a
+ * confident answer about a physical structure this model knows nothing about.
+ * The layout says where a walkway would HELP; only a person says where one goes.
+ *
+ * AUTHORED AS A START AND A STOP, which is why this is its own list rather than
+ * a flag on FTUTrackSegment. A segment is 20–60 m of geometry chosen for the
+ * shape of the ride; a catwalk begins and ends where the structure allows, which
+ * is routinely partway along one. Snapping walkways to segment boundaries would
+ * be an arbitrary constraint with nothing to do with where a person can walk.
+ *
+ * NOT A ZONE, for exactly the reasons bAntiRollback is not one. A zone is a
+ * CONTROL device: it has a speed, an authority, and something commanding it
+ * every scan. A catwalk has none of those, cannot release a train, and so is no
+ * more a place to park one than a trim brake is. It OVERLAPS zones freely — a
+ * launch with walkways down both sides is both at once, which is the usual case.
+ *
+ * SIDE MATTERS. A train is boarded and evacuated from a specific side, so a
+ * catwalk on the far side of the track from the restraints is a walkway for
+ * staff rather than an evacuation route. Reachability treats abutting spans of
+ * different sides as one continuous route — a person steps across at the join —
+ * so the side is reported rather than required to match.
+ *
+ * Rendering the deck, the railings and the lighting is Phase 4. The placement
+ * and the check are not blocked on any of it.
+ */
+USTRUCT(BlueprintType)
+struct FTUWalkway
+{
+	GENERATED_BODY()
+
 	/**
-	 * A solid decked evacuation catwalk with handrails, alongside this segment.
+	 * Metres along the track, from the start.
 	 *
-	 * DELIBERATELY NOT A ZONE, for exactly the reasons bAntiRollback is not one.
-	 * A zone is a CONTROL device: it has a speed, an authority, and something
-	 * commanding it every scan. A catwalk has none of those. It cannot release a
-	 * train, so it is no more a place to park one than a trim brake is, and it is
-	 * not a block boundary either. And it OVERLAPS zones freely — a launch with
-	 * walkways down both sides is both at once, which is the usual case.
-	 *
-	 * Fittable to almost any segment, and in practice clustered where a train is
-	 * expected to stop and where staff walk anyway: brake runs, launches, shuttle
-	 * sections, lifts.
-	 *
-	 * SIDE MATTERS. A train is boarded and evacuated from a specific side, so a
-	 * catwalk on the far side of the track from the restraints is a walkway for
-	 * staff rather than an evacuation route. Reachability treats abutting spans of
-	 * different sides as one continuous route, because a person can step across at
-	 * the join and requiring one side end to end would fail almost every real
-	 * layout — the side is reported, not required to match.
-	 *
-	 * What it buys: after an emergency stop, `CheckEvacuation` can ask whether
-	 * every train is somewhere people can walk to. Nothing could ask that before —
-	 * "every train came to rest at a holding device" is a statement about
-	 * signalling and says nothing about getting the riders out on foot.
-	 *
-	 * Drawing it is Phase 4. The data and the check are not blocked on that.
+	 * ABSOLUTE ARC LENGTH, and the cost of that is worth knowing: lengthening a
+	 * segment upstream shifts every walkway after it, because arc length is
+	 * derived from the segment list. The alternative — anchoring to a segment
+	 * index plus an offset — survives upstream edits and breaks differently when
+	 * that segment is deleted or resized instead. Absolute was chosen because it
+	 * is what a person placing a structure actually knows ("it runs from the
+	 * brake run to the transfer"), and because a walkway is placed against a
+	 * finished layout rather than during one.
 	 */
-	UPROPERTY(EditAnywhere, Category = "Zone")
-	ETUWalkway Walkway = ETUWalkway::None;
+	UPROPERTY(EditAnywhere, Category = "Walkway", meta = (ClampMin = "0.0"))
+	float StartS = 0.f;
+
+	UPROPERTY(EditAnywhere, Category = "Walkway", meta = (ClampMin = "0.0"))
+	float EndS = 0.f;
+
+	UPROPERTY(EditAnywhere, Category = "Walkway")
+	ETUWalkway Side = ETUWalkway::Both;
 };
 
 // Reflected editor struct -> the authored model the prototypes understand.
