@@ -2181,6 +2181,96 @@ namespace TUWatch
 	constexpr std::size_t Console   = 3000;
 }
 
+// Which platform, if any, this train is standing at. A platform's bank is the
+// only place its state exists, so a train has to be matched to one to sample it.
+// Matched by SPAN rather than by a stored index, because the platform genuinely
+// does not know which train is over it — the same honesty the stop marks keep.
+void ATUCoasterRide::SampleRestraints()
+{
+	const int32 N = Trains.Num();
+	if (TrainGroupClosed.Num() != N)
+	{
+		TrainGroupClosed.SetNum(N);
+	}
+
+	for (int32 t = 0; t < N; ++t)
+	{
+		const double S = Trains[t]->GetDistance();
+		const FTUPlatform* At = nullptr;
+		for (const FTUPlatform& P : Platforms)
+		{
+			if (!ZoneSpans.IsValidIndex(P.Zone)) { continue; }
+			if (S >= ZoneSpans[P.Zone].StartS - 0.01 && S < ZoneSpans[P.Zone].EndS)
+			{
+				At = &P;
+				break;
+			}
+		}
+		// Away from a platform the last sample STANDS. The bars did not open
+		// because the train left the room that was commanding them.
+		if (At == nullptr) { continue; }
+
+		const FCommandedBank& B = At->Crew.Restraints;
+		const int32 G = FMath::Max(1, B.Groups);
+		const int32 Base = t * G;
+		if (TrainGroupState.Num() < Base + G)
+		{
+			TrainGroupState.SetNum(Base + G);
+		}
+		for (int32 g = 0; g < G; ++g)
+		{
+			TrainGroupState[Base + g] = static_cast<uint8>(B.GroupState(g));
+		}
+		TrainGroupClosed[t] = B.IsCommandedClosed();
+	}
+}
+
+void ATUCoasterRide::DrawRestraints() const
+{
+	if (!bShowRestraints || Trains.Num() == 0 || Platforms.Num() == 0)
+	{
+		return;
+	}
+	// Group count comes from the banks, which all carry the same authored number.
+	const int32 G = FMath::Max(1, Platforms[0].Crew.Restraints.Groups);
+	const double Len = FMath::Max(1.0, static_cast<double>(TrainLengthM));
+
+	for (int32 t = 0; t < Trains.Num(); ++t)
+	{
+		const int32 Base = t * G;
+		if (!TrainGroupState.IsValidIndex(Base + G - 1)) { continue; }
+		const bool bClosed = TrainGroupClosed.IsValidIndex(t) && TrainGroupClosed[t];
+
+		for (int32 g = 0; g < G; ++g)
+		{
+			// Group g spans its share of the train, measured from the rear. The
+			// nine sample points are a physics discretisation and are NOT cars;
+			// the groups are the things with a sensor on them.
+			const double Offset = -Len * 0.5 + (static_cast<double>(g) + 0.5) * (Len / G);
+			const FTrackFrame& F = Trains[t]->GetFrameAt(Offset);
+
+			const auto State =
+				static_cast<FCommandedBank::EGroupState>(TrainGroupState[Base + g]);
+
+			// STUCK IS RED WHATEVER IT WAS DOING. A bar that will not close is a
+			// train that cannot go; a bar that will not OPEN is a rider who cannot
+			// get out, which is a different emergency and just as much a fault.
+			FColor Col = FColor(90, 95, 100);                       // open, at rest
+			if (State == FCommandedBank::EGroupState::Stuck)        { Col = FColor(215, 60, 50); }
+			else if (State == FCommandedBank::EGroupState::Travelling) { Col = FColor(235, 160, 30); }
+			else if (bClosed)                                       { Col = FColor(70, 200, 110); }
+
+			// Drawn ABOVE the rails at the heartline, where a bar actually is, and
+			// as a box rather than a tint so it reads from outside the train.
+			const FVec3 P = F.Position + F.Up * 0.35;
+			const float Half = static_cast<float>(Len / G) * 0.5f * 0.85f;
+			DrawDebugBox(GetWorld(), ToWorld(P),
+				FVector(Half * 100.f, 55.f, 30.f), ToWorldRotation(F), Col,
+				false, -1.f, 0, State == FCommandedBank::EGroupState::Stuck ? 4.f : 2.f);
+		}
+	}
+}
+
 void ATUCoasterRide::LogTransitions()
 {
 	if (!bLogStateTransitions || !Signals || !Drives)
@@ -2898,6 +2988,8 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 	// the frame ENDED in, and reading it at the top means every transition is
 	// reported one frame after it happened. Placed here, against the same values
 	// the panel is about to draw, so the log and the screen cannot disagree.
+	SampleRestraints();
+	DrawRestraints();
 	LogTransitions();
 
 	// The Details-panel checkbox, so the stop can be tripped without playing. Read

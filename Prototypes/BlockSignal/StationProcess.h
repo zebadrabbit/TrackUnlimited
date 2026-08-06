@@ -352,6 +352,7 @@ struct FCommandedBank
             return;
         }
         Elapsed += DeltaSeconds;
+        Stuck = bStuckGroup;    // remembered, so WHICH one can be asked afterwards
         Confirmed = 0;
         for (int g = 0; g < Groups; ++g)
         {
@@ -364,6 +365,34 @@ struct FCommandedBank
                 ++Confirmed;
             }
         }
+    }
+
+    // ---- PER GROUP, because "3 of 4" does not tell you which one to go and look
+    // at, and going to look at it is the entire purpose of the number.
+    //
+    // Not a debug affordance: every restraint on a real train has its own sensor,
+    // and one of the photographed consoles reads `Unlock Seats Segment 1 / 2 / 3`.
+    // A bank that can only count is a bank that has thrown that away.
+    enum class EGroupState
+    {
+        AtCommanded,   // arrived — locked if closing, open if releasing
+        Travelling,    // on its way, and within its travel time
+        Stuck,         // travel time elapsed and still not there. THE ONE THAT MATTERS.
+    };
+
+    EGroupState GroupState(int g) const
+    {
+        if (g < 0 || g >= Groups)            { return EGroupState::AtCommanded; }
+        if (g != Stuck && Elapsed >= TravelSeconds) { return EGroupState::AtCommanded; }
+        // Past its travel time and not there is a fault, not patience. The
+        // distinction is the whole difference between a bank that is working and
+        // one that is holding the ride, and it is free from numbers already here.
+        return (Elapsed >= TravelSeconds) ? EGroupState::Stuck : EGroupState::Travelling;
+    }
+
+    bool IsGroupConfirmed(int g) const
+    {
+        return GroupState(g) == EGroupState::AtCommanded;
     }
 
     // WHAT THE SENSORS SAY, not what the switch was set to. Locked means EVERY
@@ -381,6 +410,7 @@ struct FCommandedBank
 private:
     bool bCommandedClosed = false;
     int Confirmed = 0;
+    int Stuck = -1;
     double Elapsed = 0.0;
 };
 

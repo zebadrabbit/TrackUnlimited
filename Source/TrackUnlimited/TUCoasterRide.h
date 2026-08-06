@@ -453,6 +453,32 @@ private:
 	// state bit a real PLC keeps for exactly the same reason.
 	TArray<bool> TrainLoaded;
 
+	/**
+	 * WHAT EACH RESTRAINT GROUP ON THIS TRAIN IS DOING, drawn on the train itself.
+	 *
+	 * A count cannot say WHICH bar is open, and which one is the only thing worth
+	 * knowing — going to look at it is the entire purpose of the number. The panel
+	 * says `HARNESS 3/4`; this says which of the four, on the car it belongs to.
+	 *
+	 * Kept PER TRAIN rather than read live off the platform, for the same reason
+	 * TrainLoaded is: the bank belongs to the platform, so a departing train would
+	 * lose its state the moment it left and its cars would go grey — reading as
+	 * though the bars had opened. That is a lying instrument, which this project
+	 * has now been bitten by once. Snapshotted while at a platform and held.
+	 *
+	 * This is also the readout a fault-injection scenario needs. `StuckGroup` is
+	 * already the hook; "simulate a stuck harness" is unobservable without
+	 * somewhere for the answer to appear.
+	 */
+	TArray<uint8> TrainGroupState;   // FCommandedBank::EGroupState per group, per train
+	TArray<bool> TrainGroupClosed;   // was the bank COMMANDED closed when sampled
+
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Signalling")
+	bool bShowRestraints = true;
+
+	void SampleRestraints();
+	void DrawRestraints() const;
+
 	// Reads every platform's instruments and runs its crew. Once per frame, at the
 	// top of the scan with the other inputs.
 	void ServeStations(float DeltaSeconds);

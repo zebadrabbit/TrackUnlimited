@@ -593,6 +593,59 @@ void TestAnUnloadPlatformDoesNotCLOSETheBarsEither()
     assert(Crew.Gates.IsClosedAndLocked());
 }
 
+void TestABankKnowsWHICHGroupIsStuck()
+{
+    // "3 of 4" does not tell you which one to go and look at, and going to look
+    // at it is the entire purpose of the number. Every restraint on a real train
+    // has its own sensor, and one of the photographed consoles reads
+    // `Unlock Seats Segment 1 / 2 / 3`.
+    //
+    // This is also the readout a fault-injection scenario needs: StuckGroup is
+    // already the injection hook, and "simulate a stuck harness" is unobservable
+    // without somewhere for the answer to appear.
+    FCommandedBank B;
+    B.TravelSeconds = 1.0;
+    B.Groups = 4;
+    B.Command(true);
+
+    // Mid-travel: everything is TRAVELLING, and nothing is stuck yet. A bank that
+    // called a bar stuck before its travel time had elapsed would report a fault
+    // on every normal closing.
+    for (int i = 0; i < 240 / 2; ++i) { B.Tick(Dt, 2); }
+    for (int g = 0; g < 4; ++g)
+    {
+        assert(B.GroupState(g) == FCommandedBank::EGroupState::Travelling);
+    }
+
+    // Past the travel time: three arrived, and group 2 is STUCK rather than
+    // merely late. That distinction is the whole difference between a bank that
+    // is working and one that is holding the ride.
+    for (int i = 0; i < 240 * 3; ++i) { B.Tick(Dt, 2); }
+    assert(B.GroupsConfirmed() == 3);
+    assert(!B.IsClosedAndLocked());
+    for (int g = 0; g < 4; ++g)
+    {
+        const bool bIsTheBadOne = g == 2;
+        assert(B.IsGroupConfirmed(g) == !bIsTheBadOne);
+        assert(B.GroupState(g) == (bIsTheBadOne ? FCommandedBank::EGroupState::Stuck
+                                               : FCommandedBank::EGroupState::AtCommanded));
+    }
+
+    // Freed: it arrives like the others and the bank locks.
+    for (int i = 0; i < 240 * 2; ++i) { B.Tick(Dt); }
+    assert(B.IsClosedAndLocked());
+    for (int g = 0; g < 4; ++g) { assert(B.IsGroupConfirmed(g)); }
+
+    // AND IT WORKS THE OTHER WAY. A group that will not RELEASE is a rider who
+    // cannot get out, which is a different emergency from one who cannot be
+    // secured and is just as much a stuck group.
+    B.Command(false);
+    for (int i = 0; i < 240 * 3; ++i) { B.Tick(Dt, 0); }
+    assert(!B.IsFullyOpen());
+    assert(B.GroupState(0) == FCommandedBank::EGroupState::Stuck);
+    assert(B.GroupState(1) == FCommandedBank::EGroupState::AtCommanded);
+}
+
 } // namespace
 
 int main()
@@ -612,6 +665,7 @@ int main()
     TestAStuckGATEHoldsItToo();
     TestATrainDepartsSECURED();
     TestAnUnloadPlatformDoesNotCLOSETheBarsEither();
+    TestABankKnowsWHICHGroupIsStuck();
 
     std::printf("test_stationprocess: all assertions passed\n");
     return 0;
