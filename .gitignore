@@ -46,6 +46,10 @@ Prototypes/**/*.pdb
 # Debug build beside a prototype — a binary, not source. No trailing slash: it
 # is an executable file, and `dbg/` matches only a directory.
 Prototypes/**/dbg
+# The canonical-figures tool is not a test_*, so the rule above misses it. Same
+# reason NL2Telemetry/record is listed separately below.
+Prototypes/TrackSpline/reference_figures
+Prototypes/TrackSpline/reference_figures.exe
 # The telemetry recorder is a tool rather than a test_*, so the rule above
 # misses it; its recordings are machine-specific captures, not source.
 Prototypes/NL2Telemetry/record
