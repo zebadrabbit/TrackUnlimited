@@ -1637,6 +1637,19 @@ void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/
 		FString Status = FString::Printf(TEXT("%s   %d TRAIN%s"),
 			bManualDispatch ? TEXT("MANUAL") : TEXT("AUTO"),
 			Trains.Num(), Trains.Num() == 1 ? TEXT("") : TEXT("S"));
+		if (bMaint)
+		{
+			// THE SCAN RATE IS AN ENGINEERING FACT, and overruns are the one thing
+			// that makes it stop being a constant. A dropped backlog means the ride
+			// ran slower than real time for a moment, which is safe and is still
+			// something a maintainer wants to know happened.
+			Status += FString::Printf(TEXT("   %d Hz SCAN"), SimHz);
+			if (ScanOverruns > 0)
+			{
+				Status += FString::Printf(TEXT("   %d OVERRUN%s"), ScanOverruns,
+					ScanOverruns == 1 ? TEXT("") : TEXT("S"));
+			}
+		}
 		if (Signals->Violations() > 0)
 		{
 			Status += FString::Printf(TEXT("   %d VIOLATION(S)"),
@@ -2935,16 +2948,10 @@ void ATUCoasterRide::ServeHolds(std::size_t TrainIndex)
 	Drives->Command(Zi, bAtMark ? 0.0 : Convey);
 }
 
-void ATUCoasterRide::Tick(float DeltaSeconds)
+// ONE SCAN, AT A FIXED PERIOD. Called from Tick as many times as the elapsed
+// frame is worth, never once per rendered frame — see Tick below for why.
+void ATUCoasterRide::SimStep(double DeltaSeconds)
 {
-	Super::Tick(DeltaSeconds);
-
-	if (Trains.Num() == 0 || !Trains[0].IsValid())
-	{
-		return;
-	}
-	FTrain* const Train = Trains[0].Get();   // the rider's train: camera, readout
-
 	// THE SCAN CYCLE, and it is the whole shape of this function. IEC 61131-3 runs
 	// a PLC as read inputs -> execute the program -> write outputs, and each step
 	// below is one of those:
@@ -2989,7 +2996,6 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 	// reported one frame after it happened. Placed here, against the same values
 	// the panel is about to draw, so the log and the screen cannot disagree.
 	SampleRestraints();
-	DrawRestraints();
 	LogTransitions();
 
 	// The Details-panel checkbox, so the stop can be tripped without playing. Read
@@ -3103,6 +3109,69 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 			}
 		}
 	}
+}
+
+void ATUCoasterRide::Tick(float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+
+	if (Trains.Num() == 0 || !Trains[0].IsValid())
+	{
+		return;
+	}
+	FTrain* const Train = Trains[0].Get();   // the rider's train: camera, readout
+
+	// ===================== A FIXED SCAN PERIOD =====================
+	//
+	// The scan used to run ONCE PER RENDERED FRAME, which is wrong twice over.
+	//
+	// IT IS UNFAITHFUL. A PLC scans on a fixed period; it does not scan faster
+	// because the graphics card is idle. Running it at frame rate meant the ride's
+	// control system executed at 144 Hz on one machine and 40 Hz on another, and
+	// every rate in it moved with that — edge detection, restraint travel, overlap
+	// ageing, drive ramps. The already-documented "a train can cross a sensor
+	// inside one scan" limitation was quietly WORSE on a slow machine, which is
+	// exactly backwards from how a limitation should behave.
+	//
+	// AND IT IS NOT REPRODUCIBLE. Two runs of the same session diverge on the
+	// first frame, so nothing can be recorded and replayed — and a fault-injection
+	// scenario that reproduces differently every run cannot prove anything to
+	// anybody. Everything else about replay is downstream of this one change.
+	//
+	// It also brings the actor into line with the prototype suites, which have
+	// always stepped at a fixed 1/240 s. The canonical figures were never affected
+	// because they come from those; it was only the thing you actually played that
+	// varied.
+	const double Step = 1.0 / static_cast<double>(FMath::Max(1, SimHz));
+	SimAccumulator += DeltaSeconds;
+
+	int32 Ran = 0;
+	while (SimAccumulator >= Step && Ran < MaxStepsPerFrame)
+	{
+		SimStep(Step);
+		SimAccumulator -= Step;
+		++Ran;
+	}
+
+	// SCAN OVERRUN. A frame so long that the backlog exceeds the cap — a hitch, a
+	// breakpoint, a level load. THE BACKLOG IS DROPPED rather than worked off,
+	// because catching up means running the ride faster than real time, and a ride
+	// that fast-forwards through a hitch can skip a train past a block boundary:
+	// the one failure this whole layer exists to prevent.
+	//
+	// Real controllers treat a missed scan deadline as a fault to report rather
+	// than time to make up, which is the same call for the same reason.
+	if (SimAccumulator >= Step)
+	{
+		++ScanOverruns;
+		LogEvent(FString::Printf(TEXT("SCAN OVERRUN — dropped %.0f ms of backlog"),
+			SimAccumulator * 1000.0));
+		SimAccumulator = 0.0;
+	}
+
+	// ---- Everything below is DRAWING, and runs once per rendered frame. It reads
+	// the state the last scan left and never advances anything.
+	DrawRestraints();
 
 	// Where the rider is sitting, which is a real choice now that cars differ.
 	const double SeatOffset = RiderPosition * TrainLengthM * 0.5;

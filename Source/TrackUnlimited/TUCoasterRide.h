@@ -479,6 +479,41 @@ private:
 	void SampleRestraints();
 	void DrawRestraints() const;
 
+	/**
+	 * One scan of the control system and one step of the physics, at a FIXED
+	 * period. Tick runs however many of these the elapsed frame is worth.
+	 *
+	 * A PLC scans on a fixed period; it does not scan faster because the graphics
+	 * card is idle. Running this once per rendered frame — which it did until now
+	 * — put every rate in the control system at the mercy of the frame rate, and
+	 * made two runs of the same session diverge on the first frame.
+	 */
+	void SimStep(double DeltaSeconds);
+
+	/**
+	 * Scans per second. 240 to match the prototype suites exactly, which have
+	 * always stepped at 1/240 s — so the thing you play and the thing that is
+	 * asserted now run the same way.
+	 */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Physics",
+		meta = (ClampMin = "30", ClampMax = "1000"))
+	int32 SimHz = 240;
+
+	/**
+	 * The most scans one rendered frame may run before the backlog is DROPPED.
+	 *
+	 * Not a performance knob — a safety one. Working off a backlog means running
+	 * the ride faster than real time, and a ride that fast-forwards through a
+	 * hitch can skip a train past a block boundary, which is the single failure
+	 * this whole layer exists to prevent. 24 is a tenth of a second at 240 Hz.
+	 */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Physics",
+		meta = (ClampMin = "1", ClampMax = "240"))
+	int32 MaxStepsPerFrame = 24;
+
+	double SimAccumulator = 0.0;
+	int32 ScanOverruns = 0;
+
 	// Reads every platform's instruments and runs its crew. Once per frame, at the
 	// top of the scan with the other inputs.
 	void ServeStations(float DeltaSeconds);

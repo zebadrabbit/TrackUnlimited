@@ -1900,9 +1900,16 @@ void TestTheCircuitCarriesFourTrains()
 
 void TestTheActorsOwnLoopRunsTwoTrains()
 {
-    // A LINE-FOR-LINE STAND-IN FOR ATUCoasterRide::Tick, because that function
+    // A LINE-FOR-LINE STAND-IN FOR ATUCoasterRide::SimStep, because that function
     // cannot be compiled without Unreal and this is the only place its policy can
     // be checked at all. Same order, same defaults:
+    //
+    // The actor's Tick is now an accumulator that calls SimStep at a FIXED 240 Hz
+    // — the same rate this loop has always used. Until that change the actor ran
+    // one scan per rendered frame, so this test and the thing you played were
+    // stepping at different rates and only one of them was reproducible. They now
+    // agree by construction, which is what makes "line-for-line" true rather than
+    // aspirational.
     //
     //   scan the stop marks once
     //   for each train: ServeHolds, Step, Signals->Update
