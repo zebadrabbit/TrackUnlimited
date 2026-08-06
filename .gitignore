@@ -43,6 +43,9 @@ Prototypes/**/test_*
 Prototypes/**/*.o
 Prototypes/**/*.obj
 Prototypes/**/*.pdb
+# Debug build beside a prototype — a binary, not source. No trailing slash: it
+# is an executable file, and `dbg/` matches only a directory.
+Prototypes/**/dbg
 # The telemetry recorder is a tool rather than a test_*, so the rule above
 # misses it; its recordings are machine-specific captures, not source.
 Prototypes/NL2Telemetry/record
