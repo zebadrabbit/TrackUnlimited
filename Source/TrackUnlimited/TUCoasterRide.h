@@ -18,6 +18,7 @@
 #include "BlockSignal/RideSignals.h"
 #include "BlockSignal/SignalWatch.h"
 #include "BlockSignal/Evacuation.h"
+#include "BlockSignal/PlcUnit.h"
 #include "BlockSignal/SimDigest.h"
 #include "BlockSignal/StationProcess.h"
 #include "BlockSignal/TrackDrives.h"
@@ -560,6 +561,8 @@ private:
 	int32 ScanOverruns = 0;
 	// The first tick after a load carries the load itself. Not a missed deadline.
 	bool bScanStarted = false;
+	// Raised by the accumulator, consumed by the PLC's watchdog on the next scan.
+	bool bScanOverranThisFrame = false;
 
 	/**
 	 * A running fingerprint of every scan, and the scan number it is up to.
@@ -574,6 +577,26 @@ private:
 	 */
 	FSimDigest SimFingerprint;
 	int64 ScanNumber = 0;
+
+	/**
+	 * THE CONTROLLER, as a machine in the cabinet rather than an implication.
+	 *
+	 * `FRideSignals` plus `ServeHolds` is the PLC *program*; this is the PLC. It
+	 * owns the key switch, the watchdog, the loaded program's identity and the
+	 * power state — four real operational conditions the model could not express.
+	 *
+	 * THE STANDARD PLC, NOT THE SAFETY CHAIN. It can withhold permission to run
+	 * and has no authority to prevent a stop: the E-stop is inside `FTrackDrives`
+	 * and the brakes are fail-safe, so neither routes through here. That is
+	 * constraint 7 made structural, and it is asserted rather than promised.
+	 */
+	FPlcUnit Plc;
+
+	/** Turn the key. Refused with a readable reason; see FPlcUnit::WhyNotRun. */
+	void SetPlcMode(EPlcMode Wanted);
+
+	/** The operator's walkdown: the course is empty and I have looked. */
+	void DeclareCourseClear();
 
 	// Reads every platform's instruments and runs its crew. Once per frame, at the
 	// top of the scan with the other inputs.

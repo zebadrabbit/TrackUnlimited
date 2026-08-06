@@ -1076,6 +1076,32 @@ void ATUCoasterRide::RebuildFromSegments()
 		// than integrated eleven times a frame to draw eleven posts.
 		BuildBlockMarks();
 
+		// THE PROGRAM'S IDENTITY, DERIVED FROM THE LAYOUT IT IS FOR.
+		//
+		// A digest of the derived blocks and zones — not of the authored segment
+		// list, because two different segment lists that produce the same control
+		// structure genuinely are the same program, and a geometry tweak that
+		// moves no boundary should not invalidate it.
+		//
+		// The program is rebuilt here, so it matches by construction. What that
+		// buys is the check: if the loaded program's identity ever DISAGREES with
+		// the layout it is installed on, the controller refuses to run. That is
+		// the detector for "I changed the code and the editor is still doing the
+		// old thing" — a class that has bitten this project and had nothing
+		// watching for it.
+		{
+			FSimDigest Id;
+			for (double B : BlockStarts) { Id.Add(B); }
+			for (const FTUZoneSpan& Z : ZoneSpans)
+			{
+				Id.Add(static_cast<int>(Z.Kind));
+				Id.Add(Z.StartS);
+				Id.Add(Z.EndS);
+			}
+			Plc.SetLayoutIdentity(Id.Value());
+			Plc.LoadProgram(Id.Value());
+		}
+
 		// The second detection method: a switch at every block boundary, and a
 		// counter that derives occupancy from their trips and nothing else.
 		// Circuits only — see the header for why the ring wrap is a lie on an open
@@ -1519,6 +1545,18 @@ void ATUCoasterRide::BeginPlay()
 	Super::BeginPlay();
 	RebuildFromSegments();
 
+	// THE CABINET GETS POWER, and the ride opens the way a real one does: an
+	// operator walks the course, declares it clear, and turns the key.
+	//
+	// Done here rather than left to the player because every measured figure in
+	// this project was taken with the ride simply running, and a default that
+	// needed a keypress before anything moved would silently invalidate all of
+	// them. The sequence is real; performing it automatically at open is the
+	// stand-in, exactly as FAutoStationCrew stands in for platform staff.
+	Plc.PowerOn();
+	Plc.DeclareCourseClear();
+	SetPlcMode(EPlcMode::Run);
+
 	if (bDrawTrack)
 	{
 		DrawTrack();
@@ -1635,7 +1673,7 @@ void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/
 	const float StripH = bMaint ? 46.f + Row : 46.f;   // schematic, + the counts row
 	const int32 Rows = 2                           // title, status
 		+ 1 + NumDrives                            // DRIVES heading + VFD modules
-		+ (bMaint ? 1 : 0)                         // DETECTION summary
+		+ (bMaint ? 2 : 0)                         // CONTROLLER + DETECTION
 		+ (Platforms.Num() > 0 ? 1 + Platforms.Num() + 2 : 0)    // + CONSOLE heading, lamps
 		+ (EventLog.Num() > 0 ? 1 + FMath::Min(EventLog.Num(), 4) : 0);
 	// The console row sat on the bottom edge, half off it: the section gaps are
@@ -1888,6 +1926,47 @@ void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/
 			}
 		}
 		Ty += StripH;
+	}
+
+	// ---- THE CONTROLLER ITSELF (maintenance only) ----------------------------
+	//
+	// The cabinet has a PLC in it, so the panel shows one — the same reasoning
+	// that gave every drive a VFD module. Mode, scan health, and the identity of
+	// the program it is running, which is the field a real installation cares
+	// most about and the one that catches a program built for another layout.
+	if (bMaint)
+	{
+		Ty += 4.f;
+		PanelTile(Canvas, Lx, Ty + 5.f, W - Pad * 2.f, 1.f, PanelRule);
+		PanelLabel(Canvas, Lx, Ty, TEXT("CONTROLLER"), PanelDim);
+
+		const EPlcMode M = Plc.GetMode();
+		const bool bRunning = Plc.OutputsEnabled();
+		const TCHAR* ModeName = M == EPlcMode::Run ? TEXT("RUN")
+			: (M == EPlcMode::Program ? TEXT("PROGRAM") : TEXT("STOPPED"));
+
+		PanelTile(Canvas, Lx + 130.f, Ty + 2.f, 7.f, 7.f,
+			bRunning ? PanelGreen : (Plc.IsFaulted() ? PanelRed : PanelAmber));
+		PanelLabel(Canvas, Lx + 142.f, Ty, ModeName,
+			bRunning ? PanelGreen : (Plc.IsFaulted() ? PanelRed : PanelAmber));
+
+		// The program's identity, truncated. It is a digest of the derived blocks
+		// and zones, so two rides showing the same one are running the same
+		// control structure — which is the whole point of printing it.
+		PanelLabel(Canvas, Lx + 226.f, Ty,
+			FString::Printf(TEXT("PGM %08x"),
+				static_cast<uint32>(Plc.ProgramIdentity() & 0xFFFFFFFFull)),
+			Plc.ProgramMatchesLayout() ? PanelDim : PanelRed);
+
+		// Why it is not running, when it is not. "The ride will not start" with
+		// no reason attached is the commonest complaint about real ride control,
+		// and the machine always knows.
+		const char* Why = Plc.WhyNotRun();
+		if (Why != nullptr)
+		{
+			PanelLabel(Canvas, Lx + 320.f, Ty, UTF8_TO_TCHAR(Why), PanelAmber);
+		}
+		Ty += Row;
 	}
 
 	// ---- DETECTION: the two methods, stated side by side (maintenance only) ----
@@ -2598,6 +2677,35 @@ void ATUCoasterRide::AcknowledgeFaults()
 // The acknowledgement check stays HERE, on the press, so an operator is told why
 // nothing happened at the moment they press rather than at the moment they let
 // go — and so the ordering rule keeps living in the layer that owns it.
+// Turn the key. Refused with a readable reason rather than silently ignored:
+// "the ride will not start" with no explanation is the commonest complaint about
+// real ride control, and the machine always knows why.
+void ATUCoasterRide::SetPlcMode(EPlcMode Wanted)
+{
+	if (Plc.RequestMode(Wanted))
+	{
+		static const TCHAR* Names[] = {TEXT("STOPPED"), TEXT("PROGRAM"), TEXT("RUN")};
+		LogEvent(FString::Printf(TEXT("PLC mode -> %s"),
+			Names[static_cast<int32>(Wanted)]), false);
+		return;
+	}
+	const char* Why = Plc.WhyNotRun();
+	UE_LOG(LogTemp, Warning, TEXT("TrackUnlimited: PLC refused RUN — %s."),
+		Why ? UTF8_TO_TCHAR(Why) : TEXT("not powered"));
+	LogEvent(FString::Printf(TEXT("PLC refused RUN — %s"),
+		Why ? UTF8_TO_TCHAR(Why) : TEXT("not powered")));
+}
+
+// The operator's walkdown. A controller that came up knowing where trains are
+// would be inventing occupancy it cannot possibly have watched.
+void ATUCoasterRide::DeclareCourseClear()
+{
+	if (Plc.DeclareCourseClear())
+	{
+		LogEvent(TEXT("course declared clear"), false);
+	}
+}
+
 void ATUCoasterRide::PressResetButton()
 {
 	if (Drives && Drives->AnyUnacknowledged())
@@ -3179,11 +3287,26 @@ void ATUCoasterRide::SimStep(double DeltaSeconds)
 	{
 		Drives->PressEmergencyStopButton("operator");
 	}
+	// THE CONTROLLER SCANS, and its watchdog is the overrun the accumulator
+	// already detects one layer up. Reporting that as a note rather than a trip
+	// was the machine having a symptom with nowhere to put it.
+	Plc.Scan(DeltaSeconds, bScanOverranThisFrame);
+	bScanOverranThisFrame = false;
+
 	ServeStations(DeltaSeconds);
 
-	for (int32 t = 0; t < Trains.Num(); ++t)
+	// THE PROGRAM RUNS ONLY IF THE MACHINE IS RUNNING IT. Not a stop — a
+	// controller with no permission simply commands nothing, and a device with
+	// no command falls to its safe state exactly as it would with the cabinet
+	// unplugged. The stop does not come from here, and the E-stop below is
+	// untouched by it: that separation is constraint 7 and it is asserted in
+	// test_plcunit.cpp against the real drive layer.
+	if (Plc.OutputsEnabled())
 	{
-		ServeHolds(static_cast<std::size_t>(t));
+		for (int32 t = 0; t < Trains.Num(); ++t)
+		{
+			ServeHolds(static_cast<std::size_t>(t));
+		}
 	}
 
 	// One drive, every train's copy of the zone. Zones live on each FTrain, so
@@ -3355,6 +3478,7 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 	if (SimAccumulator >= Step)
 	{
 		++ScanOverruns;
+		bScanOverranThisFrame = true;   // the PLC's watchdog reads this next scan
 		LogEvent(FString::Printf(TEXT("SCAN OVERRUN — dropped %.0f ms of backlog"),
 			SimAccumulator * 1000.0));
 		SimAccumulator = 0.0;
