@@ -1971,6 +1971,18 @@ void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/
 			{
 				PanelLabel(Canvas, Lx + 226.f, Ty, Holding, PanelDim);
 			}
+			else if (P.Process.GetPhase() == EStationPhase::Departing)
+			{
+				// A DEPARTING TRAIN IS NOT A BLOCKED ONE, and the permissive text
+				// below would call it one. The release is latched, so `bReady`
+				// stays true while the train rolls off its mark — and the block it
+				// is being asked about is the block it has just entered ITSELF, so
+				// CanRelease says no and the row read "DEPARTING · DISPATCH — block
+				// ahead". Both halves true, the pair nonsense.
+				//
+				// The reason column answers "why has it not gone". A train that has
+				// gone has no answer to give, and the phase word already says so.
+			}
 			else if (bReady)
 			{
 				// Ready and still standing means the OTHER half of the AND is
