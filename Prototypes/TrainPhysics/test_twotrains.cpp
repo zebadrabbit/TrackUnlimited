@@ -1562,6 +1562,19 @@ struct FBatchResult
     std::vector<double> FinalS;
     bool bShared = false;
     std::size_t Violations = 0;
+
+    // A SAFETY INVARIANT CHECKED EVERY FRAME, not an outcome measured at the end.
+    //
+    // A train permitted to leave, or actually leaving, must be secured AT THAT
+    // MOMENT — bars locked where the role carries riders, gates shut always. The
+    // station suite tested the PROCESS and never what the CREW commanded, so the
+    // ride shipped for a week dispatching trains with their restraints travelling
+    // open and every assertion in the project passed.
+    //
+    // Outcome assertions cannot catch that class. "It got round" and "no blocks
+    // were shared" are both true of a ride running with the bars up.
+    std::size_t UnsecuredFrames = 0;
+    std::size_t SecuredFrames = 0;   // so a vacuous pass is visible
 };
 
 // Three trains, one at each position, and the platform run for real: geometry,
@@ -1644,6 +1657,26 @@ FBatchResult RunSmallBatch(double SlowLoadSeconds, std::size_t SlowPosition)
         }
         Sig.Tick(Dt);
         ReadTheDrives(Drives, All);
+
+        // THE INVARIANT, EVERY FRAME. Permission to leave, or actually leaving,
+        // with anything unsecured is the failure the transition log found in the
+        // shipped build — and no outcome assertion here would ever have noticed,
+        // because a ride dispatching trains with the bars up still gets round.
+        //
+        // Gates are unconditional and the bars follow the ROLE: an unload platform
+        // sends its train on empty, so its bars are open on purpose.
+        for (const FPlatform& P : Platforms)
+        {
+            const EStationPhase Ph = P.Process.GetPhase();
+            if (Ph != EStationPhase::Ready && Ph != EStationPhase::Departing)
+            {
+                continue;
+            }
+            const bool bBars = !P.Process.NeedsRestraints()
+                || P.Crew.Restraints.IsClosedAndLocked();
+            if (bBars && P.Crew.Gates.IsClosedAndLocked()) { ++R.SecuredFrames; }
+            else                                           { ++R.UnsecuredFrames; }
+        }
 
         for (std::size_t a = 0; a < 3; ++a)
         {
@@ -1745,6 +1778,20 @@ void TestASmallBatchPlatformWorksThreeTrainsAtOnce()
     assert(Even.LeftPlatformAt[2] > Even.LeftPlatformAt[1]);
     assert(!Even.bShared);
     assert(Even.Violations == 0);
+
+    // AND NOT ONE FRAME OF IT UNSECURED. Checked continuously rather than at the
+    // end, because every assertion above is equally true of a ride dispatching
+    // trains with the bars travelling open — which is exactly what this build did
+    // for a week until a transition log was pointed at it.
+    //
+    // SecuredFrames is asserted too, and it is not decoration: without it the
+    // whole check passes vacuously the day a refactor stops platforms reaching
+    // Ready at all, which is the failure mode this session already hit once on
+    // the envelope suite.
+    assert(Even.SecuredFrames > 1000);
+    assert(Even.UnsecuredFrames == 0);
+    std::printf("  small batch: %zu platform-frames permitted to move, "
+                "0 of them unsecured\n", Even.SecuredFrames);
 
     // 2. THE RIDER WHO NEEDS LONGER, at the REAR position (platform 0). It must
     //    not delay the two trains in front by a single frame — they are ahead of
