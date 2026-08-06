@@ -477,13 +477,31 @@ struct FAutoStationCrew
         //
         // An ALREADY-LOADED train's bars never opened, so the command stays closed
         // and the confirmation is already there when it arrives.
-        Restraints.Command(bAlreadyLoaded || P == EStationPhase::Securing);
+        //
+        // CLOSED THROUGH SECURING, READY AND DEPARTING -- not Securing alone.
+        // Bars are secured for the securing step and STAY secured until riders are
+        // being let out again, which is the next platform's Unloading. The earlier
+        // rule released them the instant the phase advanced, so a train sat in
+        // Ready and then departed onto the launch with its restraints commanded
+        // OPEN. Nothing detected it, because the permissive reads this contact
+        // only in the Securing case and latches what it finds.
+        //
+        // Found by reading the transition log rather than by reasoning: dispatch
+        // permission was granted in the same frame the bars started travelling
+        // open, which is a sentence no ride should be able to write.
+        const bool bSecured = P == EStationPhase::Securing
+            || P == EStationPhase::Ready
+            || P == EStationPhase::Departing;
+
+        Restraints.Command(bAlreadyLoaded || bSecured);
         Restraints.Tick(DeltaSeconds, StuckGroup);
 
-        // GATES OPEN WHILE RIDERS ARE MOVING and shut for the securing step. Same
-        // device, different job: they are what keeps somebody off the track while a
-        // train is being dispatched, so the all-clear cannot precede them.
-        Gates.Command(bAlreadyLoaded || P == EStationPhase::Securing);
+        // GATES OPEN WHILE RIDERS ARE MOVING and shut from the securing step until
+        // the train has gone. Same device, different job: they are what keeps
+        // somebody off the track while a train is being dispatched, so they must
+        // still be shut while it actually departs -- which is exactly the window
+        // the old rule opened them in.
+        Gates.Command(bAlreadyLoaded || bSecured);
         Gates.Tick(DeltaSeconds, StuckGate);
 
         switch (P)

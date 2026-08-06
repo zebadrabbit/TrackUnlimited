@@ -2245,23 +2245,42 @@ void ATUCoasterRide::LogTransitions()
 		const FTUPlatform& P = Platforms[i];
 		const std::size_t Base = TUWatch::Console + static_cast<std::size_t>(i) * 8;
 
-		// Commanded and confirmed are DIFFERENT FACTS, and the gap between them is
-		// what a walk-round exists to find. Both are logged.
-		if (StateWatch.ChangedFrom(Base + 0, P.Crew.Restraints.IsCommandedClosed() ? 1 : 0))
+		// A BANK HAS THREE STATES, NOT A COUNT. `GroupsConfirmed` counts groups
+		// that have reached their COMMANDED position, whichever direction that
+		// is — so "4/4" means fully locked when closing and fully OPEN when
+		// releasing. The first version of this logged it as "harness 4/4 locked"
+		// either way, which read as authoritative and said the opposite of the
+		// truth half the time. A lying instrument is worse than no instrument.
+		//
+		// So log what it MEANS, and keep the count only where it is the
+		// interesting part: mid-travel, where "commanded closed but 3 of 4" is
+		// the failure a walk-round exists to find.
+		auto BankState = [](const FCommandedBank& B) -> int
+		{
+			if (B.IsClosedAndLocked()) { return 2; }
+			if (B.IsFullyOpen())       { return 0; }
+			return 1;                  // travelling, or stuck
+		};
+		auto BankWords = [](const FCommandedBank& B, int S) -> FString
+		{
+			if (S == 2) { return FString(TEXT("CLOSED AND LOCKED")); }
+			if (S == 0) { return FString(TEXT("open")); }
+			return FString::Printf(TEXT("%s — %d/%d"),
+				B.IsCommandedClosed() ? TEXT("closing") : TEXT("releasing"),
+				B.GroupsConfirmed(), B.Groups);
+		};
+
+		const int RState = BankState(P.Crew.Restraints);
+		if (StateWatch.ChangedFrom(Base + 0, RState))
 		{
 			LogEvent(FString::Printf(TEXT("Z%d  restraints %s"), P.Zone,
-				P.Crew.Restraints.IsCommandedClosed() ? TEXT("COMMANDED CLOSED")
-													  : TEXT("released")), false);
+				*BankWords(P.Crew.Restraints, RState)), false);
 		}
-		if (StateWatch.ChangedFrom(Base + 1, P.Crew.Restraints.GroupsConfirmed()))
-		{
-			LogEvent(FString::Printf(TEXT("Z%d  harness %d/%d locked"), P.Zone,
-				P.Crew.Restraints.GroupsConfirmed(), P.Crew.Restraints.Groups), false);
-		}
-		if (StateWatch.ChangedFrom(Base + 2, P.Crew.Gates.IsClosedAndLocked() ? 1 : 0))
+		const int GState = BankState(P.Crew.Gates);
+		if (StateWatch.ChangedFrom(Base + 1, GState))
 		{
 			LogEvent(FString::Printf(TEXT("Z%d  gates %s"), P.Zone,
-				P.Crew.Gates.IsClosedAndLocked() ? TEXT("SHUT") : TEXT("open")), false);
+				*BankWords(P.Crew.Gates, GState)), false);
 		}
 		if (StateWatch.ChangedFrom(Base + 3, P.Process.IsReadyToDispatch() ? 1 : 0))
 		{

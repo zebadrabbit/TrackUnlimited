@@ -485,6 +485,73 @@ void TestAStuckGATEHoldsItToo()
     assert(S.IsReadyToDispatch());
 }
 
+void TestATrainDepartsSECURED()
+{
+    // THE ONE A TRANSITION LOG FOUND AND NO ASSERTION HAD.
+    //
+    // The crew used to command the bars closed for `P == Securing` and nothing
+    // else, so the instant the phase advanced to Ready the command flipped OPEN
+    // and the train departed onto the launch with its restraints releasing. It
+    // never showed up because the permissive reads bRestraintsLocked only in the
+    // Securing case and latches what it finds — so every existing assertion here
+    // passed, and the ride ran, and the bars were open.
+    //
+    // Read straight off the log: "dispatch permission GRANTED" and "restraints
+    // released" in the same frame, at 17.14 s.
+    FStationProcess S(EStationRole::Combined);
+    FAutoStationCrew Crew;
+    Crew.UnloadSeconds = 0.5;
+    Crew.LoadSeconds = 0.5;
+    Crew.SecureSeconds = 0.5;
+    Crew.Restraints.TravelSeconds = 0.5;
+    Crew.Gates.TravelSeconds = 0.5;
+
+    FStationInputs In;
+    In.bTrainPresent = true;
+    In.bTrainInPosition = true;
+
+    // Run to Ready.
+    for (int i = 0; i < 240 * 10 && !S.IsReadyToDispatch(); ++i)
+    {
+        S.Update(In);
+        Crew.Serve(S, In, Dt);
+    }
+    assert(S.IsReadyToDispatch());
+
+    // SECURED AT THE MOMENT PERMISSION EXISTS. Not "was secured at some point".
+    assert(Crew.Restraints.IsClosedAndLocked());
+    assert(Crew.Gates.IsClosedAndLocked());
+
+    // ...and STILL secured while it actually leaves, which is the half that was
+    // broken. A train rolling out of the platform is the worst possible moment
+    // for the bars to be travelling open.
+    In.bTrainInPosition = false;
+    for (int i = 0; i < 240 * 3; ++i)
+    {
+        S.Update(In);
+        Crew.Serve(S, In, Dt);
+        if (S.GetPhase() == EStationPhase::Departing)
+        {
+            assert(Crew.Restraints.IsClosedAndLocked());
+            assert(Crew.Gates.IsClosedAndLocked());
+        }
+    }
+
+    // The bars only come back open once there is somebody to let out.
+    In.bTrainPresent = false;
+    for (int i = 0; i < 240 * 3; ++i) { S.Update(In); Crew.Serve(S, In, Dt); }
+    In.bTrainPresent = true;
+    In.bTrainInPosition = true;
+    for (int i = 0; i < 240 * 2; ++i)
+    {
+        S.Update(In);
+        Crew.Serve(S, In, Dt);
+        if (S.GetPhase() == EStationPhase::Unloading) { break; }
+    }
+    assert(S.GetPhase() == EStationPhase::Unloading);
+    assert(!Crew.Restraints.IsCommandedClosed());
+}
+
 } // namespace
 
 int main()
@@ -502,6 +569,7 @@ int main()
     TestARestraintIsCOMMANDEDAndCONFIRMED();
     TestAStuckRestraintHoldsTheDispatchForEver();
     TestAStuckGATEHoldsItToo();
+    TestATrainDepartsSECURED();
 
     std::printf("test_stationprocess: all assertions passed\n");
     return 0;
