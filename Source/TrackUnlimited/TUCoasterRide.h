@@ -17,6 +17,7 @@
 #include "TrackSpline/TrackProfile.h"
 #include "BlockSignal/RideSignals.h"
 #include "BlockSignal/SignalWatch.h"
+#include "BlockSignal/SimDigest.h"
 #include "BlockSignal/StationProcess.h"
 #include "BlockSignal/TrackDrives.h"
 #include "BlockSignal/TrackSensors.h"
@@ -515,6 +516,20 @@ private:
 	int32 ScanOverruns = 0;
 	// The first tick after a load carries the load itself. Not a missed deadline.
 	bool bScanStarted = false;
+
+	/**
+	 * A running fingerprint of every scan, and the scan number it is up to.
+	 *
+	 * Two sessions that loaded the same preset and were left alone must show the
+	 * same digest at the same scan number. That is a check anybody can run by eye
+	 * and it is the property a recorded scenario rests on — the prototype suite
+	 * asserts it, this is where you watch it hold on the real thing.
+	 *
+	 * The scan number is shown WITH it because a digest on its own is not
+	 * comparable: it is a running hash, so two rides agree only at the same point.
+	 */
+	FSimDigest SimFingerprint;
+	int64 ScanNumber = 0;
 
 	// Reads every platform's instruments and runs its crew. Once per frame, at the
 	// top of the scan with the other inputs.

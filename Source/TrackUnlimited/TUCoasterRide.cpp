@@ -1649,6 +1649,13 @@ void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/
 				Status += FString::Printf(TEXT("   %d OVERRUN%s"), ScanOverruns,
 					ScanOverruns == 1 ? TEXT("") : TEXT("S"));
 			}
+			// SCAN NUMBER AND FINGERPRINT TOGETHER, never the digest alone. It is a
+			// running hash, so two rides only agree AT THE SAME POINT — a digest
+			// without its scan number is not a comparable quantity, it is a number
+			// that happens to be printed.
+			Status += FString::Printf(TEXT("   #%lld %08x"),
+				static_cast<long long>(ScanNumber),
+				static_cast<uint32>(SimFingerprint.Value() & 0xFFFFFFFFull));
 		}
 		if (Signals->Violations() > 0)
 		{
@@ -3024,6 +3031,31 @@ void ATUCoasterRide::SimStep(double DeltaSeconds)
 	// the panel is about to draw, so the log and the screen cannot disagree.
 	SampleRestraints();
 	LogTransitions();
+
+	// THE SCAN'S FINGERPRINT. Same fields, same order, as the prototype suite's
+	// digest — two sessions on the same preset, left alone, must agree at the same
+	// scan number. Physics AND control state, because either can drift alone: a
+	// train in the right place with the wrong block state is still a different run.
+	++ScanNumber;
+	for (int32 t = 0; t < Trains.Num(); ++t)
+	{
+		SimFingerprint.Add(Trains[t]->GetDistance());
+		SimFingerprint.Add(Trains[t]->GetSpeed());
+	}
+	if (Signals)
+	{
+		for (std::size_t k = 0; k < Signals->NumBlocks(); ++k)
+		{
+			SimFingerprint.Add(static_cast<int>(Signals->GetState(k)));
+		}
+	}
+	if (Drives)
+	{
+		for (std::size_t z = 0; z < Drives->Num(); ++z)
+		{
+			SimFingerprint.Add(Drives->Output(z));
+		}
+	}
 
 	// The Details-panel checkbox, so the stop can be tripped without playing. Read
 	// here rather than in a PostEditChangeProperty because it has to work in PIE.

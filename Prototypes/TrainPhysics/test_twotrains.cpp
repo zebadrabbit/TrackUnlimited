@@ -26,6 +26,7 @@
 // real fix is S -= TotalLength once FTrack can say it is a circuit.
 
 #include "../BlockSignal/RideSignals.h"
+#include "../BlockSignal/SimDigest.h"
 #include "../BlockSignal/StationProcess.h"
 #include "../BlockSignal/TrackDrives.h"
 #include "../BlockSignal/TrackSensors.h"
@@ -1073,6 +1074,16 @@ struct FRunResult
     // is noise rather than a diagnostic.
     std::vector<double> PeakLoad;
     bool bDriveFaulted = false;
+
+    // A FINGERPRINT OF EVERY SCAN, so two runs can be compared as runs rather
+    // than as outcomes. Outcomes agreeing proves very little — two runs that
+    // diverged in the middle and converged on the same parked positions would
+    // pass every other assertion in this file.
+    //
+    // The fixed scan period made determinism possible; this is what makes it
+    // checkable, and it is the thing a downstream builder needs before a recorded
+    // scenario can mean anything.
+    std::uint64_t Digest = 0;
     int FirstFaultedDrive = -1;   // which one, so a fault is a place to go and look
 
     // Where the interlocking first said no, because "22 violations" is a count and
@@ -1127,6 +1138,7 @@ FRunResult RunTrains(std::size_t N, std::size_t Lookahead, double Seconds,
     }
 
     FRunResult R;
+    FSimDigest Digest;
     R.Laps.assign(N, 0);
     R.ParkedNoseS.assign(C.Authored.size(), 0.0);
     R.PeakLoad.assign(C.Authored.size(), 0.0);
@@ -1251,7 +1263,28 @@ FRunResult RunTrains(std::size_t N, std::size_t Lookahead, double Seconds,
                 R.bDriveFaulted = true;
             }
         }
+
+        // EVERY SCAN, not just the last. A digest taken once at the end cannot
+        // tell a run that never diverged from one that diverged and came back,
+        // and the second is the interesting failure.
+        //
+        // Physics AND control state, because either can drift alone: a train in
+        // the right place with the wrong block state is still a different run.
+        for (std::size_t t = 0; t < N; ++t)
+        {
+            Digest.Add(Owned[t]->GetDistance());
+            Digest.Add(Owned[t]->GetSpeed());
+        }
+        for (std::size_t k = 0; k < Sig.NumBlocks(); ++k)
+        {
+            Digest.Add(static_cast<int>(Sig.GetState(k)));
+        }
+        for (std::size_t z = 0; z < Drives.Num(); ++z)
+        {
+            Digest.Add(Drives.Output(z));
+        }
     }
+    R.Digest = Digest.Value();
     R.Violations = Sig.Violations();
     for (std::size_t t = 0; t < N; ++t)
     {
@@ -1694,6 +1727,46 @@ FBatchResult RunSmallBatch(double SlowLoadSeconds, std::size_t SlowPosition)
     return R;
 }
 
+void TestTheSameRunTwiceIsTheSameRun()
+{
+    // DETERMINISM, WHICH IS WHAT MAKES EVERYTHING ELSE PROVABLE. A recorded
+    // scenario, a replayed bug report and a fault-injection test are all the same
+    // claim underneath: run it again and get the same run. Without that they are
+    // anecdotes.
+    //
+    // The digest covers EVERY SCAN rather than the ending state, because two runs
+    // that diverged in the middle and converged on the same parked positions
+    // would satisfy every other assertion in this file.
+    const FRunResult A = RunTrains(3, 1, 120.0);
+    const FRunResult B = RunTrains(3, 1, 120.0);
+
+    assert(A.Digest == B.Digest);
+    assert(A.Violations == B.Violations);
+    assert(A.Laps == B.Laps);
+
+    std::printf("\nDETERMINISM\n");
+    std::printf("  three trains, 120 s, run twice: digest %016llx both times\n",
+                static_cast<unsigned long long>(A.Digest));
+
+    // AND THE DIGEST HAS TO BITE. A fingerprint that matched everything would
+    // pass this test on a simulation that was wildly non-deterministic, which is
+    // the vacuous pass this project has already been caught by once tonight.
+    // A different train count is a different run and must say so.
+    const FRunResult C = RunTrains(2, 1, 120.0);
+    assert(C.Digest != A.Digest);
+
+    // So is the same ride with one more block of headway, which changes when
+    // trains are released without changing where any of them ends up.
+    const FRunResult D = RunTrains(3, 2, 120.0);
+    assert(D.Digest != A.Digest);
+    std::printf("  and it differs on train count and on lookahead, so it bites\n");
+
+    // A run stopped mid-lap is a different run from one that was not, even though
+    // both end with every train stationary at a device.
+    const FRunResult E = RunTrains(3, 1, 120.0, 60.0);
+    assert(E.Digest != A.Digest);
+}
+
 void TestTheSmallBatchCircuitIsTheSameOvalAndStillCloses()
 {
     // THE CLOSURE IS A PROPERTY OF THE LEG LENGTHS, so keeping leg A at 176 m
@@ -2052,6 +2125,7 @@ int main()
     TestADispatchWaitsForTheLaunchToBeArmed();
     TestTwoIndependentMeansOfKnowingAgreeOnEveryBlock();
     TestTheDrivesTellTheStoryOfTheRide();
+    TestTheSameRunTwiceIsTheSameRun();
     TestTheSmallBatchCircuitIsTheSameOvalAndStillCloses();
     TestASmallBatchPlatformWorksThreeTrainsAtOnce();
     TestAnEmergencyStopStopsTheRideNotTheTrains();
