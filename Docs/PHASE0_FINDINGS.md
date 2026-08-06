@@ -169,7 +169,22 @@ The defaults run this ride consistently *fast* — 11.0 m/s against NL2's 10.6 a
 >
 > **The calibrator was wrong first time and would have been believed.** Its coast filter admits any interval implying under 2 m/s², which correctly rejects an 8 m/s² brake and does **not** reject the *ramp into one* — 0.4, 0.6, 1.2 all pass on the way up. Those samples sit at the low end of the `v²` range carrying several times the coast's resistance, so they lift the intercept and flatten the slope: `Crr` 0.0277 against a true 0.02603, `DragK` 0.000086 against 0.000100, residual 0.0509 against 0.00014, and the pinned fit went **negative** — which is the symptom that should have given it away. Fixed with a robust trim on median absolute deviation, because a tighter fixed threshold is the same fragility with a different number in it.
 >
-> **The defaults are still unchanged**, and changing them is its own piece of work: `DragK` 0.00045 → 0.000100 and `RollingResistance` 0.024 → 0.026 move every speed and G figure in the project, including everything `REFERENCE_LAYOUT.md` publishes.
+> **APPLIED the same day.** `DragK` 0.00045 → **0.000100**, `RollingResistance` 0.024 → **0.026**. The blast radius turned out to be one assertion — the mid-course entry speed on the two-train circuit, 26.5 → 30.39 m/s, which is the most drag-sensitive number in the suites because it is a speed after 872 m of free running with nothing but resistance acting. All eleven prototype suites pass.
+>
+> **Nothing geometric moved. Every dynamic figure did.** Length, crest, closure, continuity, loop radius and apex height are identical; the ride is simply faster and pulls harder, because the train keeps energy it was previously losing.
+>
+> | | before | after |
+> |---|---|---|
+> | reference: top speed | 105.2 km/h | **107.5** |
+> | reference: vertical G | +0.66 .. +4.20 | **+0.66 .. +4.52** |
+> | reference: lateral G | 0.28 | **0.37** |
+> | reference: loop apex felt G | +1.16 | **+1.78** |
+> | reference: ride time | 63.4 s | **63.1** |
+> | circuit: vertical G | −0.53 .. +3.08 | **−0.93 .. +3.46** |
+> | circuit: lateral G | 0.15 | **0.30** |
+> | circuit: lap | 105 s | **100** |
+>
+> The circuit's top speed is unchanged at 136.8 km/h because a launch is *commanded* to a speed rather than reaching one. **The loop is where it shows most**: apex felt G rose by more than half a g, because the train arrives with more speed left. The old figures were not measurement error — they were a correct simulation of a train dragged 4.5× harder than a real one.
 
 **Test suites are discriminating.** This was checked by mutation rather than assumed: deliberately broken variants of the headers were generated and run against the suites. The first pass found four surviving mutants in the spline suite — including one that put the loop apex at z = **-16** instead of +16 while leaving *every* G reading numerically identical, because the frame flipped in step with the curvature. An entirely inverted track would have reported perfectly self-consistent G. Six asserts closed that gap, and all six previously-surviving mutants are now killed.
 

@@ -890,7 +890,12 @@ void TestEveryHoldingBlockCanActuallyStopWhatArrives()
     // The mid-course one specifically, because it is the one that changed.
     assert(Tr.FindHoldZoneAt(900.0) >= 0);
     const double Mid = SpeedAt(P, 872.06);
-    assert(Mid > 26.0 && Mid < 27.0);
+    // 30.4 m/s, up from 26.5 when DragK was the derived 0.00045. Measuring drag
+    // against a 142 km/h coast-down put it at 0.000100 — 4.5x lower — and this
+    // number is the single most sensitive thing in the suite to that, because it
+    // is a speed after 872 m of free running with nothing but resistance acting.
+    // It is the assertion that would notice if the coefficient ever drifted back.
+    assert(Mid > 30.0 && Mid < 31.0);
     assert(Mid * Mid / (2.0 * Grip) < 130.0);
 
     // And the train is not crawling over the top. A turnaround entered at walking

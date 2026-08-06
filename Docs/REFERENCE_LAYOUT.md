@@ -29,20 +29,33 @@ read off a ride profile run over the built geometry.
 | Lowest point | 0.00 m — the layout does not go below its own station |
 | Closure | ends **+0.0015 m** relative to the station |
 | Curvature continuity | ✅ verified to **1e-9** across all 15 joints |
-| Top speed | **105.2 km/h** (29.24 m/s) at S = 277.2 m |
-| Vertical G | **+0.66 to +4.20 g** (min at S = 173.8, max at S = 330.8) |
-| Peak lateral G | **0.28 g** at S = 427.7 m |
-| Peak roll rate | 63.7 °/s at S = 415.8 m |
-| Loop | R9.0 m, 54 m eased in and out. Apex **27.90 m** at S = 359.5 m (+1.16 g there) |
-| Loop, minimum felt G | **+1.13 g** at S = 357.2 m — 2.26 m of arc *before* the apex, at 27.62 m |
+| Top speed | **107.5 km/h** (29.87 m/s) at S = 282.9 m |
+| Vertical G | **+0.66 to +4.52 g** (min at S = 173.8, max at S = 331.2) |
+| Peak lateral G | **0.37 g** at S = 428.6 m |
+| Peak roll rate | 66.7 °/s at S = 415.5 m |
+| Loop | R9.0 m, 54 m eased in and out. Apex **27.90 m** at S = 359.5 m (+1.78 g there) |
+| Loop, minimum felt G | **+1.74 g** at S = 356.9 m — 2.51 m of arc *before* the apex, at 27.55 m |
 | Banked turn | R32.0 m at **65.92°**, clothoid in and out |
-| Ride time | **63.4 s**, dispatch to standstill at S = 560.5 m in the brake run |
+| Ride time | **63.1 s**, dispatch to standstill at S = 567.6 m in the brake run |
 | Heartline | 1.1 m above rail centreline |
 | Train | **15 m** long, nine sample points |
 | Chain speed | 4.0 m/s |
 
-Sampled at 0.5 m. The G extremes are the sampled ones — at 1.0 m spacing the maximum reads +4.19
-rather than +4.20, which is the sampling grid landing differently on a sharp peak, not a difference
+> **Every dynamic figure above moved on 2026-08-06**, when `DragK` was measured at **0.000100**
+> against a 142 km/h coast-down and the previously *derived* 0.00045 turned out to be 4.5× too high.
+> Nothing about the geometry changed — length, crest, closure, continuity, the loop's radius and
+> apex height are all identical. What moved is everything that depends on how much energy the train
+> keeps: the ride is faster, and it pulls harder.
+>
+> The loop is where it shows most. Apex felt G went **+1.16 → +1.78 g** and the minimum through the
+> loop **+1.13 → +1.74**, because the train arrives with more speed left. Peak vertical reached
+> **+4.52 g**, and peak lateral rose from 0.28 to 0.37. The previous numbers were not measurement
+> error — they were a correct simulation of a train dragged 4.5× harder than a real one.
+>
+> See `PHASE0_FINDINGS.md` for the recording and the fit.
+
+Sampled at 0.5 m. The G extremes are the sampled ones — at 1.0 m spacing the maximum reads slightly
+differently, which is the sampling grid landing differently on a sharp peak, not a difference
 in the physics.
 
 The two loop rows are **two different points, not two samples of one**, and finer sampling will not

@@ -101,13 +101,35 @@ struct FTrainConfig
     // It also explains something that made no sense before: rolling resistance
     // outweighing air drag 3:1 even at 100 km/h. Absurd for a steel railway
     // wheel, exactly right for polyurethane tyres.
-    double RollingResistance = 0.024;
+    double RollingResistance = 0.026;
 
     // Lumped aerodynamic drag: 0.5 * rho * Cd * A / mass, so the deceleration
     // is DragK * v^2. Dominates at speed; negligible in a station.
-    // 0.00045 is that formula evaluated for a loaded 7-car steel train — around
-    // 8000 kg at a CdA of 5.5 m^2. Still a knob, but a defensible starting one.
-    double DragK = 0.00045;
+    //
+    // MEASURED 2026-08-06, and the previous 0.00045 was DERIVED and 4.5x too
+    // high. That derivation evaluated the formula for a loaded 7-car steel train
+    // — 8000 kg at CdA 5.5 m^2 — and was never checked against a ride, because
+    // the only recording available topped out at 44.5 km/h where drag is under a
+    // tenth of the loss and correlates with rolling resistance at 0.975.
+    //
+    // A purpose-built dead-flat straight launched to 142.5 km/h settled it. Over
+    // the coast from 142.3 to 97.2 km/h, drag runs 38% of the loss down to 22% —
+    // large enough to see and varying enough to separate — and the fit gives
+    // 0.000100 with a residual of 0.00014 m/s^2 against decelerations of
+    // 0.33-0.41. A 0.04% fit.
+    //
+    // Three things make it a measurement rather than a fit: rolling resistance
+    // came out 0.02603 against the 0.02602 of a completely separate 30 km/h
+    // recording on different track; the fast and slow halves of the coast fitted
+    // separately give identical coefficients, where a drag term being absorbed
+    // into friction would make them trade off; and DragK holds steady across
+    // every train length, where before it flipped sign.
+    //
+    // What moved when this landed: nothing geometric, and every dynamic figure.
+    // The reference layout's loop apex went +1.16 -> +1.78 g and the circuit's
+    // lap 105 -> 100 s. The old numbers were a correct simulation of a train
+    // dragged 4.5x harder than a real one.
+    double DragK = 0.000100;
 
     // Metres, nose to tail. ZERO is a point mass at the heartline, which is
     // what every result recorded before Phase 2 was measured with — so it stays
