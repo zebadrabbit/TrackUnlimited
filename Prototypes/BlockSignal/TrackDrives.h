@@ -41,6 +41,8 @@
 #pragma once
 
 #include <algorithm>
+#include "Cia402.h"
+
 #include <cmath>
 #include <cstddef>
 #include <vector>
@@ -102,6 +104,7 @@ public:
     explicit FTrackDrives(std::size_t NumDrives, const FDriveSpec& InDefault = FDriveSpec())
         : State(NumDrives)
         , Spec(NumDrives, InDefault)
+        , Cia(NumDrives)
         , LastSlip(NumDrives, 0.0)
     {
     }
@@ -448,9 +451,31 @@ public:
             if (Sp.SlipTripSeconds > 0.0 && R.SlippingFor >= Sp.SlipTripSeconds)
             {
                 R.bFaulted = true;
+                Cia[i].RaiseFault();
             }
+
+            // THE STATE MACHINE FOLLOWS THE DRIVE, it does not lead it. The
+            // controlword is synthesised from what this class has already
+            // decided, so the two cannot disagree — a CiA layer that made its
+            // own decisions would be a second drive beside the real one.
+            //
+            // An E-stop is the fieldbus's own idiom for it: Category 0 is STO,
+            // which reads here as voltage going away; Category 1 is SS1, which
+            // is a quick stop ramp and then voltage going away. IEC 61800-5-2
+            // and this project's stop categories describe the same two paths.
+            std::uint16_t Cw = Cia402Cw::EnableOp;
+            if (bEmergencyStopped)
+            {
+                Cw = bPowerRemoved ? Cia402Cw::DisableVoltage : Cia402Cw::QuickStopCmd;
+            }
+            Cia[i].Write(Cw, DeltaSeconds);
+            Cia[i].SetTargetReached(std::fabs(R.Commanded - R.Output) <= 1e-9);
+            Cia[i].SetInternalLimit(R.Load >= 0.999);
         }
     }
+
+    // What the drive REPORTS, in the words a real VFD reports it in.
+    const FCia402Drive& Cia402(std::size_t Drive) const { return Cia[Drive]; }
 
     // Feedback, in the same Begin/Report/End shape as FTrackSensors, and for the
     // same reason: a drive with nothing on it is a real and distinct state, and
@@ -628,6 +653,13 @@ public:
 private:
     std::vector<FDriveReading> State;
     std::vector<FDriveSpec> Spec;
+
+    // ONE CiA 402 STATE MACHINE PER DRIVE, driven from the transitions this
+    // class already makes rather than run in parallel with them. It does not
+    // decide anything here — it is what the drive REPORTS, in the words a real
+    // VFD reports it in, so a maintenance page can show a statusword instead of
+    // four states this project invented.
+    std::vector<FCia402Drive> Cia;
 
     // Last frame's slip magnitude, so "is the gap closing" can be asked. Private
     // rather than on the reading, because it is the fault rule's own scratch space

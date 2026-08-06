@@ -2090,6 +2090,21 @@ void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/
 			PanelLabel(Canvas, BarX + BarW + 6.f, Ty,
 				Drives->IsAcknowledged(Z) ? TEXT("FAULT ACK") : TEXT("FAULT"), PanelRed);
 		}
+		else
+		{
+			// THE STATUSWORD, which is what an engineering page on a real
+			// installation shows. Four states this project invented are a fair
+			// summary; 6041h is what the drive actually says, and a maintainer
+			// who knows CiA 402 reads it without being taught anything.
+			static const TCHAR* CiaNames[] = {
+				TEXT("NOT RDY"), TEXT("SW ON DIS"), TEXT("RDY SW ON"), TEXT("SWITCHED ON"),
+				TEXT("OP ENABLED"), TEXT("QUICK STOP"), TEXT("FLT REACT"), TEXT("FAULT")};
+			const FCia402Drive& C = Drives->Cia402(Z);
+			PanelLabel(Canvas, BarX + BarW + 6.f, Ty,
+				FString::Printf(TEXT("%s %04x"),
+					CiaNames[static_cast<int32>(C.State())], C.Statusword()),
+				C.ProducesTorque() ? PanelDim : PanelAmber);
+		}
 		Ty += Row;
 	}
 
