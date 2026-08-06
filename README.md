@@ -114,6 +114,8 @@ one of them.
 The point is to make the causal chain **visible** — a sensor trips, an indicator lights, the logic
 evaluates, an actuator responds — rather than collapsing it into an invisible if-statement.
 
+→ [`Docs/SIGNALLING.md#the-generated-control-panel`](Docs/SIGNALLING.md#the-generated-control-panel)
+
 ### Failures, and what notices them
 
 Restraint groups that will not close, gates that jam, sensors that die, stick on or chatter on a loose
@@ -125,8 +127,6 @@ better single one.
 The matrix is kept honest in both directions: it records the failures nothing currently catches.
 
 → [`Docs/FAULTS.md`](Docs/FAULTS.md)
-
-→ [`Docs/SIGNALLING.md#the-generated-control-panel`](Docs/SIGNALLING.md#the-generated-control-panel)
 
 ### Measured, not asserted
 
