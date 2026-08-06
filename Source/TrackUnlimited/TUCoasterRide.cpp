@@ -1035,6 +1035,10 @@ void ATUCoasterRide::RebuildFromSegments()
 			static_cast<std::size_t>(FMath::Max(1, DispatchLookahead)),
 			static_cast<std::size_t>(Running), bTrackIsCircuit);
 
+		// Where those boundaries actually are on the track, walked once now rather
+		// than integrated eleven times a frame to draw eleven posts.
+		BuildBlockMarks();
+
 		// The second detection method: a switch at every block boundary, and a
 		// counter that derives occupancy from their trips and nothing else.
 		// Circuits only — see the header for why the ring wrap is a lie on an open
@@ -2246,6 +2250,81 @@ void ATUCoasterRide::SampleRestraints()
 	}
 }
 
+void ATUCoasterRide::BuildBlockMarks()
+{
+	BlockMarks.Reset();
+	if (!Signals || Track.TotalLength() <= 0.0)
+	{
+		return;
+	}
+
+	// ONE WALK for every boundary. Boundaries are ascending, so AdvanceFrom can
+	// carry the frame forward from one to the next — eleven posts cost one
+	// integration of the track rather than eleven.
+	const std::vector<double>& B = Signals->Boundaries();
+	FTrackFrame Walk = Track.EvaluateAt(0.0);
+	double At = 0.0;
+
+	for (std::size_t i = 0; i < B.size(); ++i)
+	{
+		const double To = FMath::Clamp(B[i], 0.0, Track.TotalLength());
+		if (To > At)
+		{
+			Walk = Track.AdvanceFrom(Walk, At, To);
+			At = To;
+		}
+		FTUBlockMark M;
+		M.World = ToWorld(Walk.Position);
+		// Kept in WORLD space, converted once here rather than per frame, and
+		// through the same mapping the rest of the drawing uses — a post that
+		// leans the wrong way on a banked boundary would be its own small lie.
+		M.Up = ToWorld(Walk.Position + Walk.Up) - M.World;
+		M.Lateral = ToWorld(Walk.Position + Walk.Lateral) - M.World;
+		BlockMarks.Add(M);
+	}
+}
+
+void ATUCoasterRide::DrawBlockMarkers() const
+{
+	if (!bShowBlockMarkers || !Signals || BlockMarks.Num() == 0)
+	{
+		return;
+	}
+
+	for (int32 i = 0; i < BlockMarks.Num(); ++i)
+	{
+		const FTUBlockMark& M = BlockMarks[i];
+		const std::size_t B = static_cast<std::size_t>(i);
+
+		// A boundary is the START of block i, so it carries block i's colour —
+		// THE SAME COLOURS THE PANEL'S BLOCK STRIP USES, because the strip and
+		// the track are meant to be one object seen twice. Amber occupied, cyan
+		// in its overlap, green clear.
+		const EBlockState State = Signals->GetState(B);
+		FColor Col = State == EBlockState::Occupied ? FColor(250, 158, 41)
+			: (State == EBlockState::Buffer ? FColor(89, 189, 255) : FColor(89, 209, 115));
+
+		// A disagreement between the two detection methods paints it RED, exactly
+		// as it does on the panel — so a cross-check trip can be found on the
+		// track rather than only read about.
+		if (Counter && B < Counter->NumBlocks()
+			&& (Counter->IsOccupied(B) != Signals->Occupies(B) || Counter->IsOverOccupied(B)))
+		{
+			Col = FColor(215, 60, 50);
+		}
+
+		// A gate across the track rather than a post beside it: the boundary is a
+		// line the train crosses, and a marker off to one side reads as scenery.
+		const FVector Top = M.World + M.Up * 420.f;
+		const FVector Foot = M.World - M.Up * 160.f;
+		const FVector Half = M.Lateral * 260.f;
+
+		DrawDebugLine(GetWorld(), Foot, Top, Col, false, -1.f, 0, 4.f);
+		DrawDebugLine(GetWorld(), Top - Half, Top + Half, Col, false, -1.f, 0, 4.f);
+		DrawDebugLine(GetWorld(), Foot - Half, Foot + Half, Col, false, -1.f, 0, 2.f);
+	}
+}
+
 void ATUCoasterRide::DrawRestraints() const
 {
 	if (!bShowRestraints || Trains.Num() == 0 || Platforms.Num() == 0)
@@ -3247,6 +3326,7 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 	// ---- Everything below is DRAWING, and runs once per rendered frame. It reads
 	// the state the last scan left and never advances anything.
 	DrawRestraints();
+	DrawBlockMarkers();
 
 	// Where the rider is sitting, which is a real choice now that cars differ.
 	const double SeatOffset = RiderPosition * TrainLengthM * 0.5;

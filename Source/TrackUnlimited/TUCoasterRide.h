@@ -480,6 +480,30 @@ private:
 	void SampleRestraints();
 	void DrawRestraints() const;
 
+	/** Where the block boundaries fall, in world space. Only changes on a rebuild. */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Signalling")
+	bool bShowBlockMarkers = true;
+
+	struct FTUBlockMark
+	{
+		FVector World = FVector::ZeroVector;
+		FVector Up = FVector::UpVector;
+		FVector Lateral = FVector::RightVector;
+	};
+	TArray<FTUBlockMark> BlockMarks;
+
+	/**
+	 * Walked ONCE per rebuild, not per frame.
+	 *
+	 * `EvaluateAt` is O(track length) a call, so eleven boundaries every frame
+	 * would be eleven full integrations to draw eleven posts. The boundaries only
+	 * move when the track does, so they are walked with a single AdvanceFrom pass
+	 * and cached — the same mistake DrawTrack's comment already records having
+	 * made once.
+	 */
+	void BuildBlockMarks();
+	void DrawBlockMarkers() const;
+
 	/**
 	 * One scan of the control system and one step of the physics, at a FIXED
 	 * period. Tick runs however many of these the elapsed frame is worth.
