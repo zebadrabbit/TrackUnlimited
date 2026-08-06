@@ -489,11 +489,27 @@ struct FAutoStationCrew
         // Found by reading the transition log rather than by reasoning: dispatch
         // permission was granted in the same frame the bars started travelling
         // open, which is a sentence no ride should be able to write.
+        //
+        // Departing is listed for the invariant's sake and is currently
+        // unreachable — the branch above returns before here, deliberately
+        // leaving the bars commanded exactly as Ready left them. Kept so that
+        // removing that early return cannot silently unlock a departing train.
         const bool bSecured = P == EStationPhase::Securing
             || P == EStationPhase::Ready
             || P == EStationPhase::Departing;
 
-        Restraints.Command(bAlreadyLoaded || bSecured);
+        // AN UNLOAD PLATFORM DOES NOT CLOSE THE BARS, and the role is what says
+        // so. Its train runs EMPTY to the load platform and has to arrive ready
+        // to board, so closing them here is two seconds of travel to undo two
+        // seconds later — and it contradicts the whole reason the unload role
+        // exists, which is that there is nobody aboard to be restrained.
+        //
+        // Caught by the transition log on the lap after the fix above: Z0
+        // released its bars for unloading, then closed and locked them again on
+        // an empty train, and Z1 opened them for boarding. The process was
+        // already right — it never WAITED for them — but the crew was throwing a
+        // switch nobody had asked it to throw.
+        Restraints.Command(bAlreadyLoaded || (bSecured && Station.NeedsRestraints()));
         Restraints.Tick(DeltaSeconds, StuckGroup);
 
         // GATES OPEN WHILE RIDERS ARE MOVING and shut from the securing step until
@@ -501,6 +517,10 @@ struct FAutoStationCrew
         // somebody off the track while a train is being dispatched, so they must
         // still be shut while it actually departs -- which is exactly the window
         // the old rule opened them in.
+        //
+        // NOT gated on the role, unlike the bars above. A gate protects the people
+        // ON THE PLATFORM from a train that is about to move, and that is true
+        // whether or not anybody is sitting in it.
         Gates.Command(bAlreadyLoaded || bSecured);
         Gates.Tick(DeltaSeconds, StuckGate);
 
@@ -527,7 +547,18 @@ struct FAutoStationCrew
             // bars down, the gates shut, and an operator who has looked. Any one of
             // the three outstanding holds the dispatch, and a gate that will not
             // travel holds it for ever rather than being timed out of the way.
-            if (In.bRestraintsLocked && Gates.IsClosedAndLocked()
+            //
+            // THE BARS ARE ONLY A TERM WHERE THE ROLE HAS THEM. An unload platform
+            // does not close them, so demanding them here is a walk-round waiting
+            // for a switch nobody is ever going to throw — the exact deadlock the
+            // unload role exists to avoid, moved from the process into the crew.
+            // Caught by its own test the moment the bars stopped closing; the
+            // process had always been right about this and the crew had not.
+            //
+            // The GATES stay unconditional: a train leaving an unload platform is
+            // still a train moving past people.
+            if ((!Station.NeedsRestraints() || In.bRestraintsLocked)
+                && Gates.IsClosedAndLocked()
                 && Elapsed >= SecureSeconds)
             {
                 In.bPlatformClear = true;

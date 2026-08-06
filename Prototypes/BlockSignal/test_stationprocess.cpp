@@ -552,6 +552,47 @@ void TestATrainDepartsSECURED()
     assert(!Crew.Restraints.IsCommandedClosed());
 }
 
+void TestAnUnloadPlatformDoesNotCLOSETheBarsEither()
+{
+    // The other half of TestAnUnloadPlatformDoesNotWaitForRestraints, and the
+    // half that was missing. That test proves the PROCESS does not wait on the
+    // bars at an unload platform. It says nothing about whether the CREW closes
+    // them anyway — and it did, so an empty train spent two seconds locking bars
+    // and the load platform spent two seconds unlocking them again.
+    //
+    // Read off the transition log:
+    //   [60.95] Z0  restraints releasing — 0/4     riders out, correct
+    //   [66.96] Z0  restraints closing   — 0/4     on an EMPTY train
+    //   [68.96] Z0  restraints CLOSED AND LOCKED
+    FStationProcess S(EStationRole::Unload);
+    FAutoStationCrew Crew;
+    Crew.UnloadSeconds = 0.5;
+    Crew.SecureSeconds = 0.5;
+    Crew.Restraints.TravelSeconds = 0.5;
+    Crew.Gates.TravelSeconds = 0.5;
+
+    FStationInputs In;
+    In.bTrainPresent = true;
+    In.bTrainInPosition = true;
+
+    for (int i = 0; i < 240 * 10 && !S.IsReadyToDispatch(); ++i)
+    {
+        S.Update(In);
+        Crew.Serve(S, In, Dt);
+    }
+    assert(S.IsReadyToDispatch());
+
+    // Ready to go, with the bars OPEN — because the train is empty and has to
+    // reach the load platform able to board.
+    assert(!Crew.Restraints.IsCommandedClosed());
+    assert(Crew.Restraints.IsFullyOpen());
+
+    // THE GATES ARE STILL SHUT, and that asymmetry is the point: a gate keeps
+    // somebody off the track while a train moves, which is true whether or not
+    // anybody is sitting in it.
+    assert(Crew.Gates.IsClosedAndLocked());
+}
+
 } // namespace
 
 int main()
@@ -570,6 +611,7 @@ int main()
     TestAStuckRestraintHoldsTheDispatchForEver();
     TestAStuckGATEHoldsItToo();
     TestATrainDepartsSECURED();
+    TestAnUnloadPlatformDoesNotCLOSETheBarsEither();
 
     std::printf("test_stationprocess: all assertions passed\n");
     return 0;
