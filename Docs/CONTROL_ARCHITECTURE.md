@@ -215,6 +215,57 @@ that and inherit the rest. This is the single most important usability decision 
 
 ## Tier 3 — Show: cues, and Luau where cues run out
 
+> ### CORRECTION 2026-08-06: show makes no requests. It only reads.
+>
+> The diagram above draws requests going *up* from Tier 3. **For show, there are none.** The
+> developer put it plainly: show effects are read-only to the state of the system — a train passes a
+> sensor, the DMX side is told to fire its pyro and its fog. Show never asks the ride for anything.
+>
+> **DMX agrees at the wire level.** DMX512 is unidirectional by design: a controller broadcasts 512
+> channel values per universe and there is no return path. (RDM adds a back-channel, but that is
+> device discovery and configuration, not show data.) *Read the ride, write the fixtures* is how the
+> cable itself works.
+>
+> ```text
+> sensors, blocks, drives ──► event stream ──► show layer ──► DMX / pyro / fog / cameras
+>                                                   ▲
+>                                     hard permissive (hazardous outputs only)
+> ```
+>
+> **Three consequences, and each is stronger than what this document originally claimed.**
+>
+> *The show layer's input already exists.* It is the state-transition stream — block occupied,
+> sensor tripped, train motion, station phase, all timestamped. "Train passes sensor, fire the pyro"
+> is a subscriber to `FSignalWatch`. There is no new plumbing to invent, which is a good sign the
+> boundary was drawn in the right place.
+>
+> *Tier 3 determinism genuinely does not matter*, and now there is a reason rather than an
+> assertion: nothing downstream of show reaches the ride, so a show script that hangs, crashes or
+> differs every run cannot move a train. Structural, not policy.
+>
+> *And the "runs identically without the upper tiers" claim becomes provable* — `FSimDigest` is
+> exactly the instrument, because there is no path by which the ride could differ.
+>
+> **What remains of the downward arrow** is only effects that can injure, and even those do not
+> negotiate. A show controller does not request pyro and wait to be granted it: it sends the cue
+> into a firing circuit that has arming, continuity and a key in series, and **it fires into a
+> circuit that may simply be open and does not know.** Show commands; hardware gates.
+>
+> **Worked example — the on-ride camera**, which is the purest case because it cannot hurt anybody
+> and therefore has no permissive at all:
+>
+> - A camera trigger is **not a new mechanism, it is a sensor** — a third kind of switch beside the
+>   block boundaries and the stop marks. It subscribes to a trip going high like everything else.
+> - **The lead is surveyed, not computed.** A real camera fires early for shutter lag and for faces
+>   rather than the backs of heads. Place the trigger where it needs to be and the lead is consumed
+>   once, at placement — exactly as `HoldNoseClearanceM` consumes train length where the stop mark is
+>   surveyed rather than in the dispatcher. A trigger surveyed for a fast train then fires late for a
+>   slow one, which is what a real installation does and why trigger points are tuned per ride.
+> - It **inherits the identity gap** rather than needing its own answer: the switch knows something
+>   went past, not who. When identity-from-trip-order is built for the safety core, cameras get it
+>   free. Until then a photo belongs to "a train", which is precisely what the hardware knows.
+
+
 Most show authoring should never touch a script. The default surface is a **cue model** copied from
 what the industry actually uses, because a lighting programmer arriving from an Eos or a grandMA3
 already knows it:
