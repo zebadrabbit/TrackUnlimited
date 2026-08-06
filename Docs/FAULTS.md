@@ -90,20 +90,26 @@ That is the scenario layer, and it wants:
 Not scheduled. The pieces it needs are being built as they come up for other reasons, which is the
 right order.
 
-## One caution about calling this training
+## A foundation, not a claim
 
-There is a real use for a rig that can fault a ride and show a crew what the system does — and it is
-a use nothing else in this market offers. Worth being deliberate about two things before the word
-"training" appears anywhere user-facing:
+Somebody could build a training rig on this. **This project does not make that claim and should not
+start**, and that is a settled position rather than a caution to revisit: nobody here is an authority
+on operator training, certification is not ours to grant, and a simulator that says it trains people
+has taken on an authority it has not earned.
 
-- **This is not certified training material and must not read as if it were.** A park that used it to
-  train operators would be relying on a model whose limits are recorded in
-  `PHASE0_FINDINGS.md` — a heartline point mass, no rider biomechanics, an unverified acceleration
-  envelope table, and a signalling model that still hands the interlocking a span rather than
-  inferring identity from trip order.
-- **The MIT licence's no-warranty clause is a legal statement, not an ethical one.** If the tool
-  invites that use, the honest thing is to say plainly what it does and does not model, in the
-  product rather than only in the docs.
+What this project owes such a builder is different, and more useful:
 
-Neither is a reason not to build it. Both are reasons to decide the wording once, deliberately, the
-way `UI_CONVENTIONS.md` settles the design language.
+- **Stable hooks.** Faults injectable at the devices, the event stream on disk, deterministic replay.
+  Those are the things that are painful to retrofit and cheap to design in, and they are what the
+  matrix above is really for.
+- **Honest limits, written down.** A downstream builder needs to know exactly what they are standing
+  on. `PHASE0_FINDINGS.md` is the ledger — a heartline point mass, no rider biomechanics, an
+  acceleration envelope table that is **unverified research rather than a copy of either standard**,
+  and an interlocking still handed a span rather than inferring identity from trip order. Every one
+  of those matters to somebody deciding whether this is a fair basis for anything.
+- **Nothing dressed up.** The reason the matrix records what is *not* caught, and the reason
+  `GEnvelope.h` prints its own provenance on every run, is that a foundation is only worth building
+  on if it is candid about where it stops.
+
+The MIT licence's no-warranty clause is a legal statement, not an ethical one. Being straight about
+the model's limits is the ethical one, and it is the whole of what this project has to do here.
