@@ -85,19 +85,46 @@ be held is itself checked: a friction brake can stop a train and never start one
 one and never stop one, and a block that is too short to stop what it receives is a trim brake
 whatever it is labelled.
 
-Manual dispatch is designed but not built — the interlocks are meant to apply identically whichever
-way the timing is decided, which is precisely why manual is not a second code path.
+**A station is a process, not a place.** Arrive, unload, load, secure, all-clear, dispatch — and the
+permissive is an AND of every one of those *and* the interlocking, which on a working ride is usually
+the term that went green first while an operator was still walking the train. Every gate is a
+contact rather than a timer: restraints and gates are **commanded** devices with a travel time and
+per-group sensors, so "commanded closed but car 3 is not locked" is a thing the model can say.
+
+Manual dispatch applies the same interlocks — it changes who decides the timing and never whether the
+safety logic can be bypassed, which is precisely why it is not a second code path. The button must be
+released between trains, so a taped control runs nothing.
 
 → [`Docs/SIGNALLING.md`](Docs/SIGNALLING.md)
 
-### A control panel generated from the coaster's own data — *designed, not yet built*
+### A control panel generated from the coaster's own data
 
 Walk the same ordered block and segment list that drives the geometry and the physics: each block
-emits an indicator, each powered segment emits a VFD module with target speed, motor feedback,
-torque and ramp rate. The point is to make the causal chain **visible** — a sensor trips, an
-indicator lights, the logic evaluates, an actuator responds — rather than collapsing it into an
-invisible if-statement. This one is a settled design with nothing implemented behind it yet; every
-other feature on this page is running code.
+emits an indicator, each powered segment emits a VFD module with commanded speed, motor feedback and
+torque, each platform a sequence readout saying what is holding it. Nothing is authored per coaster
+and nothing is cached — add a block to a layout and an indicator appears, because there is nowhere
+else for it to come from.
+
+Corrected against photographs of three real operator consoles, which changed three things: the blocks
+became a **schematic** rather than a table, the operating and stop controls got the green and red
+fields every real panel uses, and `ADVANCE` was separated from `DISPATCH`. It has an **operator view
+and a maintenance view**, because a real installation has both and motor current belongs to exactly
+one of them.
+
+The point is to make the causal chain **visible** — a sensor trips, an indicator lights, the logic
+evaluates, an actuator responds — rather than collapsing it into an invisible if-statement.
+
+### Failures, and what notices them
+
+Restraint groups that will not close, gates that jam, sensors that die, stick on or chatter on a loose
+connection — injectable, deterministic, and each one measured against **what the safety design
+actually catches**. A dead block sensor makes the two independent detection methods disagree, and
+neither can say which is wrong, which is the property a second method is bought for rather than a
+better single one.
+
+The matrix is kept honest in both directions: it records the failures nothing currently catches.
+
+→ [`Docs/FAULTS.md`](Docs/FAULTS.md)
 
 → [`Docs/SIGNALLING.md#the-generated-control-panel`](Docs/SIGNALLING.md#the-generated-control-panel)
 
@@ -130,7 +157,16 @@ actor over the top:
 | Block brakes | hold, and release on a permissive — with the layout checked for whether it *can* stop a train there |
 | Braking distance | derived from the layout: a dispatch clears to the next block that can actually stop the train |
 | NL2 interop | CSV and live telemetry — validation fixtures, not an authoring path |
-| Starter layouts | four worked examples of the vocabulary, each measured before shipping — one of them a closed circuit |
+| Sensors | proximity switches with no idea which train is on them, and a train counter over them |
+| Diverse redundancy | the counter runs alongside the interlocking; a disagreement stops the ride |
+| Drives | one VFD per powered run — commanded, output and motor feedback can all disagree |
+| Emergency stop | inside the drives, latched, IEC 60204-1 stop categories, monitored 0-1-0 reset |
+| Stations | a process per platform position, with commanded restraints and gates |
+| Control panel | generated from the same walk, operator and maintenance views |
+| Ride envelopes | the profile judged against duration-dependent acceleration limits |
+| Fault injection | stuck restraints and gates, dead/stuck/chattering sensors — with a detection matrix |
+| Event log | every state transition, timestamped, to the panel and to disk |
+| Starter layouts | five worked examples of the vocabulary, each measured before shipping — two of them closed circuits |
 | In-engine slice | builds against UE 5.8, rides, reads out speed, G and block state |
 
 → [`Docs/ROADMAP.md`](Docs/ROADMAP.md) for what each phase ships and what is left.
