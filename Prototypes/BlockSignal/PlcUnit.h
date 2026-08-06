@@ -191,9 +191,21 @@ public:
     // decide this single boolean.
     //
     // It permits; it does not compel. A false here means the controller is not
-    // commanding anything — which stops a ride only because a device with no
-    // command falls to its safe state, exactly as it would with the controller
-    // unplugged. The stop does not come from here and must not.
+    // commanding anything. The stop does not come from here and must not.
+    //
+    // BUT "NOT COMMANDING" IS SOMETHING THE CALLER HAS TO DO, and an earlier
+    // version of this comment claimed it fell out for free — that a device with
+    // no command reaches its safe state "exactly as it would with the controller
+    // unplugged". Nothing made that true, and the ride proved it: a caller that
+    // reacted to a false here by SKIPPING its dispatcher left every zone at the
+    // last speed it was commanded, which on a fresh ride is its PRESET. Every
+    // brake sat at its release speed and all three trains left. Three signalling
+    // violations, 1.47 seconds after a watchdog trip.
+    //
+    // In a real cabinet the PLC's output card de-energises when it faults, the
+    // drives lose their enable, and spring-applied brakes bite. A caller has to
+    // DO that: command zero, do not merely stop commanding. Asserted in
+    // test_plcunit.cpp against the real drive layer.
     bool OutputsEnabled() const
     {
         return bPowered && Mode == EPlcMode::Run && !bFaulted && ProgramMatchesLayout();

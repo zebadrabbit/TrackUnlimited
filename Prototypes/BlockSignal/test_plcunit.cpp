@@ -193,6 +193,51 @@ void TestAFaultedControllerCannotPreventASTOP()
     std::printf("  a dead controller cannot prevent an E-stop — constraint 7 holds\n");
 }
 
+void TestANotCommandingControllerLeavesTheRideSAFE()
+{
+    // THE ONE THE RIDE FOUND, an hour after this file was written.
+    //
+    // A caller that reacts to !OutputsEnabled() by simply SKIPPING its dispatch
+    // logic has not stopped commanding — it has left the LAST command standing.
+    // On a ride that has just opened that is each zone's preset, so every brake
+    // sits at its release speed and every train leaves. Measured: three
+    // signalling violations 1.47 s after a watchdog trip, from a controller that
+    // had faulted and was doing nothing.
+    //
+    // The header of PlcUnit.h claimed a device with no command falls to its safe
+    // state "exactly as it would with the cabinet unplugged". Nothing made that
+    // true. This asserts the shape a caller has to implement for it to be.
+    FPlcUnit P = Ready();
+    P.RequestMode(EPlcMode::Run);
+
+    FTrackDrives D(3);
+    D.Preset(0, 20.0);          // a brake at its release speed
+    D.Preset(1, 6.0);
+    D.Preset(2, 4.0);
+    assert(P.OutputsEnabled());
+    assert(D.Output(0) == 20.0);
+
+    // The watchdog trips. In a real cabinet the PLC's output card de-energises,
+    // the drives lose their enable, and the brakes bite because they are
+    // spring-applied.
+    P.Scan(0.4, true);
+    assert(P.IsFaulted());
+    assert(!P.OutputsEnabled());
+
+    // WHAT A CALLER MUST DO. Not "skip the dispatcher" — command zero.
+    if (!P.OutputsEnabled())
+    {
+        for (std::size_t z = 0; z < D.Num(); ++z) { D.Command(z, 0.0); }
+    }
+    D.Tick(1.0 / 240.0);
+
+    for (std::size_t z = 0; z < D.Num(); ++z)
+    {
+        assert(D.Output(z) == 0.0);
+    }
+    std::printf("  a controller that is not commanding leaves every drive at zero\n");
+}
+
 void TestOutputsEnabledIsPermissionNotCompulsion()
 {
     // It PERMITS; it does not compel. False here means the controller is
@@ -221,6 +266,7 @@ int main()
     TestLeavingRunIsNEVERRefused();
     TestTheWatchdogIsAFaultAndItLatches();
     TestAFaultedControllerCannotPreventASTOP();
+    TestANotCommandingControllerLeavesTheRideSAFE();
     TestOutputsEnabledIsPermissionNotCompulsion();
 
     std::printf("\ntest_plcunit: all assertions passed.\n");

@@ -3305,8 +3305,18 @@ void ATUCoasterRide::SimStep(double DeltaSeconds)
 	// THE CONTROLLER SCANS, and its watchdog is the overrun the accumulator
 	// already detects one layer up. Reporting that as a note rather than a trip
 	// was the machine having a symptom with nowhere to put it.
+	const bool bWasFaulted = Plc.IsFaulted();
 	Plc.Scan(DeltaSeconds, bScanOverranThisFrame);
 	bScanOverranThisFrame = false;
+	// A CONTROLLER FAULTING IS THE LOUDEST THING THAT CAN HAPPEN TO A RIDE, and
+	// it was silent. The watchdog tripped, the ride stopped being commanded, and
+	// the only trace was three violations a second and a half later with nothing
+	// connecting them to a cause.
+	if (Plc.IsFaulted() && !bWasFaulted)
+	{
+		LogEvent(FString::Printf(TEXT("PLC FAULT — %s"),
+			UTF8_TO_TCHAR(Plc.FaultReason())));
+	}
 
 	ServeStations(DeltaSeconds);
 
@@ -3321,6 +3331,30 @@ void ATUCoasterRide::SimStep(double DeltaSeconds)
 		for (int32 t = 0; t < Trains.Num(); ++t)
 		{
 			ServeHolds(static_cast<std::size_t>(t));
+		}
+	}
+	else if (Drives)
+	{
+		// A CONTROLLER THAT IS NOT COMMANDING MUST NOT LEAVE EVERYTHING RUNNING,
+		// and the first version of this did exactly that.
+		//
+		// Skipping ServeHolds does not mean "no command" — it means the LAST
+		// command stands. On a ride that has just opened that is each zone's
+		// PRESET, so every brake sat at its release speed and all three trains
+		// left the moment the watchdog tripped. Three signalling violations, 1.47
+		// seconds in, from a controller that had faulted and was doing nothing.
+		//
+		// The header of PlcUnit.h claimed a device with no command falls to its
+		// safe state "exactly as it would with the cabinet unplugged". That was
+		// aspirational: nothing made it true. This does.
+		//
+		// In a real cabinet the PLC's output card DE-ENERGISES when it faults —
+		// the drives lose their enable and the brakes, being spring-applied,
+		// bite. Commanding zero is that, expressed in the one authority this
+		// layer has.
+		for (std::size_t z = 0; z < Drives->Num(); ++z)
+		{
+			Drives->Command(z, 0.0);
 		}
 	}
 
@@ -3465,8 +3499,22 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 	//
 	// Swallowed rather than clamped, because there is no correct amount of that
 	// frame to simulate. The ride begins now.
+	// WAIT FOR A PLAUSIBLE FRAME BEFORE THE RIDE STARTS, rather than swallowing
+	// exactly one. Swallowing one was not enough: PIE takes several frames to
+	// settle — shaders, streaming, the first draw — and the SECOND frame still
+	// carried 300 ms of it, overran, and tripped the PLC watchdog. None of that
+	// is ride time, and a controller coming online is not one missing a deadline.
+	//
+	// Self-calibrating rather than a frame count, because how many frames a load
+	// takes is a property of the machine and the threshold is a property of what
+	// a frame plausibly is.
 	if (!bScanStarted)
 	{
+		if (DeltaSeconds > 0.1)
+		{
+			SimAccumulator = 0.0;
+			return;
+		}
 		bScanStarted = true;
 		SimAccumulator = 0.0;
 		return;
