@@ -17,16 +17,14 @@ correct rather than a regression — the old numbers were a faithful simulation 
 4.5× harder than a real one. But it is a **meaningfully more forceful ride than it was**, and whether
 the layout should be re-tuned is a design decision, not a physics one.
 
-**2. Two things on the board are yours to decide, not mine.**
+**2. Both decisions from this note are now made and written down.**
 
-- **`CLAUDE.md` still says "Current phase: Phase 2".** Phase 2 closed last night — both calibration
-  cards are done. What replaces it is a characterisation call: Phase 3 has two genuine deferrals
-  (turnouts parked by you, evacuation now built), and 3.5 / 3.75 are where the live work is.
-- **Whether Tier 2 gets a language.** The boundary is decided and written into `CLAUDE.md` as
-  constraint 7; the *languages* are deliberately still open. My recommendation is expressions first
-  (~900 lines, a strict ST subset, forecloses nothing), and I would build ST if you tell me
-  *"writing real PLC code is the product"* — which is a positioning decision rather than an
-  engineering one, and a legitimate reason.
+- **Current phase is Phase 4 — Track Meshing & Supports.** The control system is deeper than
+  anything on the market and completely invisible in a screenshot. Phase 3.5's runtime editor is the
+  other defensible answer and swapping them is one line in `CLAUDE.md`.
+- **Tier 2 gets EXPRESSIONS, not Structured Text.** Recorded in constraint 7 and in
+  `CONTROL_ARCHITECTURE.md`. The trigger for revisiting is concrete: the first ride whose policy the
+  default cannot express and a condition cannot reach.
 
 **3. One thing I would like verified if you ever get the chance.** The ASTM F2291 / EN 13814
 acceleration tables are unverified research, not a copy of either standard. `GEnvelope.h` prints

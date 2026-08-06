@@ -4,9 +4,16 @@ How a track's logic is expressed, who is allowed to express it, and which real-w
 layer is modelled on. This is the design reference for the scripting work; the block state machine
 itself is [`SIGNALLING.md`](SIGNALLING.md), and the phased plan is [`ROADMAP.md`](ROADMAP.md).
 
-**Status: DESIGN ONLY. Nothing described here is built**, and none of it is scheduled — scripting and
-show control are not in any current phase. Read it as a position paper on how the control layer
-*should* be shaped if and when it is built, not as a description of the system.
+**Status: PARTLY BUILT as of 2026-08-06, and this document is no longer purely a position paper.**
+Tier 1 is real and shipping — the E-stop chain with IEC 60204-1 stop categories, restraint and gate
+proof, block veto, monitored reset. The **boundary is adopted** as `CLAUDE.md` constraint 7. The
+virtual VFD is **built to CiA 402** (`Prototypes/BlockSignal/Cia402.h`), the controller is a machine
+(`PlcUnit.h`), and Tier 3's interface exists (`ShowBus.h`).
+
+**Tier 2's language is decided and is NOT the Structured Text described below** — see the box at the
+head of that section. Tier 3's language remains open and is answerable once cues exist. Everything
+else here is still design: read those parts as how the layer *should* be shaped, not as a
+description of the system.
 
 **Provenance.** Drafted in a Cowork session on 2026-08-03, in answer to a question about how real
 coaster controls, park lighting and effects work, and what scripting language this project might
@@ -82,9 +89,9 @@ through explicit, non-safety-critical channels. A standard tag may *request* som
 │                         lights, effects, audio, atmospherics             │
 │                         sandboxed · untrusted · may fail freely          │
 └───────────────┬──────────────────────────────────────────▲───────────────┘
-                │ requests                        permissive │ (hard, one-way)
+                │ NO REQUESTS — show only READS       permissive │ (hazardous only)
 ┌───────────────▼──────────────────────────────────────────┴───────────────┐
-│ TIER 2  CONTROL         IEC 61131-3 Structured Text · scan cycle         │
+│ TIER 2  CONTROL         expressions over a process image · scan cycle    │
 │                         dispatch, block sequencing, VFD commands         │
 │                         deterministic · budgeted · faults, never stalls  │
 └───────────────┬──────────────────────────────────────────▲───────────────┘
@@ -101,7 +108,7 @@ anything.
 
 | | Tier 1 Safety | Tier 2 Control | Tier 3 Show |
 |---|---|---|---|
-| Language | C++ | ST subset | cue data + Luau |
+| Language | C++ | expression subset of ST | cue data, language TBD |
 | Authored by | the project | the track author | the track author |
 | Trust | trusted | untrusted | untrusted |
 | Determinism | required | required | not required |
@@ -147,6 +154,48 @@ The one hard invariant worth asserting in tests: **a coaster must have at least 
 it runs trains.** Three trains needs four blocks. That is the functional core of the whole pillar.
 
 ## Tier 2 — Control: Structured Text on a scan cycle
+
+> ### DECIDED 2026-08-06: Tier 2 gets EXPRESSIONS, not the language below.
+>
+> Everything in this section stays as the design of record for the day Tier 2 needs a language. That
+> day is not today, and the reason is worth keeping rather than rediscovering.
+>
+> **What Tier 2 has to express is already expressed** — in C++, by `FRideSignals`, `ServeHolds`,
+> `FStationProcess` and `FTrackDrives`. That is the generated default program, and every preset runs
+> on it with no scripting at all. So the question was never "how do we express ride policy", it was
+> **"what does an author need that the default cannot do"**.
+>
+> The answer separates cleanly. *"Release when block 6 is clear and fewer than three trains are
+> running"* is a **condition**, and an expression evaluator handles it in about 900 lines. *"On
+> dispatch, run forward 4 s, then reverse, then park facing backwards"* is a **state machine**, and
+> that needs statements, persistent variables and timers — a language.
+>
+> **Nothing built or planned needs the second.** Shuttles are not modelled, turntables are not, and
+> turnouts are parked as a far-future stretch goal by the developer's own decision. The C++ default
+> has absorbed every ride type attempted, including the three-position small-batch platform, which
+> turned out to be mostly *emergent* rather than written.
+>
+> **What is being built instead, and why none of it is wasted:**
+>
+> - A **strict ST subset** — `AND`/`OR`/`NOT`, `=` and `<>`, `SEL()` rather than a ternary. Right
+>   spelling from day one, or it is not a subset and the forward-compatibility argument is empty.
+> - The **explicit process image** these read against, which is the larger half of the work and which
+>   Tier 2 needs whichever language wins.
+> - An **override slot** shape matching what the board already specifies: a per-block override, never
+>   a mode.
+>
+> **The safety rule is structural.** An override may only make a permissive MORE restrictive — it is
+> an extra `AND` term on the existing chain, so there is no syntax for loosening one. That is
+> constraint 7 cashed out in code rather than in review.
+>
+> **The trigger for revisiting this** is concrete: the first ride whose policy the default cannot
+> express and a condition cannot reach. The risk is bounded at one week of work that ST would have
+> subsumed.
+>
+> There is also a legitimate non-engineering reason to build ST anyway — *"you program your coaster
+> in real PLC code"* is a differentiator nothing else in this market has. That would be a positioning
+> decision, and it should be taken as one rather than arrived at by assuming the technical case
+> demanded it.
 
 The ride's own logic — dispatch sequencing, block advance, the ride-cycle state machine, lift and
 launch commands, dwell timers, station choreography. Authored in a **subset of IEC 61131-3
