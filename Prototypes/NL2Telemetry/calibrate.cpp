@@ -29,6 +29,7 @@
 // A lift implies a large negative one and a brake a large positive one, so both
 // exclude themselves.
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -224,13 +225,85 @@ FFit Fit(const std::vector<FSample>& S, double TrainLength, double MinSpeed, dou
     }
 
     R.Samples = static_cast<int>(Kept.size());
-    const double Det = Sxx * Syy - Sxy * Sxy;
+    double Det = Sxx * Syy - Sxy * Sxy;
     if (R.Samples < 10 || std::fabs(Det) < 1e-12)
     {
         return R;
     }
     R.RollingResistance = (Sxa * Syy - Sya * Sxy) / Det;
     R.DragK = (Sxx * Sya - Sxy * Sxa) / Det;
+
+    // ===================== REJECT THE BRAKE RAMP =====================
+    //
+    // MaxResist correctly throws out a brake at 8 m/s^2. It does NOT throw out
+    // the ramp INTO one, which climbs through 0.4, 0.6, 1.2 on its way there and
+    // is under the threshold for every one of those. Those samples sit at the LOW
+    // end of the v^2 range carrying resistance several times the coast's, so they
+    // lift the intercept and flatten the slope: measured on a 142 km/h run that
+    // braked at the end, Crr came out 0.0277 against a true 0.02603 and DragK
+    // 0.000086 against 0.000100. The pinned-DragK fit went NEGATIVE, which is the
+    // symptom that should have given it away.
+    //
+    // A tighter fixed threshold is not the fix — it is the same fragility with a
+    // different number in it, and the right ceiling depends on how fast the ride
+    // is. So the data sets its own: fit, measure the spread of the residuals, and
+    // drop whatever sits far outside it. A brake ramp is a huge outlier against a
+    // coast that fits to 0.04%; ordinary coasting noise is not.
+    //
+    // MEDIAN ABSOLUTE DEVIATION rather than a standard deviation, because the
+    // contamination being removed is exactly what would inflate a standard
+    // deviation and hide itself.
+    for (int Pass = 0; Pass < 3; ++Pass)
+    {
+        std::vector<double> Res;
+        Res.reserve(Kept.size());
+        for (std::size_t i : Kept)
+        {
+            const double Ds = S[i].ArcS - S[i - 1].ArcS;
+            const double VMean = 0.5 * (S[i - 1].Speed + S[i].Speed);
+            const double AResist =
+                -(0.5 * (S[i].Speed * S[i].Speed - S[i - 1].Speed * S[i - 1].Speed)
+                  + G * (MeanZ[i] - MeanZ[i - 1])) / Ds;
+            const double X = 0.5 * (S[i - 1].GMag + S[i].GMag) * G;
+            Res.push_back(std::fabs(AResist
+                - (R.RollingResistance * X + R.DragK * VMean * VMean)));
+        }
+
+        std::vector<double> Sorted = Res;
+        std::nth_element(Sorted.begin(), Sorted.begin() + Sorted.size() / 2, Sorted.end());
+        const double Median = Sorted[Sorted.size() / 2];
+        // 6 median deviations. Generous on purpose: this is here to remove a
+        // brake, not to polish a fit, and a trim that reshapes clean data would
+        // be manufacturing the answer rather than finding it.
+        const double Limit = std::max(6.0 * Median, 1e-6);
+
+        std::vector<std::size_t> Next;
+        Sxx = Sxy = Syy = Sxa = Sya = 0.0;
+        for (std::size_t k = 0; k < Kept.size(); ++k)
+        {
+            if (Res[k] > Limit) { continue; }
+            const std::size_t i = Kept[k];
+            const double Ds = S[i].ArcS - S[i - 1].ArcS;
+            const double VMean = 0.5 * (S[i - 1].Speed + S[i].Speed);
+            const double AResist =
+                -(0.5 * (S[i].Speed * S[i].Speed - S[i - 1].Speed * S[i - 1].Speed)
+                  + G * (MeanZ[i] - MeanZ[i - 1])) / Ds;
+            const double X = 0.5 * (S[i - 1].GMag + S[i].GMag) * G;
+            const double Y = VMean * VMean;
+            Sxx += X * X; Sxy += X * Y; Syy += Y * Y;
+            Sxa += X * AResist; Sya += Y * AResist;
+            Next.push_back(i);
+        }
+        if (Next.size() == Kept.size() || Next.size() < 10) { break; }
+
+        const double D2 = Sxx * Syy - Sxy * Sxy;
+        if (std::fabs(D2) < 1e-12) { break; }
+        Kept.swap(Next);
+        R.Samples = static_cast<int>(Kept.size());
+        R.RollingResistance = (Sxa * Syy - Sya * Sxy) / D2;
+        R.DragK = (Sxx * Sya - Sxy * Sxa) / D2;
+        Det = D2;
+    }
 
     // Is the split between the two even meaningful on this recording?
     R.PredictorCorrelation = Sxy / std::sqrt(Sxx * Syy);
@@ -348,24 +421,62 @@ int main(int argc, char** argv)
     }
 
     const FFit Ref = Fit(S, 0.0, 5.0, 2.0);
-    std::printf("\ncorr(x,y) is the correlation between the two predictors, N*g and v^2.\n");
-    std::printf("Near 1 means they move together across this recording, so no fit can say\n");
-    std::printf("which of them the energy loss belongs to and the split between them is\n");
-    std::printf("arbitrary. That is what the sign flips in the DragK column are: noise\n");
-    std::printf("along a direction the data does not constrain, not a measurement.\n");
-    std::printf("\nThis ride tops out at %.1f km/h over %.0f m. Drag scales with v^2, so at\n",
-                TopSpeed * 3.6, S.back().ArcS);
-    std::printf("these speeds it is a small fraction of the loss and there is very little\n");
-    std::printf("for it to be measured against. Separating the two needs a FASTER ride.\n");
 
-    std::printf("\nWhat this recording CAN support: pin DragK at its derived 0.00045 and fit\n");
-    std::printf("rolling resistance alone, which is one parameter against well-conditioned\n");
-    std::printf("data.\n");
-    std::printf("    RollingResistance = %.5f   (shipped default 0.006)\n",
-                Ref.CrrWithDragPinned);
+    // THE VERDICT IS DERIVED, NOT PRINTED FROM A SCRIPT. This used to end with a
+    // fixed paragraph saying the split was arbitrary and a faster ride was
+    // needed — true of the 44.5 km/h recording it was written against, and a flat
+    // lie the moment a 142 km/h one arrived and separated them cleanly. A tool
+    // that states its conclusion regardless of its input is worse than one that
+    // states nothing.
+    //
+    // The test that actually distinguishes the two cases is NOT corr(x,y): on a
+    // dead-flat coast N*g is very nearly constant, so its correlation with
+    // anything is numerically meaningless and reads near 1 whatever the data
+    // says. What matters is how much of the loss DRAG accounts for, and whether
+    // that share VARIES across the recording — a term stuck at 5% everywhere
+    // cannot be told from the constant beside it, and one running 38% down to 22%
+    // plainly can.
+    const double VTop = TopSpeed;
+    const double VLo = std::max(5.0, 0.4 * TopSpeed);
+    const double DragTop = Ref.DragK * VTop * VTop;
+    const double DragLo = Ref.DragK * VLo * VLo;
+    const double LossTop = Ref.RollingResistance * G + DragTop;
+    const double LossLo = Ref.RollingResistance * G + DragLo;
+    const double ShareTop = LossTop > 0.0 ? DragTop / LossTop : 0.0;
+    const double ShareLo = LossLo > 0.0 ? DragLo / LossLo : 0.0;
+    const bool bSeparable = ShareTop > 0.15 && (ShareTop - ShareLo) > 0.05;
+
+    std::printf("\nSeparability. Drag accounts for %.0f%% of the loss at %.0f km/h and %.0f%%\n"
+                "at %.0f km/h.\n",
+                ShareTop * 100.0, VTop * 3.6, ShareLo * 100.0, VLo * 3.6);
+
+    if (bSeparable)
+    {
+        std::printf("That share is both LARGE and VARYING across this recording, so the fit\n");
+        std::printf("can tell the two apart. Corroborate it two ways before believing it:\n");
+        std::printf("DragK should hold steady down the train-length column (it has nowhere\n");
+        std::printf("else to go if it is real), and fitting the fast and slow halves of the\n");
+        std::printf("coast separately should give the same pair.\n");
+        std::printf("    RollingResistance = %.5f\n", Ref.RollingResistance);
+        std::printf("    DragK             = %.6f\n", Ref.DragK);
+    }
+    else
+    {
+        std::printf("That is too small a share, too flat across the run, for any fit to say\n");
+        std::printf("which coefficient the loss belongs to — the split between them is a free\n");
+        std::printf("parameter here, and the sign flips down the DragK column are noise along\n");
+        std::printf("a direction the data does not constrain. Separating them needs a FASTER\n");
+        std::printf("ride; drag scales with v^2 and there is very little of it here.\n");
+        std::printf("\nWhat this recording CAN support: pin DragK and fit rolling resistance\n");
+        std::printf("alone, which is one parameter against well-conditioned data.\n");
+        std::printf("    RollingResistance = %.5f   (DragK pinned at 0.00045)\n",
+                    Ref.CrrWithDragPinned);
+    }
 
     std::printf("\nCoasting is selected by the data: an interval counts when the resistance\n");
     std::printf("it implies is positive and under 2 m/s^2, so lifts and brakes exclude\n");
-    std::printf("themselves rather than being detected geometrically.\n");
+    std::printf("themselves rather than being detected geometrically. THE RAMP INTO a brake\n");
+    std::printf("does not — it climbs through that window on its way up — so a robust trim\n");
+    std::printf("drops whatever sits more than six median deviations off the fit.\n");
     return 0;
 }

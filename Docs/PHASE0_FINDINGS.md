@@ -149,6 +149,28 @@ The defaults run this ride consistently *fast* — 11.0 m/s against NL2's 10.6 a
 >
 > **What this recording does support** is one parameter, not two. Pin `DragK` at its derived 0.00045 and rolling resistance alone is well conditioned: **`RollingResistance` = 0.02204**, against a shipped default of 0.006. That is high for steel-on-steel, which most likely says something about this particular NL2 track's own friction settings rather than about steel — one more reason a second, faster reference ride is the next real step. **The defaults remain unchanged.**
 
+> ---
+>
+> **RESOLVED 2026-08-06. The fast ride was recorded and both coefficients are now measured.** A purpose-built dead-flat straight, launched to **142.5 km/h** and coasting 1350 m — the coast running 142.3 → 97.2 km/h before the map ran out and the brakes went on.
+>
+> ```
+> clean coast: 3426 samples, 142.3 -> 97.2 km/h
+>   Crr    = 0.02603      (the 621 m / 30 km/h run gave 0.02602)
+>   DragK  = 0.000100     (derived value 0.00045)
+>   resid  = 0.00014 m/s^2  on decels of 0.328-0.412   -> a 0.04% fit
+>   drag share: 38% at the top, 22% at the bottom
+> ```
+>
+> **`DragK` = 0.000100, and the derived 0.00045 was 4.5× too high.** That derivation assumed a loaded 7-car steel train at CdA ≈ 5.5 m²; either NL2 models a far slicker train or the CdA was generous. The data is not ambiguous about it.
+>
+> **Three things make it a measurement rather than a fit.** Rolling resistance **replicates to five significant figures** across two independent recordings at 30 and 142 km/h, on different track of different length — that is a constant appearing twice, not a fit agreeing with itself. The **upper and lower halves of the coast, fitted separately, give identical coefficients**; if drag were being absorbed into rolling resistance the halves would trade off against each other. And drag runs **38% of the loss down to 22%**, where the old recording had it at ~10% and falling to nothing — a term that varies that much is a term the fit can see.
+>
+> **`corr(x,y)` is NOT the diagnostic here, and reading it as one is a trap.** It still shows 0.975 on this recording and the condition number is worse, not better — because on a dead-flat coast `N·g` is very nearly *constant*, so its correlation with anything is numerically meaningless. What settles separability is the drag *share* and whether it varies. `calibrate.cpp` now derives that verdict instead of printing a fixed paragraph, which it had been doing: it told this recording the split was arbitrary and a faster ride was needed, having been written against the 44.5 km/h one.
+>
+> **The calibrator was wrong first time and would have been believed.** Its coast filter admits any interval implying under 2 m/s², which correctly rejects an 8 m/s² brake and does **not** reject the *ramp into one* — 0.4, 0.6, 1.2 all pass on the way up. Those samples sit at the low end of the `v²` range carrying several times the coast's resistance, so they lift the intercept and flatten the slope: `Crr` 0.0277 against a true 0.02603, `DragK` 0.000086 against 0.000100, residual 0.0509 against 0.00014, and the pinned fit went **negative** — which is the symptom that should have given it away. Fixed with a robust trim on median absolute deviation, because a tighter fixed threshold is the same fragility with a different number in it.
+>
+> **The defaults are still unchanged**, and changing them is its own piece of work: `DragK` 0.00045 → 0.000100 and `RollingResistance` 0.024 → 0.026 move every speed and G figure in the project, including everything `REFERENCE_LAYOUT.md` publishes.
+
 **Test suites are discriminating.** This was checked by mutation rather than assumed: deliberately broken variants of the headers were generated and run against the suites. The first pass found four surviving mutants in the spline suite — including one that put the loop apex at z = **-16** instead of +16 while leaving *every* G reading numerically identical, because the frame flipped in step with the curvature. An entirely inverted track would have reported perfectly self-consistent G. Six asserts closed that gap, and all six previously-surviving mutants are now killed.
 
 ## What was disproved
