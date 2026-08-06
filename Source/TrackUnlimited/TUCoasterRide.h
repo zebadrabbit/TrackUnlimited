@@ -513,6 +513,8 @@ private:
 
 	double SimAccumulator = 0.0;
 	int32 ScanOverruns = 0;
+	// The first tick after a load carries the load itself. Not a missed deadline.
+	bool bScanStarted = false;
 
 	// Reads every platform's instruments and runs its crew. Once per frame, at the
 	// top of the scan with the other inputs.

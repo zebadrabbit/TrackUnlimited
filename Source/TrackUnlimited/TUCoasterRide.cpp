@@ -2192,6 +2192,7 @@ namespace TUWatch
 	constexpr std::size_t Platforms = 1000;
 	constexpr std::size_t Drives    = 2000;
 	constexpr std::size_t Console   = 3000;
+	constexpr std::size_t Motion    = 4000;
 }
 
 // Which platform, if any, this train is standing at. A platform's bank is the
@@ -2333,6 +2334,32 @@ void ATUCoasterRide::LogTransitions()
 			LogEvent(FString::Printf(TEXT("drive Z%d  %s -> %s  (cmd %.1f out %.1f)"),
 				static_cast<int32>(z), Names[StateWatch.Previous()], Names[Code],
 				R.Commanded, R.Output), Code == 3);
+		}
+	}
+
+	// ---- TRAIN MOTION, which is what settles a throughput argument.
+	//
+	// A block releases when the REAR clears it, not when the train stops — that is
+	// what OCCUPIED -> BUFFER already means. But without this you cannot tell from
+	// a log whether the train ahead was still trucking to its mark while the next
+	// one was released, or had already parked, and those are a ride that overlaps
+	// its moves and a ride that queues them.
+	//
+	// CRAWLING is its own state rather than a slow RUNNING because it is a
+	// different activity: the pad has stopped the train and the drive tyres are
+	// conveying it to its stop mark, which on the mid-course brake is 67 m of
+	// travel at walking pace. That stretch is exactly the window a busy operation
+	// wants to overlap into.
+	for (int32 t = 0; t < Trains.Num(); ++t)
+	{
+		const double V = FMath::Abs(Trains[t]->GetSpeed());
+		const int Code = V < 0.05 ? 0 : (V < 2.5 ? 1 : 2);
+		if (StateWatch.ChangedFrom(TUWatch::Motion + static_cast<std::size_t>(t), Code))
+		{
+			static const TCHAR* Names[] = {TEXT("STOPPED"), TEXT("CRAWLING"), TEXT("RUNNING")};
+			LogEvent(FString::Printf(TEXT("train %d  %s -> %s  at %.0f m"), t,
+				Names[StateWatch.Previous()], Names[Code],
+				Trains[t]->GetDistance()), false);
 		}
 	}
 
@@ -3143,6 +3170,22 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 	// because they come from those; it was only the thing you actually played that
 	// varied.
 	const double Step = 1.0 / static_cast<double>(FMath::Max(1, SimHz));
+
+	// THE FIRST FRAME AFTER A LOAD IS NOT AN OVERRUN. It carries the whole level
+	// load — hundreds of milliseconds of it — and reporting that as a missed scan
+	// deadline is the panel's first lie of the session: nothing was late, because
+	// nothing had started. A controller powers up and begins scanning; it does not
+	// log the time before power-on as lost.
+	//
+	// Swallowed rather than clamped, because there is no correct amount of that
+	// frame to simulate. The ride begins now.
+	if (!bScanStarted)
+	{
+		bScanStarted = true;
+		SimAccumulator = 0.0;
+		return;
+	}
+
 	SimAccumulator += DeltaSeconds;
 
 	int32 Ran = 0;
