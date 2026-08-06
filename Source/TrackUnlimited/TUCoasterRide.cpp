@@ -18,6 +18,20 @@
 // and mixed into LogTemp it would bury everything else.
 DEFINE_LOG_CATEGORY(LogTUEvents);
 
+// The authored side -> the model's side. One place, so the two enums cannot
+// drift into disagreeing about what Left means.
+static EWalkway ToWalkwaySide(ETUWalkway In)
+{
+	switch (In)
+	{
+	case ETUWalkway::Left:  return EWalkway::Left;
+	case ETUWalkway::Right: return EWalkway::Right;
+	case ETUWalkway::Both:  return EWalkway::Both;
+	default:                return EWalkway::None;
+	}
+}
+
+
 namespace
 {
 	// The prototypes work in metres; Unreal works in centimetres.
@@ -807,6 +821,9 @@ void ATUCoasterRide::RebuildFromSegments()
 		TArray<TPair<double, double>> CatchSpans;
 		bool bCatchOpen = false;
 		double CatchStartS = 0.0;
+		ETUWalkway WalkOpen = ETUWalkway::None;
+		double WalkStartS = 0.0;
+		Walkways.clear();
 
 		for (int32 i = 0; i < Segments.Num(); ++i)
 		{
@@ -824,6 +841,25 @@ void ATUCoasterRide::RebuildFromSegments()
 				}
 				bCatchOpen = Segments[i].bAntiRollback;
 				CatchStartS = AccS;
+			}
+
+			// Catwalks, derived exactly as the catches are and for the same
+			// reason: a property of TRACK, not a device. A run ends where the
+			// SIDE changes, so a left-hand walk becoming a right-hand one is two
+			// spans — the evacuation check merges them again, but the authored
+			// distinction survives to be drawn and reported.
+			if (Segments[i].Walkway != WalkOpen)
+			{
+				if (WalkOpen != ETUWalkway::None)
+				{
+					FWalkwaySpan Span;
+					Span.StartS = WalkStartS;
+					Span.EndS = AccS;
+					Span.Side = ToWalkwaySide(WalkOpen);
+					Walkways.push_back(Span);
+				}
+				WalkOpen = Segments[i].Walkway;
+				WalkStartS = AccS;
 			}
 			// A RUN ENDS WHERE THE DEVICE CHANGES, and the device is its kind AND
 			// its speed. The speed half used to be missing: a run was defined by
@@ -864,6 +900,14 @@ void ATUCoasterRide::RebuildFromSegments()
 		if (bCatchOpen)
 		{
 			CatchSpans.Add(TPair<double, double>(CatchStartS, AccS));
+		}
+		if (WalkOpen != ETUWalkway::None)
+		{
+			FWalkwaySpan Span;
+			Span.StartS = WalkStartS;
+			Span.EndS = AccS;
+			Span.Side = ToWalkwaySide(WalkOpen);
+			Walkways.push_back(Span);
 		}
 
 		// AN INVENTORY OF WHAT IS ACTUALLY ON THIS TRACK. The devices are the part

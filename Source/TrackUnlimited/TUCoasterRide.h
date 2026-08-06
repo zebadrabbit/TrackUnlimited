@@ -17,6 +17,7 @@
 #include "TrackSpline/TrackProfile.h"
 #include "BlockSignal/RideSignals.h"
 #include "BlockSignal/SignalWatch.h"
+#include "BlockSignal/Evacuation.h"
 #include "BlockSignal/SimDigest.h"
 #include "BlockSignal/StationProcess.h"
 #include "BlockSignal/TrackDrives.h"
@@ -479,6 +480,13 @@ private:
 
 	void SampleRestraints();
 	void DrawRestraints() const;
+
+	/**
+	 * Evacuation catwalks, derived from the segment list exactly as the
+	 * anti-rollback catches are — a property of TRACK rather than a device.
+	 * See ETUWalkway and Prototypes/BlockSignal/Evacuation.h.
+	 */
+	std::vector<FWalkwaySpan> Walkways;
 
 	/** Where the block boundaries fall, in world space. Only changes on a rebuild. */
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Signalling")

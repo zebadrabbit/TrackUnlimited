@@ -161,6 +161,21 @@ enum class ETUPresetLayout : uint8
 	SmallBatch UMETA(DisplayName = "Small batch (unload + 3 loading positions)"),
 };
 
+// Which side of the track an evacuation catwalk runs down.
+//
+// APPENDED-SAFE by construction: this is a new enum rather than an addition to
+// an existing one, so nothing already serialised into a level can be renumbered
+// by it. If values are ever added, append them — `ETUSegmentZone` is the
+// cautionary tale.
+UENUM(BlueprintType)
+enum class ETUWalkway : uint8
+{
+	None UMETA(DisplayName = "None"),
+	Left UMETA(DisplayName = "Left side"),
+	Right UMETA(DisplayName = "Right side"),
+	Both UMETA(DisplayName = "Both sides"),
+};
+
 // Who is looking at the control panel.
 //
 // NOT a difficulty setting, and not the same UI with fewer buttons. It is the
@@ -331,6 +346,37 @@ struct FTUTrackSegment
 	UPROPERTY(EditAnywhere, Category = "Zone", meta = (
 		EditCondition = "Zone != ETUSegmentZone::None", EditConditionHides))
 	bool bStartsNewDevice = false;
+
+	/**
+	 * A solid decked evacuation catwalk with handrails, alongside this segment.
+	 *
+	 * DELIBERATELY NOT A ZONE, for exactly the reasons bAntiRollback is not one.
+	 * A zone is a CONTROL device: it has a speed, an authority, and something
+	 * commanding it every scan. A catwalk has none of those. It cannot release a
+	 * train, so it is no more a place to park one than a trim brake is, and it is
+	 * not a block boundary either. And it OVERLAPS zones freely — a launch with
+	 * walkways down both sides is both at once, which is the usual case.
+	 *
+	 * Fittable to almost any segment, and in practice clustered where a train is
+	 * expected to stop and where staff walk anyway: brake runs, launches, shuttle
+	 * sections, lifts.
+	 *
+	 * SIDE MATTERS. A train is boarded and evacuated from a specific side, so a
+	 * catwalk on the far side of the track from the restraints is a walkway for
+	 * staff rather than an evacuation route. Reachability treats abutting spans of
+	 * different sides as one continuous route, because a person can step across at
+	 * the join and requiring one side end to end would fail almost every real
+	 * layout — the side is reported, not required to match.
+	 *
+	 * What it buys: after an emergency stop, `CheckEvacuation` can ask whether
+	 * every train is somewhere people can walk to. Nothing could ask that before —
+	 * "every train came to rest at a holding device" is a statement about
+	 * signalling and says nothing about getting the riders out on foot.
+	 *
+	 * Drawing it is Phase 4. The data and the check are not blocked on that.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Zone")
+	ETUWalkway Walkway = ETUWalkway::None;
 };
 
 // Reflected editor struct -> the authored model the prototypes understand.
