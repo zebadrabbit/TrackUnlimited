@@ -16,12 +16,16 @@
 #include "TrainPhysics/RideProfile.h"
 #include "TrackSpline/TrackProfile.h"
 #include "BlockSignal/RideSignals.h"
+#include "BlockSignal/SignalWatch.h"
 #include "BlockSignal/StationProcess.h"
 #include "BlockSignal/TrackDrives.h"
 #include "BlockSignal/TrackSensors.h"
 #include "TUTrackSegment.h"
 
 #include "TUCoasterRide.generated.h"
+
+// The ride's event stream, so it can be filtered on its own.
+DECLARE_LOG_CATEGORY_EXTERN(LogTUEvents, Log, All);
 
 class UCameraComponent;
 class UInstancedStaticMeshComponent;
@@ -501,6 +505,28 @@ private:
 	float RideClock = 0.f;
 
 	void LogEvent(const FString& Text, bool bBad = true);
+
+	/**
+	 * EVERY STATE TRANSITION, WHICH IS THE OTHER HALF OF THE LOG.
+	 *
+	 * `LogEvent` above records the six things that go WRONG. That leaves the
+	 * ordinary question unanswerable — "did that lamp ever light?" — because
+	 * nothing routine is written down and a screenshot is the whole of the
+	 * evidence. This walks the same block, platform, drive and console lists the
+	 * panel walks and records what MOVED.
+	 *
+	 * Edge, not level: a log that wrote every point every scan would be thirty
+	 * lines a frame. The change detection and its seeding rule live in
+	 * FSignalWatch, where they are tested.
+	 *
+	 * Verbose by design and off by default — it is a diagnostic instrument, and
+	 * the panel's eight-line log is the thing you read while standing there.
+	 */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Signalling")
+	bool bLogStateTransitions = false;
+
+	FSignalWatch StateWatch;
+	void LogTransitions();
 
 	// Operator -> maintenance -> off, on one key. Three states on the key that
 	// already showed the panel beats a second binding nobody remembers.

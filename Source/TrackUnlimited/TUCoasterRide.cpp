@@ -13,6 +13,11 @@
 #include "Engine/Font.h"
 #include "UObject/ConstructorHelpers.h"
 
+// The ride's own event stream. Its own category so it can be filtered on its
+// own — with transitions on it is the loudest thing in the log by a wide margin,
+// and mixed into LogTemp it would bury everything else.
+DEFINE_LOG_CATEGORY(LogTUEvents);
+
 namespace
 {
 	// The prototypes work in metres; Unreal works in centimetres.
@@ -620,6 +625,11 @@ TArray<FTUTrackSegment> ATUCoasterRide::ReferenceLayout()
 
 void ATUCoasterRide::RebuildFromSegments()
 {
+	// A REBUILD IS NOT A TRANSITION. After this, channel 4 may be a different
+	// block from the channel 4 being watched, so every stale baseline is a
+	// transition that never happened — on most channels at once. Reseed.
+	StateWatch.Forget();
+
 	FTrackDocument Doc;
 	Doc.HeartlineHeight = 1.1;
 	Doc.Segments.reserve(static_cast<std::size_t>(Segments.Num()));
@@ -2161,13 +2171,127 @@ void ATUCoasterRide::PressEmergencyStop()
 	}
 }
 
+// Channel ranges. Allocated by hand and deliberately far apart: a collision here
+// is silent and reads as a phantom transition on an unrelated signal.
+namespace TUWatch
+{
+	constexpr std::size_t Blocks    = 0;
+	constexpr std::size_t Platforms = 1000;
+	constexpr std::size_t Drives    = 2000;
+	constexpr std::size_t Console   = 3000;
+}
+
+void ATUCoasterRide::LogTransitions()
+{
+	if (!bLogStateTransitions || !Signals || !Drives)
+	{
+		return;
+	}
+
+	// ---- Blocks. Clear / occupied / buffer, per block.
+	for (std::size_t b = 0; b < Signals->NumBlocks(); ++b)
+	{
+		const EBlockState S = Signals->GetState(b);
+		const int Code = S == EBlockState::Occupied ? 1 : (S == EBlockState::Buffer ? 2 : 0);
+		if (StateWatch.ChangedFrom(TUWatch::Blocks + b, Code))
+		{
+			static const TCHAR* Names[] = {TEXT("CLEAR"), TEXT("OCCUPIED"), TEXT("BUFFER")};
+			LogEvent(FString::Printf(TEXT("block %d  %s -> %s"), static_cast<int32>(b),
+				Names[StateWatch.Previous()], Names[Code]), false);
+		}
+	}
+
+	// ---- Platforms. The sequence, which is what a dwell argument is settled by.
+	for (int32 i = 0; i < Platforms.Num(); ++i)
+	{
+		const int Code = static_cast<int>(Platforms[i].Process.GetPhase());
+		if (StateWatch.ChangedFrom(TUWatch::Platforms + static_cast<std::size_t>(i), Code))
+		{
+			LogEvent(FString::Printf(TEXT("Z%d  %s -> %s"), Platforms[i].Zone,
+				PhaseName(static_cast<EStationPhase>(StateWatch.Previous())),
+				PhaseName(static_cast<EStationPhase>(Code))), false);
+		}
+	}
+
+	// ---- Drives. The four states the operator view shows, so the log and the
+	// panel cannot tell different stories.
+	for (std::size_t z = 0; z < Drives->Num(); ++z)
+	{
+		const FDriveReading& R = Drives->Read(z);
+		int Code = 0;                                            // STOPPED
+		if (Drives->IsFaulted(z))                { Code = 3; }   // FAULT
+		else if (!Drives->IsReady(z))            { Code = 2; }   // RAMPING
+		else if (FMath::Abs(R.Output) > 0.01)    { Code = 1; }   // RUNNING
+
+		if (StateWatch.ChangedFrom(TUWatch::Drives + z, Code))
+		{
+			static const TCHAR* Names[] = {TEXT("STOPPED"), TEXT("RUNNING"),
+										   TEXT("RAMPING"), TEXT("FAULT")};
+			LogEvent(FString::Printf(TEXT("drive Z%d  %s -> %s  (cmd %.1f out %.1f)"),
+				static_cast<int32>(z), Names[StateWatch.Previous()], Names[Code],
+				R.Commanded, R.Output), Code == 3);
+		}
+	}
+
+	// ---- THE CONSOLE CONTACTS, which are the ones a still frame cannot answer.
+	//
+	// "Is the harness lamp dark because the crew has already released, or because
+	// it never lit?" is not a question a screenshot can settle, and it is exactly
+	// the question worth asking about a securing sequence. Logged per platform
+	// rather than for the one console the panel picks, or the answer depends on
+	// which platform happened to be selected when you looked.
+	for (int32 i = 0; i < Platforms.Num(); ++i)
+	{
+		const FTUPlatform& P = Platforms[i];
+		const std::size_t Base = TUWatch::Console + static_cast<std::size_t>(i) * 8;
+
+		// Commanded and confirmed are DIFFERENT FACTS, and the gap between them is
+		// what a walk-round exists to find. Both are logged.
+		if (StateWatch.ChangedFrom(Base + 0, P.Crew.Restraints.IsCommandedClosed() ? 1 : 0))
+		{
+			LogEvent(FString::Printf(TEXT("Z%d  restraints %s"), P.Zone,
+				P.Crew.Restraints.IsCommandedClosed() ? TEXT("COMMANDED CLOSED")
+													  : TEXT("released")), false);
+		}
+		if (StateWatch.ChangedFrom(Base + 1, P.Crew.Restraints.GroupsConfirmed()))
+		{
+			LogEvent(FString::Printf(TEXT("Z%d  harness %d/%d locked"), P.Zone,
+				P.Crew.Restraints.GroupsConfirmed(), P.Crew.Restraints.Groups), false);
+		}
+		if (StateWatch.ChangedFrom(Base + 2, P.Crew.Gates.IsClosedAndLocked() ? 1 : 0))
+		{
+			LogEvent(FString::Printf(TEXT("Z%d  gates %s"), P.Zone,
+				P.Crew.Gates.IsClosedAndLocked() ? TEXT("SHUT") : TEXT("open")), false);
+		}
+		if (StateWatch.ChangedFrom(Base + 3, P.Process.IsReadyToDispatch() ? 1 : 0))
+		{
+			LogEvent(FString::Printf(TEXT("Z%d  dispatch permission %s"), P.Zone,
+				P.Process.IsReadyToDispatch() ? TEXT("GRANTED") : TEXT("withdrawn")), false);
+		}
+	}
+}
+
 void ATUCoasterRide::LogEvent(const FString& Text, bool bBad)
 {
 	// Newest first, capped. Oldest falls off the end rather than the ring wrapping
 	// in place, because the panel wants "the last few" and a wrapped array has to
 	// be unwrapped to give it.
 	EventLog.Insert(FTURideEvent{RideClock, Text, bBad}, 0);
-	const int32 Keep = 8;
+	// MIRRORED TO THE ENGINE LOG, WHICH IS WHERE IT PERSISTS. The in-memory ring
+	// is what the panel reads while you are standing there; the file is what you
+	// read afterwards, and "afterwards" is when every interesting question gets
+	// asked. UE stamps it with a wall clock and a frame number for free, so the
+	// two timebases sit side by side: RideClock says where in the ride, the file
+	// says when in the session.
+	//
+	// Its own category rather than LogTemp, so `LogTUEvents` can be filtered to on
+	// its own — with transitions on, this is the loudest thing in the file.
+	UE_LOG(LogTUEvents, Log, TEXT("[%7.2f] %s"), RideClock, *Text);
+
+	// Deeper when transitions are being recorded: eight is the right size for a
+	// panel that shows four, and useless for a securing sequence that spends a
+	// dozen lines getting a train out of the station.
+	const int32 Keep = bLogStateTransitions ? 256 : 8;
 	if (EventLog.Num() > Keep)
 	{
 		EventLog.SetNum(Keep);
@@ -2750,6 +2874,12 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 	// before the stop something happened, and a relative figure survives a paused
 	// PIE session where a wall clock does not.
 	RideClock += DeltaSeconds;
+
+	// AFTER the scan and the physics below would be wrong: this reads the state
+	// the frame ENDED in, and reading it at the top means every transition is
+	// reported one frame after it happened. Placed here, against the same values
+	// the panel is about to draw, so the log and the screen cannot disagree.
+	LogTransitions();
 
 	// The Details-panel checkbox, so the stop can be tripped without playing. Read
 	// here rather than in a PostEditChangeProperty because it has to work in PIE.
