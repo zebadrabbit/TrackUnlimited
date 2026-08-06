@@ -3333,6 +3333,12 @@ void ATUCoasterRide::SimStep(double DeltaSeconds)
 	// meant a machine that renders slowly is a machine whose ride will not run,
 	// which is nonsense.
 	//
+	// AND THE BAR WAS THIS LOW: the 3 fps was the print-screen overlay taking
+	// priority while somebody took a SCREENSHOT of the panel. Observing the ride
+	// killed it, permanently, and any hitch would have done — an alt-tab, a
+	// shader compile, something else waking up. Not an edge case worth a note; a
+	// thing that would have happened to everybody, constantly.
+	//
 	// So the overrun stays what it was: a reported performance note. The PLC's
 	// watchdog stays for a genuine one, which in this model would be the scan's
 	// own logic exceeding its period — straight-line code, so never yet.
