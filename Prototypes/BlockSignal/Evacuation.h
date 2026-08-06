@@ -136,6 +136,47 @@ inline FEvacVerdict CheckEvacuation(const std::vector<FWalkwaySpan>& Walkways,
 
     for (const FStoppedTrain& T : Trains)
     {
+        // THE SEAM. On a circuit a train straddling the wrap has its REAR at a
+        // greater arc length than its FRONT — a real state, not a caller error,
+        // and the same trap the occupancy and sensor layers each hit in turn.
+        //
+        // Handled by UNROLLING rather than by splitting in two: the train
+        // becomes [Rear, Front + Total] and every walkway gets a copy shifted a
+        // lap forward. A gap that spans the seam is then one gap, which is what
+        // it physically is — split into halves it would be reported as two
+        // smaller ones, and the metric here is the WORST single stretch somebody
+        // has to be carried.
+        //
+        // Caught by wiring this to the real E-stop measurement: three trains
+        // stopped round a circuit, and the one over the seam reported no gap at
+        // all because Front < Rear made the walk terminate immediately.
+        const bool bWraps = T.FrontS < T.RearS;
+        const double Front = bWraps ? T.FrontS + TotalLength : T.FrontS;
+
+        std::vector<std::pair<double, double>> Reach = W;
+        if (bWraps)
+        {
+            const std::size_t N = W.size();
+            for (std::size_t i = 0; i < N; ++i)
+            {
+                Reach.push_back({W[i].first + TotalLength, W[i].second + TotalLength});
+            }
+            // Re-merge across the seam: a walkway ending at Total and one
+            // starting at 0 are continuous on a ring, and left unmerged the join
+            // reads as a zero-width hole.
+            std::sort(Reach.begin(), Reach.end());
+            std::vector<std::pair<double, double>> M;
+            for (const auto& S : Reach)
+            {
+                if (!M.empty() && S.first <= M.back().second + 1e-9)
+                {
+                    M.back().second = std::max(M.back().second, S.second);
+                }
+                else { M.push_back(S); }
+            }
+            Reach.swap(M);
+        }
+
         // Walk the train's span and find the longest stretch with nothing beside
         // it. A train half-served is still a train somebody has to be carried
         // out of, so the metric is the WORST gap rather than a percentage — a
@@ -144,21 +185,21 @@ inline FEvacVerdict CheckEvacuation(const std::vector<FWalkwaySpan>& Walkways,
         double Worst = 0.0;
         double WorstAt = T.RearS;
 
-        for (const auto& S : W)
+        for (const auto& S : Reach)
         {
             if (S.second <= Cursor) { continue; }
-            if (S.first >= T.FrontS) { break; }
+            if (S.first >= Front) { break; }
             if (S.first > Cursor)
             {
                 const double Gap = S.first - Cursor;
                 if (Gap > Worst) { Worst = Gap; WorstAt = Cursor; }
             }
             Cursor = std::max(Cursor, S.second);
-            if (Cursor >= T.FrontS) { break; }
+            if (Cursor >= Front) { break; }
         }
-        if (Cursor < T.FrontS)
+        if (Cursor < Front)
         {
-            const double Gap = T.FrontS - Cursor;
+            const double Gap = Front - Cursor;
             if (Gap > Worst) { Worst = Gap; WorstAt = Cursor; }
         }
 

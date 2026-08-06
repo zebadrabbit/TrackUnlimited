@@ -114,6 +114,46 @@ void TestASideOfNONEIsNotAWalkway()
     std::printf("  a span authored None is not a catwalk\n");
 }
 
+void TestATrainStraddlingTheSEAM()
+{
+    // THE TRAP THIS PROJECT KEEPS MEETING, one layer at a time. On a circuit a
+    // train over the wrap has its REAR at a greater arc length than its FRONT.
+    // That is a real state, not a caller error, and the first version of this
+    // walk terminated immediately on it and reported NO GAP — which is the worst
+    // possible answer, because it says a stranded train is fine.
+    //
+    // Found by wiring the check to the real E-stop measurement rather than by
+    // thinking about it.
+    const double Total = 600.0;
+
+    // Rear 590, front 10: the train spans the seam, and NOTHING is beside it.
+    {
+        const FEvacVerdict V = CheckEvacuation({W(100.0, 200.0)},
+                                               {T(590.0, 10.0)}, Total);
+        assert(!V.bEveryoneCanWalkOff);
+        assert(std::fabs(V.Findings[0].UnservedMetres - 20.0) < 1e-9);
+    }
+
+    // Now catwalk it, on both sides of the seam. A walkway ending at 600 and one
+    // starting at 0 are CONTINUOUS on a ring; left unmerged the join reads as a
+    // zero-width hole and the train comes back stranded by nothing.
+    {
+        const FEvacVerdict V = CheckEvacuation({W(560.0, 600.0), W(0.0, 40.0)},
+                                               {T(590.0, 10.0)}, Total);
+        assert(V.bEveryoneCanWalkOff);
+    }
+
+    // And a gap that STRADDLES the seam is one gap, not two. Split in halves it
+    // would report 10 m twice; it is 20 m of train somebody has to reach.
+    {
+        const FEvacVerdict V = CheckEvacuation({W(500.0, 590.0), W(10.0, 100.0)},
+                                               {T(585.0, 15.0)}, Total);
+        assert(!V.bEveryoneCanWalkOff);
+        assert(std::fabs(V.Findings[0].UnservedMetres - 20.0) < 1e-9);
+    }
+    std::printf("  a train over the seam is measured as one train, not two halves\n");
+}
+
 void TestWorstFirst()
 {
     // An author fixes the biggest hole, not the earliest.
@@ -137,6 +177,7 @@ int main()
     TestOverlappingAndUnsortedSpansAreHandled();
     TestNoWalkwaysAtAllFailsEveryTrain();
     TestASideOfNONEIsNotAWalkway();
+    TestATrainStraddlingTheSEAM();
     TestWorstFirst();
 
     std::printf("\ntest_evacuation: all assertions passed.\n");

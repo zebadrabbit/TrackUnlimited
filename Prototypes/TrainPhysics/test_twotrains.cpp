@@ -26,6 +26,7 @@
 // real fix is S -= TotalLength once FTrack can say it is a circuit.
 
 #include "../BlockSignal/RideSignals.h"
+#include "../BlockSignal/Evacuation.h"
 #include "../BlockSignal/SimDigest.h"
 #include "../BlockSignal/StationProcess.h"
 #include "../BlockSignal/TrackDrives.h"
@@ -1107,6 +1108,10 @@ struct FRunResult
     std::vector<double> FinalSpeed;     // per train, at the end of the run
     std::vector<double> FinalS;
     std::vector<int> FinalHoldZone;     // -1 if it did not stop at a holding device
+
+    // Where each train's whole body ended up, for the evacuation question.
+    std::vector<double> FinalRearS;
+    std::vector<double> FinalFrontS;
 };
 
 // The actor's tick, N trains, for Seconds of ride. One place, because the only
@@ -1296,6 +1301,10 @@ FRunResult RunTrains(std::size_t N, std::size_t Lookahead, double Seconds,
         R.FinalSpeed.push_back(Owned[t]->GetSpeed());
         R.FinalS.push_back(Owned[t]->GetDistance());
         R.FinalHoldZone.push_back(Owned[t]->FindHoldZoneAt(Owned[t]->GetDistance()));
+        // NOSE AND TAIL, not the centre, because evacuation is a question about
+        // the whole train: the back car is the one that gets forgotten.
+        R.FinalRearS.push_back(Owned[t]->GetRearS());
+        R.FinalFrontS.push_back(Owned[t]->GetFrontS());
     }
     return R;
 }
@@ -1938,6 +1947,74 @@ void TestAnEmergencyStopStopsTheRideNotTheTrains()
     //    collision would be worse than no E-stop.
     assert(R.Violations == 0);
     assert(!R.bShared);
+
+    // ---- 4. AND CAN ANYBODY GET TO THEM? --------------------------------
+    //
+    // The half this test could not ask until catwalks were modelled. Points 1-3
+    // are statements about SIGNALLING: everything stopped, at a device, without
+    // colliding. None of them says whether the riders can then be walked off,
+    // and "stopped safely" and "reachable on foot" are different properties of a
+    // layout that happen to be about the same event.
+    const FCircuit C = BuildCircuit(nullptr);
+    const FTrack ET = BuildTrack(C.Doc);
+    FTrainConfig ECfg;
+    ECfg.TrainLength = TrainLen;
+    FTrain ETrain(ET, ECfg);
+    BuildCircuit(&ETrain);          // gives it the zones, so hold-capability is askable
+    const double ETotal = ET.TotalLength();
+
+    std::vector<FStoppedTrain> Stopped;
+    for (std::size_t t = 0; t < R.FinalRearS.size(); ++t)
+    {
+        FStoppedTrain S;
+        S.RearS = R.FinalRearS[t];
+        S.FrontS = R.FinalFrontS[t];
+        S.Index = static_cast<int>(t);
+        Stopped.push_back(S);
+    }
+
+    // WITH NO WALKWAYS, EVERY TRAIN IS UNREACHABLE — and that is the honest
+    // reading of this layout as it ships. No preset carries catwalks, because
+    // nobody has surveyed one, and a check that quietly passed on a track with
+    // no evacuation provision at all would be worthless.
+    {
+        const FEvacVerdict V = CheckEvacuation({}, Stopped, ETotal);
+        assert(!V.bEveryoneCanWalkOff);
+        assert(V.Findings.size() == R.FinalRearS.size());
+    }
+
+    // NOW FIT ONE OVER EVERY HOLDING BLOCK. Not a suggestion the model made —
+    // a person places these — but the natural place to put them, and the claim
+    // worth measuring: does this layout's own set of holding devices, given
+    // catwalks, actually serve every train an E-stop can leave behind?
+    std::vector<FWalkwaySpan> Walks;
+    for (std::size_t b = 0; b < C.Boundaries.size(); ++b)
+    {
+        const double Start = C.Boundaries[b];
+        const double End = (b + 1 < C.Boundaries.size()) ? C.Boundaries[b + 1] : ETotal;
+        // Only blocks that can hold a train: a catwalk down a 696 m free run is
+        // not what any real ride does, and the question is whether the places
+        // trains ACTUALLY stop are served.
+        if (ETrain.FindHoldZoneAt(0.5 * (Start + End)) < 0) { continue; }
+        FWalkwaySpan W;
+        W.StartS = Start;
+        W.EndS = End;
+        W.Side = EWalkway::Both;
+        Walks.push_back(W);
+    }
+    assert(Walks.size() == 5);   // station, mid-course, outer, transfer, inner
+
+    const FEvacVerdict V = CheckEvacuation(Walks, Stopped, ETotal);
+    std::printf("  E-STOP EVACUATION: %zu holding blocks catwalked, %.0f m of route, "
+                "%s\n", Walks.size(), V.TrackCoverageM,
+                V.bEveryoneCanWalkOff ? "every train reachable"
+                                      : "SOMEBODY IS STRANDED");
+    for (const FEvacFinding& F : V.Findings)
+    {
+        std::printf("    train %d stranded: %.1f m unserved from S=%.0f\n",
+                    F.Train, F.UnservedMetres, F.WorstGapStartS);
+    }
+    assert(V.bEveryoneCanWalkOff);
 }
 
 void TestTheCircuitCarriesFourTrains()
