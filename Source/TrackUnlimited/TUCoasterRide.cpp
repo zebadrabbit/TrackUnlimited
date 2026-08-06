@@ -1760,7 +1760,18 @@ void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/
 		// retained while the drives wind down — and an operator watching a train
 		// still moving after they hit the button needs to know that is the stop
 		// working rather than the stop failing.
+		// WHY THE RIDE IS NOT RUNNING BELONGS ON THE OPERATOR'S VIEW, not only on
+		// the engineering page. The controller module was maintenance-only, so a
+		// faulted PLC showed as a ride that simply sat there — every drive
+		// stopped, every platform "train not in position", and nothing anywhere
+		// saying the controller had gone. That is precisely the complaint this
+		// project wrote into PlcUnit.h and then shipped.
 		FString StopText(TEXT("RUNNING"));
+		const char* PlcWhy = Plc.WhyNotRun();
+		if (!bStopped && PlcWhy != nullptr)
+		{
+			StopText = FString::Printf(TEXT("PLC — %s"), UTF8_TO_TCHAR(PlcWhy));
+		}
 		if (bStopped)
 		{
 			const bool bCat1 =
@@ -1771,7 +1782,7 @@ void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/
 				UTF8_TO_TCHAR(Drives->EmergencyStopReason()));
 		}
 		PanelLabel(Canvas, StopX + 5.f, Ty, StopText,
-			bStopped ? PanelRed : PanelGreen);
+			bStopped ? PanelRed : (PlcWhy != nullptr ? PanelAmber : PanelGreen));
 		Ty += Row + 6.f;
 	}
 
@@ -3305,8 +3316,28 @@ void ATUCoasterRide::SimStep(double DeltaSeconds)
 	// THE CONTROLLER SCANS, and its watchdog is the overrun the accumulator
 	// already detects one layer up. Reporting that as a note rather than a trip
 	// was the machine having a symptom with nowhere to put it.
+	// THE SCAN OVERRUN IS NOT A WATCHDOG EVENT, and wiring it to one was a
+	// mistake that killed the ride.
+	//
+	// Two different things were conflated. A real PLC watchdog means THE
+	// PROGRAM'S OWN LOGIC took longer than its scan period — a controller fault,
+	// and rightly latching. The accumulator's overrun means THE HOST CANNOT
+	// RENDER FAST ENOUGH to give the simulation its share of wall-clock time.
+	// The controller is executing every scan perfectly; there are simply fewer of
+	// them per second.
+	//
+	// Measured, which is how the difference became obvious: the editor dropped to
+	// ~3 fps, so every 333 ms frame could only afford 100 ms of simulation and
+	// dropped 233 ms. That is correct graceful degradation — the ride runs at 30%
+	// speed and remains bit-identical, because the step is fixed. Faulting on it
+	// meant a machine that renders slowly is a machine whose ride will not run,
+	// which is nonsense.
+	//
+	// So the overrun stays what it was: a reported performance note. The PLC's
+	// watchdog stays for a genuine one, which in this model would be the scan's
+	// own logic exceeding its period — straight-line code, so never yet.
 	const bool bWasFaulted = Plc.IsFaulted();
-	Plc.Scan(DeltaSeconds, bScanOverranThisFrame);
+	Plc.Scan(DeltaSeconds, /*bOverran*/ false);
 	bScanOverranThisFrame = false;
 	// A CONTROLLER FAULTING IS THE LOUDEST THING THAT CAN HAPPEN TO A RIDE, and
 	// it was silent. The watchdog tripped, the ride stopped being commanded, and
