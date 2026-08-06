@@ -1383,8 +1383,12 @@ void ATUCoasterRide::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 		&ATUCoasterRide::ReleaseDispatch);
 	PlayerInputComponent->BindKey(EKeys::BackSpace, IE_Pressed, this,
 		&ATUCoasterRide::PressEmergencyStop);
+	// MONITORED RESET: pressed AND released, both bound, because the reset happens
+	// on the release. A key bound only on press is a taped button.
 	PlayerInputComponent->BindKey(EKeys::End, IE_Pressed, this,
-		&ATUCoasterRide::ResetEmergencyStop);
+		&ATUCoasterRide::PressResetButton);
+	PlayerInputComponent->BindKey(EKeys::End, IE_Released, this,
+		&ATUCoasterRide::ReleaseResetButton);
 	PlayerInputComponent->BindKey(EKeys::P, IE_Pressed, this,
 		&ATUCoasterRide::CyclePanelView);
 	// NOT [A] — that is strafe-left, and acknowledging a fault every time somebody
@@ -2176,6 +2180,45 @@ void ATUCoasterRide::AcknowledgeFaults()
 					"[End] to reset once it is."),
 				static_cast<int32>(z));
 		}
+	}
+}
+
+// The reset button as a CONTACT rather than an event. The drives layer decides
+// when the 0-1-0 sequence is complete; this just reports the switch, which is all
+// a real panel wire does.
+//
+// The acknowledgement check stays HERE, on the press, so an operator is told why
+// nothing happened at the moment they press rather than at the moment they let
+// go — and so the ordering rule keeps living in the layer that owns it.
+void ATUCoasterRide::PressResetButton()
+{
+	if (Drives && Drives->AnyUnacknowledged())
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("TrackUnlimited: reset REFUSED — a drive fault has not been acknowledged. "
+				"[Home] to acknowledge, then [End]."));
+		return;
+	}
+	if (Drives) { Drives->ScanResetInput(true); }
+}
+
+void ATUCoasterRide::ReleaseResetButton()
+{
+	if (!Drives)
+	{
+		return;
+	}
+	// A fault raised BETWEEN the press and the release. Abandon the sequence
+	// rather than complete it — otherwise the acknowledge-before-reset rule leaks
+	// out through a gap in time, and a stop nobody has read clears itself.
+	if (Drives->AnyUnacknowledged())
+	{
+		Drives->AbortReset();
+		return;
+	}
+	if (Drives->ScanResetInput(false))
+	{
+		ResetEmergencyStop();
 	}
 }
 

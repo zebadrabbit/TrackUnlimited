@@ -537,6 +537,10 @@ private:
 	void PressDispatch() { bDispatchHeld = true; }
 	void ReleaseDispatch() { bDispatchHeld = false; }
 	void PressEmergencyStop();
+	// The reset button as a contact rather than an event. Monitored 0-1-0: the
+	// stop clears on the RELEASE, so a taped button cannot restart the ride.
+	void PressResetButton();
+	void ReleaseResetButton();
 	void ResetEmergencyStop();
 
 	/** "I have seen this." Silences the alarm; fixes nothing. Reset needs it first. */

@@ -486,6 +486,72 @@ void TestStopCategoriesAreDistinguishable()
     }
 }
 
+// MONITORED RESET, edge-triggered 0-1-0.
+//
+// A taped reset button must not cause automatic restart. Same reasoning as the
+// dispatch anti-tie-down, except a wedged dispatch only runs trains early where a
+// wedged reset clears the E-STOP — so the ride restarts itself the moment
+// whatever tripped it stops being true.
+void TestResetIsMonitoredAndCannotBeTiedDown()
+{
+    // ---- The honest sequence: released, pressed, released.
+    {
+        FTrackDrives D(1);
+        D.Preset(0, 5.0);
+        D.TripEmergencyStop("test");
+
+        assert(!D.ScanResetInput(false));   // seen low
+        assert(!D.ScanResetInput(true));    // pressed — nothing yet
+        assert(D.IsResetArmed());
+        assert(D.IsEmergencyStopped());     // still stopped WHILE held
+        assert(D.ScanResetInput(false));    // released — NOW it clears
+        assert(!D.IsEmergencyStopped());
+    }
+
+    // ---- A BUTTON HELD FROM BEFORE THE TRIP BUYS NOTHING, however long.
+    // The trip clears the seen-low latch, so the press already in progress is not
+    // the leading edge of anything.
+    {
+        FTrackDrives D(1);
+        D.Preset(0, 5.0);
+        D.ScanResetInput(true);             // somebody is holding it
+        D.TripEmergencyStop("test");
+
+        for (int i = 0; i < 10000; ++i)
+        {
+            assert(!D.ScanResetInput(true));
+        }
+        assert(D.IsEmergencyStopped());
+        assert(!D.IsResetArmed());          // never even armed
+
+        // It only counts once they let go and press again.
+        assert(!D.ScanResetInput(false));
+        assert(!D.ScanResetInput(true));
+        assert(D.ScanResetInput(false));
+        assert(!D.IsEmergencyStopped());
+    }
+
+    // ---- A button taped down across a whole session cannot clear a later stop.
+    {
+        FTrackDrives D(1);
+        D.Preset(0, 5.0);
+        for (int i = 0; i < 100; ++i) { D.ScanResetInput(true); }   // taped
+        D.TripEmergencyStop("test");
+        for (int i = 0; i < 100; ++i) { D.ScanResetInput(true); }
+        assert(D.IsEmergencyStopped());
+    }
+
+    // ---- Scanning a released button on a running ride does nothing at all.
+    {
+        FTrackDrives D(1);
+        D.Preset(0, 5.0);
+        assert(!D.ScanResetInput(false));
+        assert(!D.ScanResetInput(true));
+        assert(!D.IsEmergencyStopped());
+        assert(D.Output(0) == 5.0);
+    }
+}
+
 void TestAStoppedDriveIsNotAlsoAccusedOfSlipping()
 {
     // A drive that has been CUT cannot usefully be accused of failing to reach its
@@ -580,6 +646,7 @@ int main()
     TestOneDrivePerZoneEvenWhereThereIsNoMotor();
     TestAnEmergencyStopCutsThePowerAndCannotBeTalkedOutOfIt();
     TestStopCategoriesAreDistinguishable();
+    TestResetIsMonitoredAndCannotBeTiedDown();
     TestAStoppedDriveIsNotAlsoAccusedOfSlipping();
     TestReadyIsNotTheSameAsCommanded();
 

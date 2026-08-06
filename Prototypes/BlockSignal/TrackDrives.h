@@ -268,7 +268,74 @@ public:
         bEmergencyStopped = false;
         bPowerRemoved = false;
         StopCategory = EStopCategory::One;
+        StoppingFor = 0.0;
         StopReason = "";
+        // A fresh stop must see the button low again before it will take a press.
+        bResetSeenLow = false;
+        bResetPressed = false;
+    }
+
+    // ===================== MONITORED RESET =====================
+    //
+    // EDGE-TRIGGERED 0-1-0: the button must be seen released, then pressed, then
+    // released again before the stop clears. Scan the input every frame; this
+    // decides when it counts.
+    //
+    // A TAPED RESET BUTTON MUST NOT CAUSE AUTOMATIC RESTART. That is the whole
+    // rule, and it is the same reasoning already accepted for the dispatch button
+    // — except a wedged dispatch only runs trains early, where a wedged reset
+    // clears the E-STOP, so the ride restarts itself the instant whatever tripped
+    // it stops being true. It is the more dangerous of the two by a distance.
+    //
+    // The trip itself clears `bResetSeenLow`, so a button ALREADY HELD when the
+    // stop latches is not the leading edge of anything. Without that the sequence
+    // could be satisfied by a release from before the fault, which is an operator
+    // resetting something else entirely.
+    //
+    // THE RELEASE FIRES IT, NOT THE PRESS. A press-triggered reset with a held
+    // button is indistinguishable from a taped one for as long as somebody holds
+    // it down, which is the whole failure being guarded against.
+    //
+    // Returns true on the frame the stop actually clears. Acknowledgement ordering
+    // stays the layer above's rule, where it already lives.
+    bool ScanResetInput(bool bPressed)
+    {
+        if (!bEmergencyStopped)
+        {
+            bResetSeenLow = !bPressed;
+            bResetPressed = false;
+            return false;
+        }
+
+        if (bPressed)
+        {
+            if (bResetSeenLow) { bResetPressed = true; }
+            return false;
+        }
+
+        if (bResetPressed && bResetSeenLow)
+        {
+            ResetEmergencyStop();   // clears every latch, including these two
+            return true;
+        }
+
+        bResetSeenLow = true;
+        bResetPressed = false;
+        return false;
+    }
+
+    // For the panel: pressed, and being held. The reset happens on release.
+    bool IsResetArmed() const { return bEmergencyStopped && bResetPressed; }
+
+    // Throw away a reset sequence in progress, leaving the button in a known low
+    // state. For the caller whose OWN precondition failed partway through — a
+    // fault raised between the press and the release, say. Without it that
+    // sequence completes on release and clears a stop nobody has read, which is
+    // the acknowledge-before-reset rule leaking out through a gap in time.
+    void AbortReset()
+    {
+        bResetPressed = false;
+        bResetSeenLow = true;
     }
 
     // Ramp every output toward its command, and age the fault timers. ONCE PER
@@ -575,5 +642,7 @@ private:
     EStopCategory StopCategory = EStopCategory::One;
     double StoppingFor = 0.0;
     double Cat1DelaySeconds = 5.0;
+    bool bResetSeenLow = false;
+    bool bResetPressed = false;
     const char* StopReason = "";
 };
