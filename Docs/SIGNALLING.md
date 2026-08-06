@@ -622,6 +622,56 @@ within reach from anywhere is one that can be restarted rather than walked out t
 condition passed would be a stop nobody had looked at, and a trip that overwrote its own reason with
 whatever failed next would throw away the only thing worth knowing, which is what went first.
 
+### Stop categories, and which one goes where
+
+IEC 60204-1 names them, and until this the distinction could not be *said* here — the behaviour was
+"output to zero this frame", which is a Category 0, but nothing recorded whether that was a decision.
+
+| | |
+|---|---|
+| **Category 0** | Immediate removal of power. The machine coasts. |
+| **Category 1** | A *controlled* stop with power **retained to achieve it**, and then removed. |
+
+The second half of Cat 1 is the half that gets dropped: it is not "a gentler stop", it is a
+controlled stop **followed by** removal of power.
+
+**The operator's button is the only Category 1 on this ride. Every automatic trip is Category 0.**
+That split is a risk judgement, which is exactly what the standard leaves it to:
+
+- A **person pressing the button** has decided the ride should stop. Nothing is known to be broken,
+  so a drive can be trusted to wind its own output down before power goes — which is what keeps a
+  train from being dropped mid-push.
+- A **protective trip** — signalling violation, detection disagreement, an inconsistent counter, a
+  faulted drive — means something *is* broken, and often that the thing being asked to perform a
+  controlled stop is the thing that failed. Power goes now.
+
+**Two things stop Category 1 being a hole in the stop.**
+
+**The brakes are fail-safe.** A real block brake is spring-applied and released by pressure, so
+removing power *applies* it — de-energise to trip. Here that falls out of a zone commanded to zero
+biting, and it is the property that makes "cut everything now" a safe thing to do at all: a Cat 0
+stops trains rather than merely ceasing to drive them.
+
+**And Cat 1 has a deadline.** A safety relay implementing SS1 does not ask the drive whether it
+finished; it gives it a bounded window and opens the contactor regardless. `SetCat1DelaySeconds`
+(5 s by default) does the same, so a drive whose ramp would take 200 s — or one that faults
+mid-wind-down — still loses power. Without it a latched E-stop could keep an output alive for ever,
+which is precisely the hole the whole class exists to not have.
+
+Two smaller decisions worth keeping:
+
+- **The default argument is Category 0**, which is the *harder* stop and therefore the fail-closed
+  choice. Cat 1 is strictly weaker, so a call site that forgets to say which it wants must get the
+  stronger one — defaulting the other way would let every future caller weaken the stop by omission.
+- **`Output()` guards on POWER REMOVED, not on stopped.** Cat 1 deliberately keeps driving while it
+  winds down, and returning zero throughout would make it a Cat 0 wearing a different label. The
+  guarantee has not weakened: Cat 0 removes power in the same statement that latches the stop, so
+  its output is zero with no tick required, and Cat 1 is bounded by the timer above.
+
+**Ramps default to off, so on every shipped preset a Cat 1 reaches zero in one frame and is
+indistinguishable from a Cat 0.** Every previously measured figure is unmoved, including the
+three-train circuit trip above. Give a drive a real ramp to see the two separate.
+
 Three conditions trip it automatically, and all three were **already detected and only logged**:
 
 | condition | why it is an E-stop |

@@ -1642,10 +1642,22 @@ void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/
 		PanelTile(Canvas, StopX, Ty - 2.f, 1.f, Row + 2.f, bStopped ? PanelRed : PanelDim);
 		PanelTile(Canvas, StopX + StopW - 1.f, Ty - 2.f, 1.f, Row + 2.f,
 			bStopped ? PanelRed : PanelDim);
-		PanelLabel(Canvas, StopX + 5.f, Ty,
-			bStopped ? FString::Printf(TEXT("E-STOP · %s"),
-				UTF8_TO_TCHAR(Drives->EmergencyStopReason()))
-					 : FString(TEXT("RUNNING")),
+		// THE CATEGORY IS PART OF THE STOP, so the panel says which one it is.
+		// STOPPING and STOPPED are also different facts under a Cat 1 — power is
+		// retained while the drives wind down — and an operator watching a train
+		// still moving after they hit the button needs to know that is the stop
+		// working rather than the stop failing.
+		FString StopText(TEXT("RUNNING"));
+		if (bStopped)
+		{
+			const bool bCat1 =
+				Drives->EmergencyStopCategory() == FTrackDrives::EStopCategory::One;
+			StopText = FString::Printf(TEXT("E-STOP %s · %s"),
+				bCat1 ? (Drives->IsPowerRemoved() ? TEXT("CAT1") : TEXT("CAT1 STOPPING"))
+					  : TEXT("CAT0"),
+				UTF8_TO_TCHAR(Drives->EmergencyStopReason()));
+		}
+		PanelLabel(Canvas, StopX + 5.f, Ty, StopText,
 			bStopped ? PanelRed : PanelGreen);
 		Ty += Row + 6.f;
 	}
@@ -2107,13 +2119,29 @@ void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/
 	}
 }
 
+// THE OPERATOR'S BUTTON IS THE ONE CATEGORY 1 STOP ON THE RIDE, and every
+// automatic trip is Category 0. That split is a risk judgement rather than a
+// preference, and IEC 60204-1 leaves it to exactly that:
+//
+//   A person pressing the button has decided the ride should stop. Nothing is
+//   known to be broken, so a drive can be trusted to wind its own output down
+//   before power goes — which is what stops a train being dropped mid-push.
+//
+//   A protective trip — signalling violation, detection disagreement, a counter
+//   that has gone inconsistent, a faulted drive — means something IS broken, and
+//   often that the thing being asked to perform a controlled stop is the thing
+//   that failed. Power goes now.
+//
+// Both are safe because THE BRAKES ARE FAIL-SAFE: a zone commanded to zero
+// bites, so removing power applies the brakes rather than merely ceasing to
+// push. Cat 0 stops trains, it does not just stop driving them.
 void ATUCoasterRide::PressEmergencyStop()
 {
 	bEmergencyStop = true;
-	if (Drives && Drives->TripEmergencyStop("operator"))
+	if (Drives && Drives->PressEmergencyStopButton("operator"))
 	{
-		UE_LOG(LogTemp, Error, TEXT("TrackUnlimited: EMERGENCY STOP — operator."));
-		LogEvent(TEXT("EMERGENCY STOP — operator"));
+		UE_LOG(LogTemp, Error, TEXT("TrackUnlimited: EMERGENCY STOP — operator (Cat 1)."));
+		LogEvent(TEXT("EMERGENCY STOP — operator (Cat 1)"));
 	}
 }
 
@@ -2672,7 +2700,7 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 	// here rather than in a PostEditChangeProperty because it has to work in PIE.
 	if (bEmergencyStop && Drives && !Drives->IsEmergencyStopped())
 	{
-		Drives->TripEmergencyStop("operator");
+		Drives->PressEmergencyStopButton("operator");
 	}
 	ServeStations(DeltaSeconds);
 

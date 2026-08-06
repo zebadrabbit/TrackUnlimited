@@ -177,23 +177,99 @@ public:
     // it, never because the condition passed; and a trip that overwrote its own
     // reason with whatever failed next would throw away the only thing worth
     // knowing, which is what went first.
-    bool TripEmergencyStop(const char* InReason)
+    //
+    // ---- STOP CATEGORY (IEC 60204-1) --------------------------------------
+    //
+    // The category was previously not expressible, which is a gap rather than a
+    // wrong answer: the behaviour was "output to zero this frame", and whether
+    // that was a deliberate Category 0 or an accidental one could not be said.
+    //
+    // WHY THIS MODEL IS SAFE IN BOTH: THE BRAKES ARE FAIL-SAFE. A real block
+    // brake is spring-applied and released by pressure, so removing power APPLIES
+    // it — de-energise to trip. Here that falls out of a zone commanded to zero
+    // biting, which means a Category 0 stop still stops trains rather than
+    // merely ceasing to push them. It is worth stating explicitly because it is
+    // the property that makes "cut everything now" a safe thing to do at all.
+    //
+    // WHAT ACTUALLY DIFFERS in this model is the transient, which is exactly what
+    // a stop category IS. And note ramps default to OFF, so on every shipped
+    // preset a Category 1 stop reaches zero in one frame and is indistinguishable
+    // from Category 0 — every previously measured figure is unmoved. Give a drive
+    // a real ramp to see the two separate.
+    enum class EStopCategory
+    {
+        // Immediate removal of power. The machine coasts; here the fail-safe
+        // brakes still bite. This is what a fault in the safety circuit itself
+        // produces — a drive reporting a fault is a drive not to be trusted to
+        // carry out a controlled anything.
+        Zero,
+
+        // Controlled stop with power RETAINED to achieve it, then removed. The
+        // drives are commanded to zero and ramp there under their own control
+        // before power is cut. This is the normal category for an operator's
+        // button: you do not want a launch dropped out from under a train
+        // mid-push if the drive is capable of winding down instead.
+        One,
+    };
+
+    // DEFAULTS TO CATEGORY 0, AND THAT IS THE FAIL-CLOSED CHOICE RATHER THAN THE
+    // ordinary one. Category 1 is the normal category for an operator's button and
+    // it is what the operator's button passes — but it is also strictly the weaker
+    // stop, because power is retained for a moment, so a call site that forgets to
+    // say which it wants must get the HARDER one. Defaulting the other way would
+    // mean every future caller silently weakens the stop by omission, which is the
+    // kind of hole this whole class exists to not have.
+    //
+    // It is also what keeps the guarantee the suite already asserts: after a
+    // Category 0 trip, Output is zero IMMEDIATELY, with no tick required. Category
+    // 1 cannot offer that and is not supposed to — "power retained to achieve the
+    // stop" is the definition, not a concession.
+    bool TripEmergencyStop(const char* InReason, EStopCategory Category = EStopCategory::Zero)
     {
         if (bEmergencyStopped)
         {
             return false;   // already stopped; keep the original cause
         }
         bEmergencyStopped = true;
+        StopCategory = Category;
+        // Cat 1 has to reach zero before power goes. Cat 0 is there already, in
+        // the same statement that latches the stop — no tick required.
+        bPowerRemoved = (Category == EStopCategory::Zero);
+        StoppingFor = 0.0;
         StopReason = InReason != nullptr ? InReason : "unspecified";
         return true;
     }
 
+    // The operator's button. Category 1 by name rather than by an argument at the
+    // call site, so the one place that deliberately takes the weaker stop says so
+    // in words — and so grepping for who can do that returns one answer.
+    bool PressEmergencyStopButton(const char* InReason)
+    {
+        return TripEmergencyStop(InReason, EStopCategory::One);
+    }
+
+    // How long a Category 1 stop may take before power is removed anyway. The
+    // safety relay's delay, not the drive's opinion. Seconds.
+    void SetCat1DelaySeconds(double S) { if (S > 0.0) { Cat1DelaySeconds = S; } }
+
     bool IsEmergencyStopped() const { return bEmergencyStopped; }
     const char* EmergencyStopReason() const { return bEmergencyStopped ? StopReason : ""; }
+    EStopCategory EmergencyStopCategory() const { return StopCategory; }
+
+    // Category 1 is not instantaneous, so "stopped" and "power gone" are two
+    // different facts and the panel is entitled to both. True immediately on a
+    // Cat 0; true on a Cat 1 once every output has wound down.
+    bool IsPowerRemoved() const { return bEmergencyStopped && bPowerRemoved; }
 
     // Manual, and deliberately the only way out. Same reasoning as a drive fault
     // needing a reset: a stop nobody has looked at has not been dealt with.
-    void ResetEmergencyStop() { bEmergencyStopped = false; StopReason = ""; }
+    void ResetEmergencyStop()
+    {
+        bEmergencyStopped = false;
+        bPowerRemoved = false;
+        StopCategory = EStopCategory::One;
+        StopReason = "";
+    }
 
     // Ramp every output toward its command, and age the fault timers. ONCE PER
     // FRAME, like FRideSignals::Tick and for the same reason — these are rates,
@@ -209,14 +285,45 @@ public:
         }
         if (bEmergencyStopped)
         {
-            // Not ramped down. Power is gone, so the output is gone — and the fault
-            // timers stop with it, because a drive that has been cut cannot be
-            // usefully accused of slipping.
-            for (FDriveReading& R : State)
+            // Fault timers stop either way: a drive being cut, or being wound down
+            // on purpose, cannot usefully be accused of slipping.
+            if (bPowerRemoved)
             {
-                R.Output = 0.0;
-                R.SlippingFor = 0.0;
+                // Power is gone, so the output is gone. No ramp — that is what
+                // "removal of power" means, and a ramp here would be the stop
+                // negotiating with the thing it is stopping.
+                for (FDriveReading& R : State)
+                {
+                    R.Output = 0.0;
+                    R.SlippingFor = 0.0;
+                }
+                return;
             }
+
+            // CATEGORY 1: power is RETAINED to achieve the stop. Every drive is
+            // commanded to zero and winds down at its own decel ramp; once they
+            // are all there, power is removed and this becomes a Category 0 from
+            // then on. That last step is the half people forget — Cat 1 is not
+            // "a gentle stop", it is a controlled stop FOLLOWED BY removal.
+            bool bAllDown = true;
+            for (std::size_t i = 0; i < State.size(); ++i)
+            {
+                FDriveReading& R = State[i];
+                R.SlippingFor = 0.0;
+                const double Ramp = Spec[i].DecelRampMs2;
+                R.Output = (Ramp > 0.0) ? std::max(0.0, R.Output - Ramp * DeltaSeconds) : 0.0;
+                if (R.Output > 1e-9) { bAllDown = false; }
+            }
+
+            // THE DELAY TIMER, AND IT IS NOT OPTIONAL. A safety relay implementing
+            // SS1 does not ask the drive whether it finished — it gives it a
+            // bounded window and then opens the contactor regardless. Without this
+            // a drive that never reaches zero (a stuck ramp, a spec edited to a
+            // silly value, a fault mid-wind-down) would keep its output for ever
+            // behind a latched E-stop, which is precisely the hole a stop must not
+            // have. Cat 1 is a controlled stop with a DEADLINE, not a request.
+            StoppingFor += DeltaSeconds;
+            bPowerRemoved = bAllDown || StoppingFor >= Cat1DelaySeconds;
             return;
         }
         for (std::size_t i = 0; i < State.size(); ++i)
@@ -323,13 +430,21 @@ public:
     // WHAT THE TRACK IS TOLD. The one number that leaves this class and reaches
     // the physics — everything else here is for the panel and the diagnostics.
     //
-    // Zero under an E-stop, tested HERE as well as in Tick. Belt and braces on
-    // purpose: this is the single value that decides whether anything on the ride
-    // moves, and a caller that reads it without having ticked first must not get a
-    // stale non-zero out of it.
+    // Zero once power is removed, tested HERE as well as in Tick. Belt and braces
+    // on purpose: this is the single value that decides whether anything on the
+    // ride moves, and a caller that reads it without having ticked first must not
+    // get a stale non-zero out of it.
+    //
+    // The guard is on POWER REMOVED rather than on stopped, because a Category 1
+    // stop deliberately keeps driving while it winds down — returning zero
+    // throughout would make Cat 1 a Cat 0 wearing a different label, which is the
+    // exact confusion this change exists to end. The guard has not weakened: Cat 0
+    // removes power in the same statement that latches the stop, and Cat 1 is
+    // bounded by the delay timer below, so there is no path where a stopped ride
+    // drives indefinitely.
     double Output(std::size_t Drive) const
     {
-        if (bEmergencyStopped)
+        if (bPowerRemoved)
         {
             return 0.0;
         }
@@ -456,5 +571,9 @@ private:
     // circuit, one button, everything dead. A per-drive version would be a way of
     // stopping half a ride, which is not a thing anybody wants to be able to do.
     bool bEmergencyStopped = false;
+    bool bPowerRemoved = false;
+    EStopCategory StopCategory = EStopCategory::One;
+    double StoppingFor = 0.0;
+    double Cat1DelaySeconds = 5.0;
     const char* StopReason = "";
 };

@@ -398,6 +398,94 @@ void TestAnEmergencyStopCutsThePowerAndCannotBeTalkedOutOfIt()
     assert(D.Output(1) == 30.0);
 }
 
+// IEC 60204-1 stop categories. Cat 0 is immediate removal of power; Cat 1 is a
+// controlled stop with power RETAINED to achieve it, and then removed.
+//
+// The distinction was previously not expressible, which was a gap rather than a
+// wrong answer — the behaviour was "output to zero this frame" and there was no
+// way to say whether that was a deliberate Cat 0.
+void TestStopCategoriesAreDistinguishable()
+{
+    // ---- Category 0: gone now, no tick required.
+    {
+        FTrackDrives D(2);
+        D.Preset(0, 20.0);
+        assert(D.TripEmergencyStop("protective device", FTrackDrives::EStopCategory::Zero));
+        assert(D.Output(0) == 0.0);        // BEFORE any tick
+        assert(D.IsPowerRemoved());
+        assert(D.EmergencyStopCategory() == FTrackDrives::EStopCategory::Zero);
+    }
+
+    // ---- Category 1: winds down under power, THEN power goes.
+    {
+        FTrackDrives D(2);
+        D.Configure(0, FDriveSpec{4.0, 4.0, 0.5, 1.0});   // 4 m/s^2 decel ramp
+        D.Preset(0, 20.0);
+
+        assert(D.PressEmergencyStopButton("operator"));
+        assert(D.EmergencyStopCategory() == FTrackDrives::EStopCategory::One);
+
+        // Still driving, and that is the definition rather than a leak.
+        assert(D.Output(0) == 20.0);
+        assert(!D.IsPowerRemoved());
+
+        D.Tick(1.0);
+        assert(std::fabs(D.Output(0) - 16.0) < 1e-9);     // wound down, not cut
+        assert(!D.IsPowerRemoved());
+
+        // ...and it arrives, and power goes when it does.
+        for (int i = 0; i < 40; ++i) { D.Tick(0.1); }
+        assert(D.Output(0) == 0.0);
+        assert(D.IsPowerRemoved());
+        assert(D.IsEmergencyStopped());                   // still latched
+    }
+
+    // ---- The delay timer, which is what stops Cat 1 being a hole.
+    //
+    // A safety relay implementing SS1 does not ask the drive whether it
+    // finished; it gives it a window and opens the contactor regardless. Here a
+    // drive whose ramp would take 200 s must still lose power at the deadline.
+    {
+        FTrackDrives D(1);
+        D.Configure(0, FDriveSpec{0.1, 0.1, 0.5, 1.0});   // 0.1 m/s^2: 200 s to stop
+        D.Preset(0, 20.0);
+        D.SetCat1DelaySeconds(2.0);
+
+        assert(D.PressEmergencyStopButton("operator"));
+        for (int i = 0; i < 15; ++i) { D.Tick(0.1); }     // 1.5 s
+        assert(!D.IsPowerRemoved());
+        assert(D.Output(0) > 15.0);                       // barely wound down
+
+        for (int i = 0; i < 10; ++i) { D.Tick(0.1); }     // past 2.0 s
+        assert(D.IsPowerRemoved());
+        assert(D.Output(0) == 0.0);                       // cut, not finished
+    }
+
+    // ---- With ramps OFF, which is every shipped preset, the two are identical.
+    // This is why nothing previously measured moves.
+    {
+        FTrackDrives Zero(1), One(1);
+        Zero.Preset(0, 20.0);
+        One.Preset(0, 20.0);
+        Zero.TripEmergencyStop("x", FTrackDrives::EStopCategory::Zero);
+        One.PressEmergencyStopButton("x");
+        Zero.Tick(Dt);
+        One.Tick(Dt);
+        assert(Zero.Output(0) == One.Output(0));
+        assert(Zero.IsPowerRemoved() && One.IsPowerRemoved());
+    }
+
+    // ---- The default is the HARDER stop, so an omission cannot weaken it.
+    {
+        FTrackDrives D(1);
+        D.Configure(0, FDriveSpec{4.0, 4.0, 0.5, 1.0});
+        D.Preset(0, 20.0);
+        D.TripEmergencyStop("caller that did not say");
+        assert(D.EmergencyStopCategory() == FTrackDrives::EStopCategory::Zero);
+        assert(D.Output(0) == 0.0);
+    }
+}
+
 void TestAStoppedDriveIsNotAlsoAccusedOfSlipping()
 {
     // A drive that has been CUT cannot usefully be accused of failing to reach its
@@ -491,6 +579,7 @@ int main()
     TestMalformedInputIsRefused();
     TestOneDrivePerZoneEvenWhereThereIsNoMotor();
     TestAnEmergencyStopCutsThePowerAndCannotBeTalkedOutOfIt();
+    TestStopCategoriesAreDistinguishable();
     TestAStoppedDriveIsNotAlsoAccusedOfSlipping();
     TestReadyIsNotTheSameAsCommanded();
 
