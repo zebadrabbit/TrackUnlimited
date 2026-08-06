@@ -105,8 +105,11 @@ What this project owes such a builder is different, and more useful:
 - **Honest limits, written down.** A downstream builder needs to know exactly what they are standing
   on. `PHASE0_FINDINGS.md` is the ledger — a heartline point mass, no rider biomechanics, an
   acceleration envelope table that is **unverified research rather than a copy of either standard**,
-  and an interlocking still handed a span rather than inferring identity from trip order. Every one
-  of those matters to somebody deciding whether this is a fair basis for anything.
+  **CiA 402 bit assignments written from memory** (the state machine is asserted; the numeric bit
+  positions are not verified against IEC 61800-7-201, and are the first thing to check if this ever
+  meets real hardware), and an interlocking still handed a span rather than inferring identity from
+  trip order. Every one of those matters to somebody deciding whether this is a fair basis for
+  anything.
 - **Nothing dressed up.** The reason the matrix records what is *not* caught, and the reason
   `GEnvelope.h` prints its own provenance on every run, is that a foundation is only worth building
   on if it is candid about where it stops.

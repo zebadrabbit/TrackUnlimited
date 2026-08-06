@@ -7,6 +7,26 @@
 // model of it. A controlword and a statusword are what a PLC and a VFD say to
 // each other on real hardware.
 //
+// ---------------------------------------------------------------------------
+// PROVENANCE, AND WHAT TO CHECK FIRST IF THIS EVER MEETS REAL HARDWARE
+//
+// THE BIT ASSIGNMENTS BELOW ARE FROM MEMORY, not from a copy of IEC 61800-7-201.
+// The STATE MACHINE is the part worth trusting: eight states, the transitions
+// between them, the enable handshake, active-low quick stop, edge-triggered
+// fault reset and a non-instant fault reaction are all structural and all
+// asserted. The numeric bit positions in Cia402Cw and Cia402Sw are the part
+// nobody here has verified against the standard.
+//
+// So: if this is ever compared against a real drive, or used to talk to one,
+// CHECK THE BIT NUMBERS FIRST. Everything else will be right or visibly wrong;
+// a transposed bit is the failure that looks fine and is not.
+//
+// Recorded here rather than left implied for the same reason GEnvelope.h carries
+// its own provenance note: a file that prints a standard's name is claiming more
+// authority than an unverified table has earned, and saying so is cheaper than
+// somebody discovering it.
+// ---------------------------------------------------------------------------
+//
 // ===================== WHY THIS, WHEN THE DRIVES WORK =====================
 //
 // FTrackDrives already ramps, slips and faults, and IsReady() already means
