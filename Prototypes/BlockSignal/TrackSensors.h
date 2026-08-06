@@ -103,9 +103,15 @@ public:
     // readers cannot disagree about whether one happened.
     void EndScan()
     {
+        ++ScanCount;
         for (std::size_t i = 0; i < At.size(); ++i)
         {
-            const bool bNow = bCoveredThisScan[i];
+            // THE FAULT IS APPLIED HERE, BEFORE THE EDGES, and that placement is
+            // the whole of it: edges must come from what the sensor REPORTS, not
+            // from what is physically true. A dead switch does not produce edges
+            // nobody can see — it produces no edges, and every layer above
+            // believes it.
+            const bool bNow = Reported(i, bCoveredThisScan[i]);
             if (bNow && !State[i].bBlocked)
             {
                 ++State[i].Rising;
@@ -117,6 +123,43 @@ public:
             State[i].bBlocked = bNow;
         }
     }
+
+    // ===================== FAULT INJECTION =====================
+    //
+    // A sensor is the PLC's ONLY view of where the trains are, so a lying sensor
+    // is the most consequential single failure in the system — and it is exactly
+    // what the second detection method was built to catch. Until this existed,
+    // that cross-check had only ever been proven by MUTATING the counter's own
+    // rule, which shows the assertion bites but not that a real sensor failure is
+    // caught. Different claims.
+    //
+    // Deliberately at the device rather than in a central fault manager: every
+    // physical failure in a control system shows up as an input that lies, an
+    // output that does not take effect, or feedback that disagrees. Each layer
+    // already owns one of those, so each layer owns its own faults.
+    enum class ESensorFault
+    {
+        None,
+        Dead,      // never reports blocked. Failed prox, cut wire, dirty face.
+        StuckOn,   // always reports blocked. Shorted, or debris across the lens.
+        Chatter,   // toggles regardless of reality. A loose connection.
+    };
+
+    void Fail(std::size_t Sensor, ESensorFault Mode)
+    {
+        if (Sensor >= Faults.size()) { Faults.resize(At.size(), ESensorFault::None); }
+        if (Sensor < Faults.size())  { Faults[Sensor] = Mode; }
+    }
+    void ClearFaults() { Faults.assign(At.size(), ESensorFault::None); }
+    ESensorFault FaultOn(std::size_t Sensor) const
+    {
+        return Sensor < Faults.size() ? Faults[Sensor] : ESensorFault::None;
+    }
+
+    // Scans between chatter toggles. DETERMINISTIC on purpose — a scenario that
+    // reproduces differently every run cannot be used to prove anything, and this
+    // project has no random source anywhere for the same reason.
+    int ChatterScans = 7;
 
     const FSensorReading& Read(std::size_t Sensor) const { return State[Sensor]; }
     bool IsBlocked(std::size_t Sensor) const { return State[Sensor].bBlocked; }
@@ -131,9 +174,25 @@ public:
     }
 
 private:
+    // What the switch SAYS, given what is physically over it.
+    bool Reported(std::size_t i, bool bTruth) const
+    {
+        if (i >= Faults.size()) { return bTruth; }
+        switch (Faults[i])
+        {
+        case ESensorFault::Dead:    return false;
+        case ESensorFault::StuckOn: return true;
+        case ESensorFault::Chatter:
+            return ChatterScans > 0 && ((ScanCount / ChatterScans) % 2) == 0;
+        default:                    return bTruth;
+        }
+    }
+
     std::vector<double> At;
     std::vector<FSensorReading> State;
     std::vector<bool> bCoveredThisScan;
+    std::vector<ESensorFault> Faults;
+    long long ScanCount = 0;
 };
 
 // Block occupancy DERIVED FROM SENSORS ALONE, with no idea where any train is.

@@ -198,6 +198,123 @@ void TestTheCounterAgreesWithPerfectKnowledge()
     }
 }
 
+// Ground truth for the ring, so a fault test can say what the counter SHOULD
+// have believed while it believes something else.
+bool SpanTouches(const std::vector<double>& B, std::size_t b, double Total,
+                 double Rear, double Front)
+{
+    const double Lo = B[b];
+    const double Hi = (b + 1 < B.size()) ? B[b + 1] : Total;
+    return (Front < Rear) ? (Hi >= Rear || Lo <= Front) : (Front >= Lo && Rear <= Hi);
+}
+
+void TestADeadSENSORIsWhatTheSecondMethodExISTSToCatch()
+{
+    // THE FAULT THAT MATTERS MOST, because a sensor is the PLC's only view of
+    // where the trains are. Until this existed, the cross-check between the
+    // counter and the interlocking had only ever been proven by MUTATING the
+    // counter's own falling-edge rule — which shows the assertion bites, and says
+    // nothing about whether a real sensor failure is caught. Different claims,
+    // and only one of them is about safety.
+    const std::vector<double> B = Boundaries();
+    const double Total = 600.0;
+    const double Len = 15.0;
+
+    FTrackSensors S(B);
+    FBlockCounter Counter(S);
+
+    const double Start = 75.3;
+    Scan(S, Start - Len * 0.5, Start + Len * 0.5, true);
+    Counter.Scan();
+    Counter.Seed(0);
+
+    // Sensor 2 dies. Nothing announces it — that is the point of a dead switch,
+    // and it is why a second means of detection is bought rather than a better
+    // single one.
+    S.Fail(2, FTrackSensors::ESensorFault::Dead);
+
+    bool bEverDisagreed = false;
+    for (double Centre = Start; Centre < Total * 2.0 + Start; Centre += 0.5)
+    {
+        double Rear = Centre - Len * 0.5;
+        double Front = Centre + Len * 0.5;
+        while (Rear >= Total) { Rear -= Total; }
+        while (Front >= Total) { Front -= Total; }
+        Scan(S, Rear, Front, true);
+        Counter.Scan();
+
+        for (std::size_t b = 0; b < B.size(); ++b)
+        {
+            if (Counter.IsOccupied(b) != SpanTouches(B, b, Total, Rear, Front))
+            {
+                bEverDisagreed = true;
+            }
+        }
+    }
+
+    // THE DETECTION. The counter and a span-based interlocking now disagree, and
+    // in the actor that difference trips the E-stop. Neither can say which of them
+    // is wrong — which is precisely the property a second detection method buys.
+    assert(bEverDisagreed);
+
+    // And it is the DEAD one that did it: block 2's boundary never trips, so the
+    // train enters and is never counted in.
+    assert(S.Read(2).Rising == 0);
+    assert(S.Read(2).Falling == 0);
+    assert(S.Read(1).Rising > 0);          // its neighbours are fine
+}
+
+void TestAStuckOnSensorAndAChatteringOneAreDifferentFailures()
+{
+    // A dead switch under-reports and a stuck one over-reports, and they are not
+    // mirror images: a block that never goes occupied lets a train in on top of
+    // another, where one that never goes clear STOPS THE RIDE. The second fails
+    // safe and the first does not, which is the entire argument for wiring
+    // detection so that the safe direction is the de-energised one.
+    const std::vector<double> B = Boundaries();
+
+    {
+        FTrackSensors S(B);
+        S.Fail(1, FTrackSensors::ESensorFault::StuckOn);
+        Scan(S, 300.0, 315.0, true);       // nowhere near sensor 1
+        assert(S.IsBlocked(1));            // says otherwise
+        assert(S.Read(1).Rising == 1);     // and produced an edge that never happened
+    }
+
+    {
+        // A loose connection: toggling regardless of reality, and DETERMINISTIC,
+        // because a scenario that reproduces differently every run cannot prove
+        // anything.
+        FTrackSensors S(B);
+        S.ChatterScans = 2;
+        S.Fail(0, FTrackSensors::ESensorFault::Chatter);
+        for (int i = 0; i < 20; ++i) { Scan(S, 300.0, 315.0, true); }
+        assert(S.Read(0).Rising > 2);      // edges from nothing at all
+        assert(S.Read(0).Falling > 2);
+
+        // Same script, same result. The property a fault-injection scenario needs.
+        FTrackSensors T(B);
+        T.ChatterScans = 2;
+        T.Fail(0, FTrackSensors::ESensorFault::Chatter);
+        for (int i = 0; i < 20; ++i) { Scan(T, 300.0, 315.0, true); }
+        assert(T.Read(0).Rising == S.Read(0).Rising);
+        assert(T.Read(0).Falling == S.Read(0).Falling);
+    }
+}
+
+void TestAHealthySensorIsUNAFFECTEDByTheFaultMachinery()
+{
+    // The fault path must cost nothing when nothing is faulted, or every figure
+    // measured before this existed quietly moved.
+    const std::vector<double> B = Boundaries();
+    FTrackSensors S(B);
+    S.Fail(1, FTrackSensors::ESensorFault::Dead);
+    S.ClearFaults();
+    Scan(S, 145.0, 160.0, true);
+    assert(S.IsBlocked(1));
+    assert(S.FaultOn(1) == FTrackSensors::ESensorFault::None);
+}
+
 } // namespace
 
 int main()
@@ -208,6 +325,9 @@ int main()
     TestTheSeamIsJustAnotherStretchOfTrack();
     TestATrainCanCrossASensorInsideOneScan();
     TestTheCounterAgreesWithPerfectKnowledge();
+    TestADeadSENSORIsWhatTheSecondMethodExISTSToCatch();
+    TestAStuckOnSensorAndAChatteringOneAreDifferentFailures();
+    TestAHealthySensorIsUNAFFECTEDByTheFaultMachinery();
 
     std::printf("test_tracksensors: all assertions passed\n");
     return 0;

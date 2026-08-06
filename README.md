@@ -170,6 +170,7 @@ For the full engine build, see [`CONTRIBUTING.md`](CONTRIBUTING.md).
 | [`Docs/PROJECT_PLAN.md`](Docs/PROJECT_PLAN.md) | The full plan: vision, market context, all five pillars, risks |
 | [`Docs/PHASE0_FINDINGS.md`](Docs/PHASE0_FINDINGS.md) | What was proven, what was **dis**proved, and the known-limitations ledger |
 | [`Docs/GLOSSARY.md`](Docs/GLOSSARY.md) | Heartline, clothoid, holonomy, felt G — what the words mean on a real coaster |
+| [`Docs/FAULTS.md`](Docs/FAULTS.md) | Injecting failures, and the matrix of what the safety design actually catches |
 | [`Docs/UI_CONVENTIONS.md`](Docs/UI_CONVENTIONS.md) | Framework, resolution, colour, layout and units — the rules every panel is built against |
 | [`Docs/DEFERRED_DECISIONS.md`](Docs/DEFERRED_DECISIONS.md) | Open choices, what was done in the meantime, and what changing costs |
 | [`CHANGELOG.md`](CHANGELOG.md) | What has landed, newest first |
