@@ -1560,6 +1560,13 @@ void ATUCoasterRide::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 		&ATUCoasterRide::ToggleProfileGraph);
 	PlayerInputComponent->BindKey(EKeys::V, IE_Pressed, this,
 		&ATUCoasterRide::ToggleDiagnostics);
+	// [Z] frames the selected segment; clicking a diagnostics row selects one and
+	// frames it in the same gesture, which is the whole point of a finding
+	// carrying a place.
+	PlayerInputComponent->BindKey(EKeys::Z, IE_Pressed, this,
+		&ATUCoasterRide::FrameSelectedSegment);
+	PlayerInputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed, this,
+		&ATUCoasterRide::ClickDiagnostics);
 	PlayerInputComponent->BindKey(EKeys::MouseScrollUp, IE_Pressed, this,
 		&ATUCoasterRide::OrbitZoomIn);
 	PlayerInputComponent->BindKey(EKeys::MouseScrollDown, IE_Pressed, this,
@@ -1583,6 +1590,93 @@ void ATUCoasterRide::CycleCameraMode()
 	// Re-seed on the way in, so the free camera starts from wherever you were
 	// just looking rather than teleporting you somewhere unrecognisable.
 	bFreeInitialised = false;
+}
+
+void ATUCoasterRide::ClickDiagnostics()
+{
+	// A FINDING WITHOUT A PLACE IS TRIVIA — the diagnostics model's rule, and this
+	// is the half that makes it true. "Curvature implying a radius under 2 m" is
+	// only useful if it takes you there.
+	APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr;
+	if (!PC || !bShowDiagnostics) { return; }
+
+	float Mx = 0.f, My = 0.f;
+	if (!PC->GetMousePosition(Mx, My)) { return; }
+
+	for (int32 i = 0; i < DiagRowRects.Num(); ++i)
+	{
+		const FVector4& R = DiagRowRects[i];
+		if (Mx < R.X || Mx > R.Z || My < R.Y || My > R.W) { continue; }
+		if (i >= static_cast<int32>(Diagnostics.Num())) { break; }
+
+		const FDiagRow& Row = Diagnostics.At(static_cast<std::size_t>(i));
+		if (Row.Target.Segment >= 0)
+		{
+			SelectedSegment = Row.Target.Segment;
+			FrameSelectedSegment();
+		}
+		else if (Row.Target.S >= 0.0)
+		{
+			// A finding located by ARC LENGTH rather than by segment — anything
+			// derived rather than authored. Frame the point itself; there is no
+			// segment to select, and pretending there is would select the wrong
+			// one whenever the walk and the authored list disagree.
+			const FTrackFrame F = Track.EvaluateAt(Row.Target.S);
+			FCamBounds B;
+			B.Add({F.Position.X - 8.0, F.Position.Y - 8.0, F.Position.Z - 8.0});
+			B.Add({F.Position.X + 8.0, F.Position.Y + 8.0, F.Position.Z + 8.0});
+			Orbit.Frame(B, Camera ? static_cast<double>(Camera->FieldOfView) : 90.0, 16.0 / 9.0);
+			bOrbitFramed = true;
+			CameraMode = ETUCameraMode::Orbit;
+		}
+		return;
+	}
+}
+
+void ATUCoasterRide::FrameSelectedSegment()
+{
+	// NOTHING SELECTED FALLS BACK TO THE WHOLE TRACK rather than doing nothing. A
+	// key that silently did nothing reads as broken, and "show me everything" is
+	// the answer somebody pressing it almost certainly wanted anyway.
+	if (SelectedSegment < 0 || SelectedSegment >= Segments.Num())
+	{
+		FrameWholeTrack();
+		return;
+	}
+
+	// Walk to the selected segment's own span and frame only that. The walk is
+	// the same one the mesher uses, so nothing extra is integrated.
+	double Start = 0.0;
+	for (int32 i = 0; i < SelectedSegment; ++i)
+	{
+		Start += static_cast<double>(Segments[i].Length);
+	}
+	const double End = Start + static_cast<double>(Segments[SelectedSegment].Length);
+
+	// Sampled directly across the span rather than walked: a handful of EvaluateAt
+	// calls on a BOUNDED range, where walking the whole track to find one segment
+	// would be the O(track length) mistake this project keeps having to unlearn.
+	FCamBounds B;
+	const int Steps = 12;
+	for (int i = 0; i <= Steps; ++i)
+	{
+		const double S = Start + (End - Start) * (static_cast<double>(i) / Steps);
+		const FTrackFrame F = Track.EvaluateAt(S);
+		B.Add({F.Position.X, F.Position.Y, F.Position.Z});
+	}
+	// A dead-straight segment is a line with no thickness, and framing a line
+	// puts the camera on top of it. Pad by the track's own swept width so there
+	// is always something to look at.
+	const double Pad = TrackWidth(Profile) * 2.0;
+	B.Add({B.Min.X - Pad, B.Min.Y - Pad, B.Min.Z - Pad});
+	B.Add({B.Max.X + Pad, B.Max.Y + Pad, B.Max.Z + Pad});
+
+	Orbit.Frame(B, Camera ? static_cast<double>(Camera->FieldOfView) : 90.0, 16.0 / 9.0);
+	bOrbitFramed = true;
+	CameraMode = ETUCameraMode::Orbit;
+
+	UE_LOG(LogTemp, Log, TEXT("TrackUnlimited: framed segment %d (%.1f-%.1f m)"),
+		SelectedSegment, Start, End);
 }
 
 void ATUCoasterRide::CycleProfileChannel()
@@ -1882,10 +1976,23 @@ void ATUCoasterRide::DrawDiagnosticsPanel(UCanvas* Canvas)
 		return;
 	}
 
+	// IMMEDIATE MODE: the rectangles are recorded as they are drawn and hit-tested
+	// next click. There is no widget tree to keep in sync with the findings, which
+	// is the whole reason this is cheap enough to rebuild every rebuild.
+	DiagRowRects.Reset();
+
 	float Y = Oy + 20.f;
 	for (int32 i = 0; i < Shown; ++i)
 	{
 		const FDiagRow& R = Diagnostics.At(static_cast<std::size_t>(i));
+		DiagRowRects.Add(FVector4(Ox, Y, Ox + W, Y + Row));
+
+		// The selected row is banded, so clicking one and then looking at the
+		// viewport does not lose which finding you were on.
+		if (R.Target.Segment >= 0 && R.Target.Segment == SelectedSegment)
+		{
+			PanelTile(Canvas, Ox - 4.f, Y - 1.f, W + 8.f, Row, PanelRule);
+		}
 		const FLinearColor Ink = R.Severity == EDiagSeverity::Error ? PanelRed
 			: (R.Severity == EDiagSeverity::Warning ? PanelAmber : PanelDim);
 
@@ -4200,6 +4307,21 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 					Slot == Total - 1, true);
 			}
 		}
+	}
+
+	// EACH MODE KEEPS ITS OWN CAMERA, so Build to Ride to Build returns you where
+	// you were. Cheap, obvious, and never added later because it is never the most
+	// urgent bug — but it is the difference between a viewport somebody works in
+	// and one they fight.
+	//
+	// BEFORE the chain below, not inside it: the swap has to happen whichever mode
+	// is being entered, and putting it between two branches would run Free and
+	// then fall into the rest of the chain as well.
+	if (CameraMode != LastCameraMode)
+	{
+		CameraRigs.For(static_cast<int>(LastCameraMode)) = Orbit;
+		Orbit = CameraRigs.For(static_cast<int>(CameraMode));
+		LastCameraMode = CameraMode;
 	}
 
 	if (CameraMode == ETUCameraMode::Free)

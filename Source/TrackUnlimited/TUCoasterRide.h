@@ -959,6 +959,39 @@ private:
 
 	FDiagnostics Diagnostics;
 	std::vector<FTrackDiagnostic> LastDiagnostics;
+
+	/**
+	 * WHICH SEGMENT IS SELECTED, and the thing that turns a finding from a
+	 * sentence into somewhere to go.
+	 *
+	 * Editable so the Details panel can drive it today, and set by clicking a
+	 * diagnostics row at runtime. -1 is nothing selected, which is a real state
+	 * rather than "segment 0" — framing segment 0 because nobody chose anything
+	 * would move the camera for no reason anybody asked for.
+	 */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Diagnostics",
+		meta = (ClampMin = "-1"))
+	int32 SelectedSegment = -1;
+
+	/** Where a diagnostics row was drawn, so a click can find it again. Rebuilt
+	 *  every frame the panel draws, which is what makes this immediate-mode
+	 *  rather than a retained widget tree: there is nothing to keep in sync. */
+	TArray<FVector4> DiagRowRects;
+
+	/** [Z] — frame just the selected segment, which is what a validation warning
+	 *  wants you looking at. Falls back to the whole track when nothing is
+	 *  selected, because a key that did nothing would read as broken. */
+	void FrameSelectedSegment();
+
+	/** Click. Immediate-mode: the rows drawn last frame are hit-tested against
+	 *  the mouse, and the whole hit-test is a rectangle compare. */
+	void ClickDiagnostics();
+
+	/** THE CAMERA REMEMBERS EACH MODE. Switching Build to Ride to Build must not
+	 *  lose your place — cheap, obvious, and never added later because it is
+	 *  never the most urgent bug. Tested in Prototypes/Shell/CameraRig.h. */
+	FCameraRigs CameraRigs;
+	ETUCameraMode LastCameraMode = ETUCameraMode::Rider;
 	void BuildDiagnostics();
 	void DrawDiagnosticsPanel(class UCanvas* Canvas);
 	void ToggleDiagnostics() { bShowDiagnostics = !bShowDiagnostics; }
