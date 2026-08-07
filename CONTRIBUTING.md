@@ -38,6 +38,26 @@ A `ponytail:` comment marks a deliberate simplification whose ceiling and upgrad
 3. Open `TrackUnlimited.uproject` at the repo root. Both plugins it enables ship with the engine, so there is nothing extra to install.
 4. `.mcp.json` points at the maintainer's local AI-agent server. It is harmless and you can ignore it.
 
+### Packaging a standalone build
+
+```powershell
+.\Tools\Package-Windows.ps1                      # Development, to Build\Windows-Development
+.\Tools\Package-Windows.ps1 -Configuration Shipping
+```
+
+The engine path is taken from `-EnginePath`, then `$env:UE_ROOT`, then the
+`.uproject`'s engine association via the registry — deliberately **not** hardcoded,
+because a baked-in path is the first thing to break for somebody else.
+
+**Package Development before Shipping.** Shipping compiles out `DrawDebug`
+entirely, so the ride-profile traces, the block-boundary gates and the restraint
+boxes vanish — and meeting that at the same time as every other packaging failure
+makes both harder to diagnose. The script prints the rest of the usual suspects
+when it finishes.
+
+**The script's own guards are tested; the UAT invocation is not.** Nobody has run a
+successful package yet. Treat the first run as the test rather than as a build.
+
 ## Filing issues / proposing changes
 
 Open an issue describing the problem or idea before sending a PR for anything non-trivial — this is a solo-led project with a specific architectural philosophy, and it's better to align before you write code than after.
