@@ -60,7 +60,12 @@ enum class EAppMode
     Ride,
 };
 
-inline const char* ModeName(EAppMode M)
+// APP MODE, not just "mode" — this header is compiled into the engine
+// alongside a control panel that already has a local `ModeName` for the
+// PLC's key switch. A global that a local shadows is legal and is a trap:
+// it compiles, and the day somebody moves a line it silently means the
+// other thing.
+inline const char* AppModeName(EAppMode M)
 {
     switch (M)
     {

@@ -1443,6 +1443,25 @@ void ATUCoasterRide::PostEditChangeProperty(FPropertyChangedEvent& Event)
 		ApplyPresetTrainSetup(Preset);
 	}
 
+	// ===================== EDITS ARE A MODE QUESTION =====================
+	//
+	// CONSTRAINT 1, ONE LEVEL UP. A ride that is running is not a ride being
+	// edited, and an edit landing mid-lap would change the geometry under a
+	// train — which on a circuit means changing the track a train is standing on.
+	//
+	// REFUSED rather than deferred: applying it when the mode changes back would
+	// mean somebody's edit taking effect minutes later with no memory of having
+	// made it. The message says which mode to be in, because a field that
+	// silently reverts is indistinguishable from one that is broken.
+	if (!Session.EditsAllowed())
+	{
+		UE_LOG(LogTUEvents, Warning,
+			TEXT("edit refused: the ride is in %s. [Tab] back to BUILD to change the track."),
+			UTF8_TO_TCHAR(AppModeName(Session.Mode())));
+		Super::PostEditChangeProperty(Event);
+		return;
+	}
+
 	// Rebuild and redraw happen in OnConstruction, so a typed number gets an
 	// answer immediately — the drawn track, plus total length, continuity, where
 	// it ends up and whether it hits itself. The viewport stays a read-only
@@ -1567,6 +1586,11 @@ void ATUCoasterRide::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 		&ATUCoasterRide::FrameSelectedSegment);
 	PlayerInputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed, this,
 		&ATUCoasterRide::ClickDiagnostics);
+	// BUILD / OPERATE / RIDE. The mode decides the camera, the panels and whether
+	// edits are accepted at all — which is what makes it a mode rather than a
+	// label on a screen.
+	PlayerInputComponent->BindKey(EKeys::Tab, IE_Pressed, this,
+		&ATUCoasterRide::CycleAppMode);
 	PlayerInputComponent->BindKey(EKeys::MouseScrollUp, IE_Pressed, this,
 		&ATUCoasterRide::OrbitZoomIn);
 	PlayerInputComponent->BindKey(EKeys::MouseScrollDown, IE_Pressed, this,
@@ -1590,6 +1614,138 @@ void ATUCoasterRide::CycleCameraMode()
 	// Re-seed on the way in, so the free camera starts from wherever you were
 	// just looking rather than teleporting you somewhere unrecognisable.
 	bFreeInitialised = false;
+}
+
+void ATUCoasterRide::CycleAppMode()
+{
+	// BUILD to OPERATE to RIDE and back. Never asks, because nothing is
+	// discarded — the document is still open and still in memory, and a shell
+	// that asked here would train people to click straight through the dialog
+	// that matters. The session's own rules say so and are tested.
+	const EAppMode Now = Session.Mode();
+	EAppMode Want = EAppMode::Build;
+	if (Now == EAppMode::Build)        { Want = EAppMode::Operate; }
+	else if (Now == EAppMode::Operate) { Want = EAppMode::Ride; }
+
+	if (!Session.Enter(Want))
+	{
+		const char* Why = Session.WhyNotEnter(Want);
+		UE_LOG(LogTUEvents, Warning, TEXT("mode refused: %s"),
+			Why ? UTF8_TO_TCHAR(Why) : TEXT("unknown"));
+		return;
+	}
+
+	// THE MODE DECIDES THE VIEW, which is what makes it a mode rather than a
+	// label. Operate is the operator's console and the ride seen from outside;
+	// Ride is the seat; Build is the thing you are editing, framed.
+	switch (Want)
+	{
+	case EAppMode::Operate:
+		PanelView = ETUPanelView::Operator;
+		CameraMode = ETUCameraMode::Chase;
+		break;
+	case EAppMode::Ride:
+		PanelView = ETUPanelView::Off;
+		CameraMode = ETUCameraMode::Rider;
+		break;
+	default:
+		PanelView = ETUPanelView::Off;
+		CameraMode = ETUCameraMode::Orbit;
+		break;
+	}
+}
+// The drawing palette and its two primitives, HOISTED ABOVE EVERY PANEL THAT
+// USES THEM. There are four now — the mode banner, the profile graph, the
+// diagnostics list and the control panel — and a palette declared beside the
+// last one only compiles for the last one.
+//
+// Shared deliberately rather than duplicated: the panels are meant to look like
+// one instrument seen from different angles, and two copies of a colour drift
+// the first time somebody adjusts one.
+namespace
+{
+	// The drawing's own palette, so the panel and the splash are the same object
+	// seen twice. Near-black ground, amber for what is working, cyan for what is
+	// measured, red for what has stopped.
+	const FLinearColor PanelGround(0.043f, 0.055f, 0.067f, 0.92f);
+	const FLinearColor PanelRule(0.20f, 0.24f, 0.28f, 1.f);
+	const FLinearColor PanelText(0.72f, 0.78f, 0.82f, 1.f);
+	const FLinearColor PanelDim(0.42f, 0.47f, 0.52f, 1.f);
+	const FLinearColor PanelAmber(0.98f, 0.62f, 0.16f, 1.f);
+	const FLinearColor PanelCyan(0.35f, 0.74f, 1.00f, 1.f);
+	const FLinearColor PanelGreen(0.35f, 0.82f, 0.45f, 1.f);
+	const FLinearColor PanelRed(0.95f, 0.28f, 0.24f, 1.f);
+
+	void PanelTile(UCanvas* C, float X, float Y, float W, float H, const FLinearColor& Col)
+	{
+		FCanvasTileItem Tile(FVector2D(X, Y), FVector2D(W, H), Col);
+		Tile.BlendMode = SE_BLEND_Translucent;
+		C->DrawItem(Tile);
+	}
+
+	void PanelLabel(UCanvas* C, float X, float Y, const FString& S, const FLinearColor& Col)
+	{
+		FCanvasTextItem Item(FVector2D(X, Y), FText::FromString(S), GEngine->GetSmallFont(), Col);
+		Item.EnableShadow(FLinearColor::Black);
+		C->DrawItem(Item);
+	}
+
+	// What a zone IS, for the module heading. FTrackZone drops the kind because the
+	// physics does not care; the panel is the one place that has to say it.
+	const TCHAR* ZoneKindName(ETUSegmentZone Kind)
+	{
+		switch (Kind)
+		{
+		case ETUSegmentZone::Lift:          return TEXT("LIFT");
+		case ETUSegmentZone::Launch:        return TEXT("LAUNCH");
+		case ETUSegmentZone::Brake:         return TEXT("TRIM");
+		case ETUSegmentZone::BlockBrake:    return TEXT("BLOCK BRAKE");
+		case ETUSegmentZone::Station:       return TEXT("STATION");
+		case ETUSegmentZone::StationUnload: return TEXT("UNLOAD");
+		case ETUSegmentZone::StationLoad:   return TEXT("LOAD");
+		default:                            return TEXT("-");
+		}
+	}
+
+	const TCHAR* PhaseName(EStationPhase P)
+	{
+		switch (P)
+		{
+		case EStationPhase::Empty:     return TEXT("EMPTY");
+		case EStationPhase::Arriving:  return TEXT("ARRIVING");
+		case EStationPhase::Unloading: return TEXT("UNLOADING");
+		case EStationPhase::Loading:   return TEXT("LOADING");
+		case EStationPhase::Securing:  return TEXT("SECURING");
+		case EStationPhase::Ready:     return TEXT("READY");
+		default:                       return TEXT("DEPARTING");
+		}
+	}
+}
+
+
+void ATUCoasterRide::DrawModeBanner(UCanvas* Canvas)
+{
+	if (!Canvas || !GEngine) { return; }
+
+	// SMALL AND ALWAYS THERE. Not a title screen — the mode is a fact about what
+	// your keys do, and a person who cannot see it will press something and be
+	// surprised. `UI_CONVENTIONS`: hue is never the only channel, so the mode is
+	// spelled out rather than being a coloured border.
+	const TCHAR* Name = UTF8_TO_TCHAR(AppModeName(Session.Mode()));
+	const FLinearColor Ink = Session.EditsAllowed() ? PanelCyan : PanelAmber;
+
+	FString Line = FString::Printf(TEXT("  %s   [Tab] mode"), Name);
+	if (!Session.EditsAllowed())
+	{
+		// AND IT SAYS WHY THE EDITOR IS QUIET, because a panel that has simply
+		// stopped accepting numbers with no explanation is indistinguishable from
+		// a broken one.
+		Line += TEXT("   editing is off while the ride is running");
+	}
+	if (Session.IsDirty()) { Line += TEXT("   *unsaved"); }
+
+	PanelTile(Canvas, 10.f, 6.f, 8.f + Line.Len() * 6.2f, 18.f, PanelGround);
+	PanelLabel(Canvas, 12.f, 8.f, Line, Ink);
 }
 
 void ATUCoasterRide::ClickDiagnostics()
@@ -1796,65 +1952,6 @@ void ATUCoasterRide::EndPlay(const EEndPlayReason::Type Reason)
 	Super::EndPlay(Reason);
 }
 
-namespace
-{
-	// The drawing's own palette, so the panel and the splash are the same object
-	// seen twice. Near-black ground, amber for what is working, cyan for what is
-	// measured, red for what has stopped.
-	const FLinearColor PanelGround(0.043f, 0.055f, 0.067f, 0.92f);
-	const FLinearColor PanelRule(0.20f, 0.24f, 0.28f, 1.f);
-	const FLinearColor PanelText(0.72f, 0.78f, 0.82f, 1.f);
-	const FLinearColor PanelDim(0.42f, 0.47f, 0.52f, 1.f);
-	const FLinearColor PanelAmber(0.98f, 0.62f, 0.16f, 1.f);
-	const FLinearColor PanelCyan(0.35f, 0.74f, 1.00f, 1.f);
-	const FLinearColor PanelGreen(0.35f, 0.82f, 0.45f, 1.f);
-	const FLinearColor PanelRed(0.95f, 0.28f, 0.24f, 1.f);
-
-	void PanelTile(UCanvas* C, float X, float Y, float W, float H, const FLinearColor& Col)
-	{
-		FCanvasTileItem Tile(FVector2D(X, Y), FVector2D(W, H), Col);
-		Tile.BlendMode = SE_BLEND_Translucent;
-		C->DrawItem(Tile);
-	}
-
-	void PanelLabel(UCanvas* C, float X, float Y, const FString& S, const FLinearColor& Col)
-	{
-		FCanvasTextItem Item(FVector2D(X, Y), FText::FromString(S), GEngine->GetSmallFont(), Col);
-		Item.EnableShadow(FLinearColor::Black);
-		C->DrawItem(Item);
-	}
-
-	// What a zone IS, for the module heading. FTrackZone drops the kind because the
-	// physics does not care; the panel is the one place that has to say it.
-	const TCHAR* ZoneKindName(ETUSegmentZone Kind)
-	{
-		switch (Kind)
-		{
-		case ETUSegmentZone::Lift:          return TEXT("LIFT");
-		case ETUSegmentZone::Launch:        return TEXT("LAUNCH");
-		case ETUSegmentZone::Brake:         return TEXT("TRIM");
-		case ETUSegmentZone::BlockBrake:    return TEXT("BLOCK BRAKE");
-		case ETUSegmentZone::Station:       return TEXT("STATION");
-		case ETUSegmentZone::StationUnload: return TEXT("UNLOAD");
-		case ETUSegmentZone::StationLoad:   return TEXT("LOAD");
-		default:                            return TEXT("-");
-		}
-	}
-
-	const TCHAR* PhaseName(EStationPhase P)
-	{
-		switch (P)
-		{
-		case EStationPhase::Empty:     return TEXT("EMPTY");
-		case EStationPhase::Arriving:  return TEXT("ARRIVING");
-		case EStationPhase::Unloading: return TEXT("UNLOADING");
-		case EStationPhase::Loading:   return TEXT("LOADING");
-		case EStationPhase::Securing:  return TEXT("SECURING");
-		case EStationPhase::Ready:     return TEXT("READY");
-		default:                       return TEXT("DEPARTING");
-		}
-	}
-}
 
 // ===================== THE RIDE PROFILE, AS A GRAPH =====================
 //
@@ -2172,6 +2269,7 @@ void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/
 	//
 	// Drawn FIRST so the control panel, which is the operator's, is never
 	// obscured by the author's graph.
+	DrawModeBanner(Canvas);
 	DrawProfileGraph(Canvas);
 	DrawDiagnosticsPanel(Canvas);
 

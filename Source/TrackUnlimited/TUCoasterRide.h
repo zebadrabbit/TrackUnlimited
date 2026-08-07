@@ -24,6 +24,7 @@
 #include "Shell/GraphAxis.h"
 #include "Shell/DiagnosticsModel.h"
 #include "Shell/FirstRun.h"
+#include "Shell/SessionState.h"
 #include "TrackMesh/TrackSupports.h"
 #include "BlockSignal/ShowBus.h"
 #include "BlockSignal/SimDigest.h"
@@ -992,6 +993,31 @@ private:
 	 *  never the most urgent bug. Tested in Prototypes/Shell/CameraRig.h. */
 	FCameraRigs CameraRigs;
 	ETUCameraMode LastCameraMode = ETUCameraMode::Rider;
+
+	/**
+	 * OPERATE MODE, AND WHAT IT MEANS FOR THE REST OF THE APPLICATION.
+	 *
+	 * The generated control panel has existed since Phase 3 and has been a debug
+	 * overlay the whole time. Hosting it means BUILD and OPERATE become different
+	 * places rather than the same place with a key held down — and the difference
+	 * that actually matters is not which panel is up, it is that
+	 * `FSession::EditsAllowed()` is false in one of them.
+	 *
+	 * That is constraint 1 one level up: a ride that is running is not a ride
+	 * being edited, and an edit landing mid-lap would change the geometry under a
+	 * train. Structural rather than remembered — an edit arriving in Operate is
+	 * REFUSED, so a panel that forgot cannot corrupt a running ride.
+	 *
+	 * The session's rules are tested in Prototypes/Shell/SessionState.h.
+	 */
+	FSession Session;
+
+	/** [Tab] — Build to Operate and back. The camera, the panels and whether
+	 *  edits are accepted all follow from it, which is the point of a mode. */
+	void CycleAppMode();
+
+	/** What the shell is showing, for the mode banner. */
+	void DrawModeBanner(class UCanvas* Canvas);
 	void BuildDiagnostics();
 	void DrawDiagnosticsPanel(class UCanvas* Canvas);
 	void ToggleDiagnostics() { bShowDiagnostics = !bShowDiagnostics; }
