@@ -19,6 +19,7 @@
 #include "BlockSignal/SignalWatch.h"
 #include "BlockSignal/Evacuation.h"
 #include "BlockSignal/PlcUnit.h"
+#include "BlockSignal/ShowBus.h"
 #include "BlockSignal/SimDigest.h"
 #include "BlockSignal/StationProcess.h"
 #include "BlockSignal/TrackDrives.h"
@@ -672,6 +673,30 @@ private:
 
 	FSignalWatch StateWatch;
 	void LogTransitions();
+
+	/**
+	 * TIER 3'S INPUT, AND THE ONE THING IT GETS.
+	 *
+	 * Constraint 7's show layer is READ-ONLY to the ride: a train passes a
+	 * sensor, the DMX side is told, and nothing comes back. DMX512 agrees at the
+	 * wire level, being unidirectional by design with no return path.
+	 *
+	 * So this is a SUBSCRIBER, and it is run at the very end of the scan, after
+	 * the outputs are written and after the fingerprint is taken. That ordering
+	 * is the claim: everything hashed above is the ride, and this cannot reach
+	 * back into any of it. Asserted in test_twotrains.cpp — the same circuit with
+	 * and without the show layer is identical to the bit.
+	 *
+	 * The publisher owns its OWN FSignalWatch rather than sharing StateWatch's
+	 * channel range, on that header's advice: a collision between two consumers
+	 * of one range is silent and reads as a transition that never happened.
+	 *
+	 * Triggers are empty until something authors them, so this costs one edge
+	 * compare per channel and fires nothing.
+	 */
+	FShowPublisher ShowPublisher;
+	FShowBus ShowBus;
+	void PublishShowEvents();
 
 	// Operator -> maintenance -> off, on one key. Three states on the key that
 	// already showed the panel beats a second binding nobody remembers.

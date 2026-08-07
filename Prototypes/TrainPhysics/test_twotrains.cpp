@@ -27,6 +27,7 @@
 
 #include "../BlockSignal/RideSignals.h"
 #include "../BlockSignal/Evacuation.h"
+#include "../BlockSignal/ShowBus.h"
 #include "../BlockSignal/SimDigest.h"
 #include "../BlockSignal/StationProcess.h"
 #include "../BlockSignal/TrackDrives.h"
@@ -1116,6 +1117,13 @@ struct FRunResult
     // Where each train's whole body ended up, for the evacuation question.
     std::vector<double> FinalRearS;
     std::vector<double> FinalFrontS;
+
+    // Tier 3, if it was attached at all. Counted rather than kept, because the
+    // point of these is that the ride does not care: they must be able to be any
+    // number without the digest above moving by a bit.
+    std::size_t ShowEvents = 0;
+    std::size_t ShowFirings = 0;
+    std::size_t ShowInhibited = 0;
 };
 
 // The actor's tick, N trains, for Seconds of ride. One place, because the only
@@ -1125,7 +1133,8 @@ FRunResult RunTrains(std::size_t N, std::size_t Lookahead, double Seconds,
                      double EStopAtSeconds = -1.0,
                      const std::vector<FItem>* InItems = nullptr,
                      double InTrainLen = TrainLen,
-                     int DegradeZone = -1, double DegradeTo = 1.0)
+                     int DegradeZone = -1, double DegradeTo = 1.0,
+                     bool bShow = false)
 {
     const std::vector<FItem> Items = InItems != nullptr ? *InItems : Layout();
     const FCircuit Shape = BuildCircuitFrom(nullptr, Items);
@@ -1162,6 +1171,24 @@ FRunResult RunTrains(std::size_t N, std::size_t Lookahead, double Seconds,
 
     FTrackSensors Marks(C.StopMarkS);
     FTrackDrives Drives = OpenDrives(*Owned[0], C);
+    // TIER 3, and it is bolted on at the END of the scan on purpose — it reads
+    // outputs, so it belongs after they are written, which is the same read /
+    // execute / write order everything else here runs on.
+    FShowPublisher Show;
+    FShowBus Bus;
+    if (bShow)
+    {
+        // The card's own worked examples, one of each: a camera and a pyro on the
+        // same sensor, audio on a station phase, scenery on a block going
+        // occupied. One mechanism, different fixtures — which is the evidence the
+        // boundary is in the right place.
+        Bus.AddTrigger({1, ERideEventKind::SensorTrip,   1, 1, false});   // camera
+        Bus.AddTrigger({2, ERideEventKind::SensorTrip,   1, 1, true});    // pyro
+        Bus.AddTrigger({3, ERideEventKind::StationPhase, 0, static_cast<int>(EStationPhase::Loading), false});
+        Bus.AddTrigger({4, ERideEventKind::BlockState,   2, static_cast<int>(EBlockState::Occupied), false});
+        Bus.SetHazardPermissive(true);
+    }
+
     // A piece of hardware that does not deliver. Set on the DRIVE, before the run,
     // and never touched again — nothing here commands it differently and nothing
     // is told it is broken.
@@ -1304,6 +1331,35 @@ FRunResult RunTrains(std::size_t N, std::size_t Lookahead, double Seconds,
         for (std::size_t z = 0; z < Drives.Num(); ++z)
         {
             Digest.Add(Drives.Output(z));
+        }
+
+        // AFTER THE DIGEST, deliberately. Everything above is the ride; this is a
+        // subscriber to it, and the whole claim being asserted is that it cannot
+        // reach back. If it could, it would have to be hashed too.
+        if (bShow)
+        {
+            Show.BeginScan(static_cast<std::uint64_t>(F));
+            for (std::size_t k = 0; k < Sig.NumBlocks(); ++k)
+            {
+                Show.Observe(ERideEventKind::BlockState, static_cast<int>(k),
+                             static_cast<int>(Sig.GetState(k)));
+            }
+            for (std::size_t i = 0; i < Marks.Num(); ++i)
+            {
+                Show.Observe(ERideEventKind::SensorTrip, static_cast<int>(i),
+                             Marks.IsBlocked(i) ? 1 : 0);
+            }
+            for (std::size_t pi = 0; pi < Platforms.size(); ++pi)
+            {
+                Show.Observe(ERideEventKind::StationPhase, static_cast<int>(pi),
+                             static_cast<int>(Platforms[pi].Process.GetPhase()));
+            }
+            R.ShowEvents += Show.Scanned().size();
+            for (const FShowFiring& Fi : Bus.Deliver(Show.Scanned()))
+            {
+                ++R.ShowFirings;
+                if (Fi.bInhibited) { ++R.ShowInhibited; }
+            }
         }
     }
     R.Digest = Digest.Value();
@@ -1494,6 +1550,44 @@ void TestAFailedBrakeAndWhatDoesAndDoesNOTCatchIt()
                 " loaded it violates at %.1f s and the counter agrees;"
                 " sparse it circulates at %.1f m/s UNDETECTED\n",
                 Loaded.FirstViolation, Sparse.FinalSpeed[1]);
+}
+
+void TestTheRideIsIDENTICALWithTheShowLayerAbsent()
+{
+    // CONSTRAINT 7'S TIER 3 BOUNDARY, PROVEN RATHER THAN PROMISED.
+    //
+    // The claim on the card is that show is READ-ONLY to the ride — a train
+    // passes a sensor, the DMX side is told, and nothing comes back. DMX512
+    // agrees at the wire level: it is unidirectional by design with no return
+    // path. But "there is no method to call" is an argument from reading the
+    // code, and this project has been wrong that way before.
+    //
+    // FSimDigest is the instrument that turns it into a measurement. Two runs of
+    // the same circuit, one with the whole show layer attached and one without,
+    // hashing every train position, every block state and every drive output on
+    // all 57,600 scans. Identical, to the bit.
+    const FRunResult Dark = RunTrains(2, 1, 240.0);
+    const FRunResult Lit  = RunTrains(2, 1, 240.0, -1.0, nullptr, TrainLen, -1, 1.0, true);
+    assert(Lit.Digest == Dark.Digest);
+    assert(Lit.Violations == Dark.Violations);
+
+    // AND IT IS NOT A VACUOUS PASS. A show layer that fired nothing would satisfy
+    // the assertion above perfectly and prove nothing at all — the exact trap the
+    // envelope suite fell into. So the events and the firings are counted, and
+    // both have to be real.
+    assert(Lit.ShowEvents > 100);
+    assert(Lit.ShowFirings > 0);
+    assert(Dark.ShowEvents == 0);
+
+    // The pyro and the camera hang off the SAME sensor, so with the hazard
+    // permissive open every trip fires both — one mechanism, two fixtures, which
+    // is the evidence the boundary is drawn in the right place rather than around
+    // a special case.
+    assert(Lit.ShowInhibited == 0);          // the permissive was opened
+    assert(Lit.ShowFirings >= 2);
+
+    std::printf("  the show layer sees %zu events and fires %zu cues, and the ride"
+                " is bit-identical without it\n", Lit.ShowEvents, Lit.ShowFirings);
 }
 
 void TestSeveralHoldingDevicesInARowStaySeveral()
@@ -2299,6 +2393,7 @@ int main()
     TestTheCatchHoldsAFailedLaunchOnTheRealLayout();
     TestAHeldTrainParksInsideItsBlock();
     TestAFailedBrakeAndWhatDoesAndDoesNOTCatchIt();
+    TestTheRideIsIDENTICALWithTheShowLayerAbsent();
     TestSeveralHoldingDevicesInARowStaySeveral();
     TestADispatchWaitsForTheLaunchToBeArmed();
     TestTwoIndependentMeansOfKnowingAgreeOnEveryBlock();

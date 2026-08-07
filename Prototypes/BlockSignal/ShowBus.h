@@ -35,6 +35,8 @@
 
 #pragma once
 
+#include "SignalWatch.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -83,6 +85,74 @@ struct FShowFiring
     int Fixture = 0;
     std::uint64_t Scan = 0;
     bool bInhibited = false;   // matched, and the permissive was open
+};
+
+// WHAT PUBLISHES. The input side of the boundary, and the reason it is a class
+// rather than a loop in the caller is that there are two callers — the actor and
+// the test that proves the actor's policy — and the thing they must not disagree
+// about is exactly the edge rule.
+//
+// ONE FSignalWatch PER KIND, which is the SignalWatch header's own advice taken:
+// its channels are indices the caller allocates by hand, and a second consumer
+// sharing a range with the transition log would collide silently and read as a
+// phantom transition. Five watches cost five small vectors and cannot collide at
+// all.
+//
+// It only ever OBSERVES. There is no method here by which the ride can be asked
+// for anything either, so the dead end is a property of both halves rather than
+// of the bus alone.
+class FShowPublisher
+{
+public:
+    // Start a scan. The event list is cleared rather than accumulated, because
+    // a show bus consumes one scan's worth at a time and a caller that forgot to
+    // drain it should replay nothing rather than everything since the ride opened.
+    void BeginScan(std::uint64_t Scan)
+    {
+        Events.clear();
+        Current = Scan;
+    }
+
+    // Report a channel's state. An event is emitted only if it CHANGED, and the
+    // first observation of a channel is a seed — the same rule as the transition
+    // log and the block counter, and for the same reason: a detector with no
+    // baseline cannot tell "it moved" from "I have just started looking". Without
+    // it, every block, platform and drive fires its cue on frame one.
+    void Observe(ERideEventKind Kind, int Channel, int State)
+    {
+        FSignalWatch& W = Watch[static_cast<std::size_t>(Kind)];
+        if (!W.ChangedFrom(static_cast<std::size_t>(Channel), State))
+        {
+            return;
+        }
+        FRideEvent E;
+        E.Kind = Kind;
+        E.Channel = Channel;
+        E.From = W.Previous();
+        E.To = State;
+        E.Scan = Current;
+        Events.push_back(E);
+    }
+
+    // In the order they were observed, which is scan order. Never sorted — see
+    // FShowBus::Deliver.
+    const std::vector<FRideEvent>& Scanned() const { return Events; }
+
+    // A layout that has just gained or lost blocks has channels that no longer
+    // mean what they meant, so they seed again rather than reporting transitions
+    // that never happened.
+    void Rebuilt()
+    {
+        for (FSignalWatch& W : Watch) { W.Forget(); }
+    }
+
+private:
+    // Indexed by ERideEventKind. Sized by hand because the enum has no count
+    // member and inventing one to keep an array honest is worse than a static
+    // assert would be if the enum ever grew.
+    FSignalWatch Watch[5];
+    std::vector<FRideEvent> Events;
+    std::uint64_t Current = 0;
 };
 
 class FShowBus

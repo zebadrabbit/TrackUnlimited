@@ -643,6 +643,10 @@ void ATUCoasterRide::RebuildFromSegments()
 	// block from the channel 4 being watched, so every stale baseline is a
 	// transition that never happened — on most channels at once. Reseed.
 	StateWatch.Forget();
+	// And the show layer's own baseline, for the same reason: a layout that has
+	// just gained or lost blocks has channels that no longer mean what they meant,
+	// and carrying them across fires every cue on the rebuild.
+	ShowPublisher.Rebuilt();
 
 	FTrackDocument Doc;
 	Doc.HeartlineHeight = 1.1;
@@ -2513,6 +2517,49 @@ void ATUCoasterRide::DrawRestraints() const
 	}
 }
 
+void ATUCoasterRide::PublishShowEvents()
+{
+	// TIER 3'S ONE INTERFACE. Events out, fixture commands out the other side, and
+	// no path by which either can reach the ride — not because something checks,
+	// but because there is nowhere to name a train.
+	//
+	// The same three sources the panel draws from, because a cue that fired on
+	// something the operator could not see would be a fourth idea of the ride's
+	// state. Blocks, sensors, platforms: sensor -> pyro, sensor -> camera,
+	// station phase -> audio, block occupied -> scenery are all this one
+	// subscription with a different fixture on the end.
+	if (!Signals)
+	{
+		return;
+	}
+
+	ShowPublisher.BeginScan(ScanNumber);
+	for (std::size_t b = 0; b < Signals->NumBlocks(); ++b)
+	{
+		ShowPublisher.Observe(ERideEventKind::BlockState, static_cast<int>(b),
+			static_cast<int>(Signals->GetState(b)));
+	}
+	if (StopMarks)
+	{
+		for (std::size_t i = 0; i < StopMarks->Num(); ++i)
+		{
+			ShowPublisher.Observe(ERideEventKind::SensorTrip, static_cast<int>(i),
+				StopMarks->IsBlocked(i) ? 1 : 0);
+		}
+	}
+	for (int32 p = 0; p < Platforms.Num(); ++p)
+	{
+		ShowPublisher.Observe(ERideEventKind::StationPhase, p,
+			static_cast<int>(Platforms[p].Process.GetPhase()));
+	}
+
+	// Nothing authors triggers yet, so this delivers into an empty list and the
+	// return is dropped. That is the honest state of Tier 3 and it is deliberately
+	// visible here rather than hidden behind an `if (bShowEnabled)` — the wiring
+	// is what was missing, and a fixture layer plugs into this line.
+	ShowBus.Deliver(ShowPublisher.Scanned());
+}
+
 void ATUCoasterRide::LogTransitions()
 {
 	if (!bLogStateTransitions || !Signals || !Drives)
@@ -3306,6 +3353,13 @@ void ATUCoasterRide::SimStep(double DeltaSeconds)
 			SimFingerprint.Add(Drives->Output(z));
 		}
 	}
+
+	// TIER 3, LAST, AFTER THE FINGERPRINT IS TAKEN. That placement is the whole
+	// claim: everything hashed above is the ride, and the show layer is a
+	// subscriber to it that cannot reach back. Asserted rather than asserted-to —
+	// test_twotrains.cpp runs the same circuit with and without this and the two
+	// digests are equal to the bit.
+	PublishShowEvents();
 
 	// The Details-panel checkbox, so the stop can be tripped without playing. Read
 	// here rather than in a PostEditChangeProperty because it has to work in PIE.
