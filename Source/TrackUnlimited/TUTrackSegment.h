@@ -219,6 +219,14 @@ enum class ETUCameraMode : uint8
 	// point — standing beside the loop watching a train come through is a thing
 	// only a free camera can do.
 	Free UMETA(DisplayName = "Free (WASD, mouse, Q/E, Shift)"),
+
+	// Around a point, which is what you want while EDITING rather than watching.
+	// Free-fly is for going somewhere; orbit is for looking at the thing you are
+	// already at, and every 3D editor has both because neither does the other's
+	// job. [F] frames the whole track, and the framing arithmetic — which checks
+	// BOTH screen axes, and uses the bounding sphere so orbiting cannot lose the
+	// subject — is tested in Prototypes/Shell/CameraRig.h.
+	Orbit UMETA(DisplayName = "Orbit (drag to turn, wheel to zoom, F to frame)"),
 };
 
 USTRUCT(BlueprintType)

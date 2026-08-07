@@ -1534,6 +1534,17 @@ void ATUCoasterRide::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 	PlayerInputComponent->BindAxisKey(EKeys::MouseX, this, &ATUCoasterRide::AxisLookYaw);
 	PlayerInputComponent->BindAxisKey(EKeys::MouseY, this, &ATUCoasterRide::AxisLookPitch);
 
+	// ORBIT. [F] frames the whole track, which is the key you press constantly
+	// once a validation warning points somewhere and you have no idea where. The
+	// wheel zooms multiplicatively, so one notch means the same proportion of the
+	// distance at 10 m and at 1000 m.
+	PlayerInputComponent->BindKey(EKeys::F, IE_Pressed, this,
+		&ATUCoasterRide::FrameWholeTrack);
+	PlayerInputComponent->BindKey(EKeys::MouseScrollUp, IE_Pressed, this,
+		&ATUCoasterRide::OrbitZoomIn);
+	PlayerInputComponent->BindKey(EKeys::MouseScrollDown, IE_Pressed, this,
+		&ATUCoasterRide::OrbitZoomOut);
+
 	PlayerInputComponent->BindKey(EKeys::LeftShift, IE_Pressed, this,
 		&ATUCoasterRide::BoostOn);
 	PlayerInputComponent->BindKey(EKeys::LeftShift, IE_Released, this,
@@ -1546,11 +1557,39 @@ void ATUCoasterRide::CycleCameraMode()
 	{
 	case ETUCameraMode::Rider: CameraMode = ETUCameraMode::Chase; break;
 	case ETUCameraMode::Chase: CameraMode = ETUCameraMode::Free; break;
+	case ETUCameraMode::Free:  CameraMode = ETUCameraMode::Orbit; break;
 	default: CameraMode = ETUCameraMode::Rider; break;
 	}
 	// Re-seed on the way in, so the free camera starts from wherever you were
 	// just looking rather than teleporting you somewhere unrecognisable.
 	bFreeInitialised = false;
+}
+
+void ATUCoasterRide::FrameWholeTrack()
+{
+	// Walked rather than guessed: the frames the mesher already produces, swept
+	// into a bounding box. Nothing extra is integrated for this.
+	FCamBounds B;
+	for (const FTrackFrame& F : WalkTrack(Track, 2.0))
+	{
+		B.Add({F.Position.X, F.Position.Y, F.Position.Z});
+	}
+	if (!B.IsValid()) { return; }
+
+	// FOV from the camera itself, aspect from the viewport, because framing that
+	// checked one axis puts a long low layout off both sides of an ultrawide —
+	// and this project's layouts are all long and low.
+	double Aspect = 16.0 / 9.0;
+	if (GEngine && GEngine->GameViewport)
+	{
+		const FVector2D Size = GEngine->GameViewport->Viewport->GetSizeXY();
+		if (Size.Y > 0.f) { Aspect = static_cast<double>(Size.X / Size.Y); }
+	}
+	Orbit.Frame(B, Camera ? static_cast<double>(Camera->FieldOfView) : 90.0, Aspect);
+	bOrbitFramed = true;
+
+	UE_LOG(LogTemp, Log, TEXT("TrackUnlimited: framed %.0f m of track from %.0f m"),
+		Track.TotalLength(), Orbit.Distance);
 }
 
 void ATUCoasterRide::OnConstruction(const FTransform& Transform)
@@ -3849,9 +3888,39 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 
 		Camera->SetWorldLocationAndRotation(FreeLocation, FreeRotation.Quaternion());
 	}
+	else if (CameraMode == ETUCameraMode::Orbit)
+	{
+		// Around a point, which is what editing wants. Free-fly is for going
+		// somewhere; orbit is for looking at what you are already at.
+		//
+		// The state and the arithmetic are in Prototypes/Shell/CameraRig.h and
+		// are tested there — this converts at the same boundary as everything
+		// else, so the framing maths never learns which way round Unreal's Y is.
+		if (!bOrbitFramed) { FrameWholeTrack(); }
+
+		Orbit.AddYaw(LookYaw * 2.2);
+		Orbit.AddPitch(LookPitch * 2.2);           // clamped, not wrapped
+		Orbit.Pan(MoveRight * DeltaSeconds * 120.0, MoveUp * DeltaSeconds * 120.0);
+
+		const FCamVec P = Orbit.Position();
+		const FVector World = ToLocal(FVec3{P.X, P.Y, P.Z}) + GetActorLocation();
+		const FVector Focus = ToLocal(FVec3{Orbit.Focus.X, Orbit.Focus.Y, Orbit.Focus.Z})
+			+ GetActorLocation();
+		Camera->SetWorldLocationAndRotation(World, (Focus - World).Rotation().Quaternion());
+
+		// THE NEAR PLANE FOLLOWS THE CAMERA. A 90 m lift hill and a 2 cm bolt
+		// cannot share a fixed one: set it for the bolt and depth precision at the
+		// top of the hill is gone; set it for the hill and the restraint in front
+		// of a rider is clipped away.
+		const FDepthRange D = DepthRangeFor(Orbit.Distance, Orbit.Distance);
+		Camera->SetCustomNearClippingPlane(static_cast<float>(D.Near * MetresToUU));
+	}
 	else if (CameraMode == ETUCameraMode::Rider)
 	{
 		Camera->SetWorldLocationAndRotation(ToWorld(Frame.Position), Rotation);
+		// Centimetres in a seat, or the restraint in front of the rider is clipped
+		// off — the other end of the same trade the orbit camera makes.
+		Camera->SetCustomNearClippingPlane(static_cast<float>(0.02 * MetresToUU));
 	}
 	else
 	{
@@ -4048,13 +4117,29 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 		}
 
 		// Discoverable, because a keybinding nobody knows about does not exist.
-		const TCHAR* ModeName =
-			CameraMode == ETUCameraMode::Rider ? TEXT("rider")
-			: (CameraMode == ETUCameraMode::Chase ? TEXT("chase") : TEXT("free"));
-		GEngine->AddOnScreenDebugMessage(7, 0.f, FColor(120, 170, 200),
-			CameraMode == ETUCameraMode::Free
-				? FString::Printf(TEXT("[C] camera: free    WASD / Q E / mouse, Shift to hurry"))
-				: FString::Printf(TEXT("[C] camera: %s"), ModeName));
+		//
+		// Each mode names its OWN controls rather than sharing one line. A hint
+		// listing keys that do nothing in the mode you are actually in is worse
+		// than no hint, because it is the same amount of reading and then wrong.
+		FString CamLine;
+		switch (CameraMode)
+		{
+		case ETUCameraMode::Rider:
+			CamLine = TEXT("[C] camera: rider");
+			break;
+		case ETUCameraMode::Chase:
+			CamLine = TEXT("[C] camera: chase");
+			break;
+		case ETUCameraMode::Free:
+			CamLine = TEXT("[C] camera: free     WASD / Q E / mouse, Shift to hurry");
+			break;
+		default:
+			CamLine = FString::Printf(
+				TEXT("[C] camera: orbit    mouse to turn, wheel to zoom, [F] frames all  (%.0f m)"),
+				Orbit.Distance);
+			break;
+		}
+		GEngine->AddOnScreenDebugMessage(7, 0.f, FColor(120, 170, 200), CamLine);
 
 		// The ride's own worst case, alongside the current reading, so a number
 		// on screen means something without having to remember the whole lap.

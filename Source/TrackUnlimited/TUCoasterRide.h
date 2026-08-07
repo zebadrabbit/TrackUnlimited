@@ -20,6 +20,7 @@
 #include "BlockSignal/Evacuation.h"
 #include "BlockSignal/PlcUnit.h"
 #include "TrackMesh/TrackMesh.h"
+#include "Shell/CameraRig.h"
 #include "BlockSignal/ShowBus.h"
 #include "BlockSignal/SimDigest.h"
 #include "BlockSignal/StationProcess.h"
@@ -903,6 +904,26 @@ private:
 	// switching to it does not teleport you somewhere unrecognisable.
 	FVector FreeLocation = FVector::ZeroVector;
 	FRotator FreeRotation = FRotator::ZeroRotator;
+
+	/**
+	 * THE ORBIT CAMERA, whose arithmetic lives in Prototypes/Shell/CameraRig.h
+	 * and is tested there — this is only the wiring.
+	 *
+	 * Kept in the prototypes' own right-handed metres, and converted at the same
+	 * boundary everything else is, so the framing maths never has to know which
+	 * way round Unreal's Y is.
+	 */
+	FOrbitState Orbit;
+	bool bOrbitFramed = false;
+
+	/** [F] — frame the whole track. The thing you press constantly when a
+	 *  validation warning points somewhere and you have no idea where. */
+	void FrameWholeTrack();
+
+	/** Mouse wheel. Multiplicative, because the same notch has to mean the same
+	 *  proportion of the distance at 10 m and at 1000 m. */
+	void OrbitZoomIn() { Orbit.Zoom(0.9); }
+	void OrbitZoomOut() { Orbit.Zoom(1.0 / 0.9); }
 	bool bFreeInitialised = false;
 
 	// Axis values written by the input bindings and consumed by Tick.
