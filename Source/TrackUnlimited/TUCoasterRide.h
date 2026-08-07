@@ -129,6 +129,22 @@ public:
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Camera")
 	ETUCameraMode CameraMode = ETUCameraMode::Rider;
 
+	/**
+	 * Flip mouse Y.
+	 *
+	 * ORBIT AND FREE-FLY ALREADY DISAGREE, and that is a real convention rather
+	 * than an inconsistency to iron out: in orbit you are dragging the SUBJECT,
+	 * so pulling the mouse down swings the camera up over the top of it; in
+	 * free-fly you are turning your own HEAD, so pulling down looks down. Every
+	 * DCC tool and every flight sim respectively does it that way round.
+	 *
+	 * So the shipped default is not "no inversion anywhere" — it is each camera's
+	 * own convention, and this knob flips BOTH from there. One setting for the
+	 * whole application, because somebody who wants Y inverted wants it inverted.
+	 */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Camera")
+	bool bInvertLookY = false;
+
 	/** Chase only: how far behind the train to sit, in metres. */
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Camera",
 		meta = (ClampMin = "2.0", UIMax = "60.0",

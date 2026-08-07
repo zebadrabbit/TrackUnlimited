@@ -5383,8 +5383,11 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 			bFreeInitialised = true;
 		}
 
+		// FREE-FLY IS HEAD-TURNING: mouse down looks down, uninverted.
+		const float PitchSign = bInvertLookY ? -1.f : 1.f;
 		FreeRotation.Yaw += LookYaw * 2.2f;
-		FreeRotation.Pitch = FMath::Clamp(FreeRotation.Pitch + LookPitch * 2.2f, -87.f, 87.f);
+		FreeRotation.Pitch =
+			FMath::Clamp(FreeRotation.Pitch + LookPitch * 2.2f * PitchSign, -87.f, 87.f);
 		FreeRotation.Roll = 0.f; // a free camera that rolls is a lost camera
 
 		const FVector Forward = FreeRotation.Vector();
@@ -5406,7 +5409,11 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 		if (!bOrbitFramed) { FrameWholeTrack(); }
 
 		Orbit.AddYaw(LookYaw * 2.2);
-		Orbit.AddPitch(LookPitch * 2.2);           // clamped, not wrapped
+		// ORBIT IS SUBJECT-DRAGGING, SO PITCH IS NEGATED. You are pulling the
+		// thing you are looking at, not turning your head: mouse down swings the
+		// camera up and over the top of the subject, which is what every DCC tool
+		// does and what the raw axis did backwards.
+		Orbit.AddPitch(-LookPitch * 2.2 * (bInvertLookY ? -1.0 : 1.0));   // clamped, not wrapped
 		Orbit.Pan(MoveRight * DeltaSeconds * 120.0, MoveUp * DeltaSeconds * 120.0);
 
 		const FCamVec P = Orbit.Position();
