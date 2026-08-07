@@ -682,7 +682,12 @@ void ATUCoasterRide::RebuildFromSegments()
 	// Validate the AUTHORED list before building anything from it — the whole
 	// reason TrackValidate exists is that the geometry cannot tell you a radius
 	// was typed into a curvature field, it can only produce the consequences.
-	for (const FTrackDiagnostic& D : ValidateTrack(BuildSegments(Doc)))
+	//
+	// KEPT, not only logged. The findings have been correct since Phase 0 and
+	// invisible outside a log for just as long; the panel is what makes them
+	// somewhere to go rather than something to scroll back for.
+	LastDiagnostics = ValidateTrack(BuildSegments(Doc));
+	for (const FTrackDiagnostic& D : LastDiagnostics)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("Track segment %d: %s"),
 			static_cast<int32>(D.SegmentIndex), UTF8_TO_TCHAR(D.Message.c_str()));
@@ -1418,6 +1423,11 @@ void ATUCoasterRide::RebuildFromSegments()
 	// 1.7 m above the bottom of the spine. Built here rather than beside
 	// DrawTrack so both the editor preview and BeginPlay get it from one place.
 	RebuildTrackMesh();
+
+	// AFTER everything else, because it reads the ride profile and the derived
+	// blocks as well as the validator — and a panel showing findings about a
+	// track that has just been replaced is worse than an empty one.
+	BuildDiagnostics();
 }
 
 #if WITH_EDITOR
@@ -1548,6 +1558,8 @@ void ATUCoasterRide::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 		&ATUCoasterRide::CycleProfileChannel);
 	PlayerInputComponent->BindKey(EKeys::H, IE_Pressed, this,
 		&ATUCoasterRide::ToggleProfileGraph);
+	PlayerInputComponent->BindKey(EKeys::V, IE_Pressed, this,
+		&ATUCoasterRide::ToggleDiagnostics);
 	PlayerInputComponent->BindKey(EKeys::MouseScrollUp, IE_Pressed, this,
 		&ATUCoasterRide::OrbitZoomIn);
 	PlayerInputComponent->BindKey(EKeys::MouseScrollDown, IE_Pressed, this,
@@ -1765,6 +1777,148 @@ namespace
 // Every number comes from `GraphAxis.h`, which is tested: nice-number ticks, a
 // range grown to a multiple of the step, zero kept on screen for signed
 // channels, and a scrubber that round-trips.
+// ===================== THE DIAGNOSTICS PANEL =====================
+//
+// `TrackValidate.h` has produced exactly the right data since Phase 0 and none of
+// it has ever been visible outside a log. This is the log becoming a panel.
+//
+// The rules it draws by are in `Prototypes/Shell/DiagnosticsModel.h` and are
+// tested there: severity then LOCATION, whole-ride statements last, height called
+// out on its own row saying LOW or HIGH, and a stalled ride hiding every derived
+// number.
+//
+// REPORT, NEVER REPAIR — IN THE UI TOO. There is no fix button and nowhere to put
+// one: a row has a place to GO and no action to TAKE. Measured rather than
+// principled — clamping a degenerate arc to a straight yields a plausible 1.00 g
+// and a clean continuity pass, which is worse than visible breakage.
+void ATUCoasterRide::BuildDiagnostics()
+{
+	Diagnostics.Clear();
+
+	// The validator's own findings, verbatim. Its messages already name fields
+	// and quantities, so rewording them here would be a second voice saying
+	// nearly the same thing.
+	for (const FTrackDiagnostic& D : LastDiagnostics)
+	{
+		FDiagTarget T;
+		T.Segment = static_cast<int>(D.SegmentIndex);
+		Diagnostics.Add(D.bIsError ? EDiagSeverity::Error : EDiagSeverity::Warning,
+			"Geometry", D.Message, T);
+	}
+
+	// Closure, with HEIGHT on its own row. The vertical slice shipped 8.5 m low
+	// because plan view looked closed, and one combined number hides exactly that.
+	if (!bTrackIsCircuit)
+	{
+		const FTrackFrame A = Track.EvaluateAt(0.0);
+		const FTrackFrame B = Track.EvaluateAt(Track.TotalLength());
+		Diagnostics.AddClosure(B.Position.X - A.Position.X,
+			B.Position.Y - A.Position.Y,
+			B.Position.Z - A.Position.Z, 0.05);
+	}
+
+	// The ride itself, and a stall hides every number derived from a run that did
+	// not happen.
+	double Top = 0.0, PeakG = 0.0, PeakAt = 0.0, Lap = 0.0;
+	for (const FRideSample& S : Profile_.Samples)
+	{
+		Top = FMath::Max(Top, S.Speed);
+		if (FMath::Abs(S.VerticalG) > FMath::Abs(PeakG)) { PeakG = S.VerticalG; PeakAt = S.S; }
+		Lap = S.Time;
+	}
+	Diagnostics.AddRideProfile(Profile_.bCompleted, Profile_.StalledAtS,
+		Top, PeakG, PeakAt, Lap);
+
+	// Support placement, which refuses more than it places on a layout with a
+	// helix — and the hole its refusals leave is the number an engineer asks for.
+	if (bShowSupportFindings)
+	{
+		std::vector<FMeshFinding> Ignored;
+		const FSupportPlan Plan = PlanSupports(WalkTrack(Track, 1.0),
+			Track.GetHeartlineHeight(), Profile, FSupportSettings(),
+			FlatGround(-GroundOffsetM));
+		for (const FSupportFinding& F : Plan.Finding)
+		{
+			FDiagTarget T;
+			T.S = F.S;
+			Diagnostics.Add(EDiagSeverity::Warning, "Structure",
+				FString::Printf(TEXT("%s (%.0f m of track)"),
+					UTF8_TO_TCHAR(F.What.c_str()), F.LengthM()), T);
+		}
+		if (Plan.LongestGapM > 0.0)
+		{
+			Diagnostics.Add(EDiagSeverity::Info, "Structure",
+				FString::Printf(TEXT("%d supports, longest unsupported run %.1f m"),
+					static_cast<int32>(Plan.Leg.size()), Plan.LongestGapM));
+		}
+	}
+
+	Diagnostics.Sort();
+}
+
+void ATUCoasterRide::DrawDiagnosticsPanel(UCanvas* Canvas)
+{
+	if (!bShowDiagnostics || !Canvas || !GEngine) { return; }
+
+	const float W = 620.f;
+	const float Row = 14.f;
+	const int32 Shown = FMath::Min(static_cast<int32>(Diagnostics.Num()), 14);
+	const float H = 26.f + Row * FMath::Max(Shown, 1);
+	const float Ox = Canvas->SizeX - W - 20.f;
+	const float Oy = 20.f;
+
+	PanelTile(Canvas, Ox - 8.f, Oy - 8.f, W + 16.f, H + 16.f, PanelGround);
+	PanelLabel(Canvas, Ox, Oy,
+		FString::Printf(TEXT("DIAGNOSTICS   %s   [V] hide"),
+			UTF8_TO_TCHAR(Diagnostics.Summary().c_str())),
+		Diagnostics.HasErrors() ? PanelRed : PanelDim);
+
+	if (Diagnostics.Num() == 0)
+	{
+		// Empty states say what to DO, not what is absent — FirstRun.h owns the
+		// words so every panel's is written once and in the same voice.
+		PanelLabel(Canvas, Ox, Oy + 22.f,
+			UTF8_TO_TCHAR(EmptyStateFor(EPanelKind::Diagnostics)), PanelDim);
+		return;
+	}
+
+	float Y = Oy + 20.f;
+	for (int32 i = 0; i < Shown; ++i)
+	{
+		const FDiagRow& R = Diagnostics.At(static_cast<std::size_t>(i));
+		const FLinearColor Ink = R.Severity == EDiagSeverity::Error ? PanelRed
+			: (R.Severity == EDiagSeverity::Warning ? PanelAmber : PanelDim);
+
+		// HUE IS NEVER THE ONLY CHANNEL — UI_CONVENTIONS. A severity glyph carries
+		// the same fact as the colour, so the panel still reads in grey-scale and
+		// to somebody who does not separate red from amber.
+		const TCHAR* Mark = R.Severity == EDiagSeverity::Error ? TEXT("!!")
+			: (R.Severity == EDiagSeverity::Warning ? TEXT(" !") : TEXT("  "));
+
+		// AND WHERE IT IS, because a finding without a place is trivia. Once
+		// there is a selection to drive, this column becomes the click target.
+		FString Where;
+		if (R.Target.S >= 0.0)            { Where = FString::Printf(TEXT("%6.0fm"), R.Target.S); }
+		else if (R.Target.Segment >= 0)   { Where = FString::Printf(TEXT("  seg%d"), R.Target.Segment); }
+		else                              { Where = TEXT("      "); }
+
+		PanelLabel(Canvas, Ox, Y, FString::Printf(TEXT("%s %s  %s"),
+			Mark, *Where, UTF8_TO_TCHAR(R.Text.c_str())), Ink);
+		Y += Row;
+	}
+
+	if (Diagnostics.Num() > static_cast<std::size_t>(Shown))
+	{
+		// NO SILENT TRUNCATION. A list that stopped at fourteen without saying so
+		// reads as "that is all of them", which is the one thing a diagnostics
+		// panel must never imply.
+		PanelLabel(Canvas, Ox, Y,
+			FString::Printf(TEXT("   ... and %d more"),
+				static_cast<int32>(Diagnostics.Num()) - Shown), PanelDim);
+	}
+}
+
+
 void ATUCoasterRide::DrawProfileGraph(UCanvas* Canvas)
 {
 	if (!bShowProfileGraph || !Canvas || !GEngine) { return; }
@@ -1912,6 +2066,7 @@ void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/
 	// Drawn FIRST so the control panel, which is the operator's, is never
 	// obscured by the author's graph.
 	DrawProfileGraph(Canvas);
+	DrawDiagnosticsPanel(Canvas);
 
 	if (PanelView == ETUPanelView::Off || !Canvas || !Signals || !Drives || !GEngine)
 	{

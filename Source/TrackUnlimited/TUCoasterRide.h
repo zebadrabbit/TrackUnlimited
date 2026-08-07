@@ -22,6 +22,9 @@
 #include "TrackMesh/TrackMesh.h"
 #include "Shell/CameraRig.h"
 #include "Shell/GraphAxis.h"
+#include "Shell/DiagnosticsModel.h"
+#include "Shell/FirstRun.h"
+#include "TrackMesh/TrackSupports.h"
 #include "BlockSignal/ShowBus.h"
 #include "BlockSignal/SimDigest.h"
 #include "BlockSignal/StationProcess.h"
@@ -936,6 +939,29 @@ private:
 	ETUProfileChannel ProfileChannel = ETUProfileChannel::VerticalG;
 
 	void DrawProfileGraph(class UCanvas* Canvas);
+
+	/**
+	 * THE DIAGNOSTICS PANEL. TrackValidate has produced exactly the right data
+	 * since Phase 0 and none of it has ever been visible outside a log.
+	 *
+	 * The rules it draws by live in Prototypes/Shell/DiagnosticsModel.h and are
+	 * tested there. REPORT, NEVER REPAIR applies here too: a row has a place to
+	 * GO and no action to TAKE, and there is nowhere to put a fix button.
+	 */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Diagnostics")
+	bool bShowDiagnostics = true;
+
+	/** Support placement refuses more than it places on a layout with a helix,
+	 *  and those refusals are the point — but they are noise while somebody is
+	 *  still shaping the track, so they are opt-in. */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Diagnostics")
+	bool bShowSupportFindings = false;
+
+	FDiagnostics Diagnostics;
+	std::vector<FTrackDiagnostic> LastDiagnostics;
+	void BuildDiagnostics();
+	void DrawDiagnosticsPanel(class UCanvas* Canvas);
+	void ToggleDiagnostics() { bShowDiagnostics = !bShowDiagnostics; }
 	void CycleProfileChannel();
 	void ToggleProfileGraph() { bShowProfileGraph = !bShowProfileGraph; }
 
