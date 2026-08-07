@@ -1165,6 +1165,22 @@ private:
 	 * the operator's controls win the rest of the time.
 	 */
 	bool IsTypingInField() const { return FocusedField != EEditField::Count; }
+
+	/**
+	 * [ and ] — STEP THE SELECTION, and show where it went.
+	 *
+	 * Clicking a row was the only way to move the selection, which is fine when
+	 * you know the index and useless when finding it is the whole problem. The
+	 * arc-length column answers "where is segment 12"; this answers "walk me
+	 * along until I recognise it".
+	 *
+	 * IT FRAMES ONLY IN ORBIT. Yanking the camera off a train mid-lap because
+	 * somebody pressed a bracket is a worse surprise than not moving — and orbit
+	 * is the mode where looking at the layout is what you are doing.
+	 */
+	void StepSelection(int32 Delta);
+	void SelectPrevSegment() { StepSelection(-1); }
+	void SelectNextSegment() { StepSelection(+1); }
 	void KeyBackspace();
 	void KeyPeriod();
 

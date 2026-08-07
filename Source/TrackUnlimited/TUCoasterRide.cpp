@@ -1713,6 +1713,12 @@ void ATUCoasterRide::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 	// a digit key IS typed entry rather than a stepper wearing its name.
 	PlayerInputComponent->BindKey(EKeys::B, IE_Pressed, this,
 		&ATUCoasterRide::ToggleSegmentEditor);
+	// [ and ] walk the selection, and frame it in orbit — the answer to "which
+	// index is that piece", which the list could not previously give.
+	PlayerInputComponent->BindKey(EKeys::LeftBracket, IE_Pressed, this,
+		&ATUCoasterRide::SelectPrevSegment);
+	PlayerInputComponent->BindKey(EKeys::RightBracket, IE_Pressed, this,
+		&ATUCoasterRide::SelectNextSegment);
 	PlayerInputComponent->BindKey(EKeys::Enter, IE_Pressed, this,
 		&ATUCoasterRide::CommitField);
 	PlayerInputComponent->BindKey(EKeys::Escape, IE_Pressed, this,
@@ -1830,7 +1836,7 @@ void ATUCoasterRide::DrawSegmentEditor(UCanvas* Canvas)
 	EditorRowField.Reset();
 
 	const float Row = 15.f;
-	const float W = 320.f;
+	const float W = 380.f;   // wider since a row now carries arc length and a zone tag
 
 	// LOWER RIGHT, because it is the only corner nothing else wants. The upper
 	// left is the telemetry readout's and this drew straight over it; the upper
@@ -1875,17 +1881,40 @@ void ATUCoasterRide::DrawSegmentEditor(UCanvas* Canvas)
 	const int32 First = FMath::Max(0, FMath::Min(SelectedSegment - Window / 2,
 		Segments.Num() - Window));
 	const int32 Last = FMath::Min(Segments.Num(), First + Window);
+
+	// WHERE, AND NOT ONLY WHAT. A row that says only its kind and its length
+	// cannot be matched to anything else on the screen, and the question somebody
+	// actually has is the reverse of the one the list answers: not "what is
+	// segment 12" but "which index is the piece I am looking at".
+	//
+	// Arc length is what makes that answerable, because it is the coordinate
+	// everything else here already uses — the ride-profile graph is plotted
+	// against S, its scrubber reads out in S, every diagnostics row carries S,
+	// and REFERENCE_LAYOUT.md publishes its zones as S ranges. Without this
+	// column the only way across was to select an index, press [Z], and look.
+	//
+	// The zone tag is the other half: adding a brake means finding somewhere that
+	// is not already a device, and a list that did not say which segments are
+	// devices made that a second pass through the Details panel.
+	double SAt = 0.0;
+	for (int32 i = 0; i < FMath::Max(0, First); ++i)
+	{
+		SAt += static_cast<double>(Segments[i].Length);
+	}
 	for (int32 i = FMath::Max(0, First); i < Last; ++i)
 	{
 		EditorRowRects.Add(FVector4(Ox, Y, Ox + W, Y + Row));
 		EditorRowField.Add(-1000 - i);
 		const bool bSel = i == SelectedSegment;
 		if (bSel) { PanelTile(Canvas, Ox - 4.f, Y - 1.f, W + 8.f, Row, PanelRule); }
+		const bool bDevice = Segments[i].Zone != ETUSegmentZone::None;
 		PanelLabel(Canvas, Ox + 4.f, Y,
-			FString::Printf(TEXT("%2d  %s  %.1f m"), i,
+			FString::Printf(TEXT("%2d  %-8s %6.1f m  @%.0f  %s"), i,
 				*UEnum::GetDisplayValueAsText(Segments[i].Kind).ToString(),
-				Segments[i].Length),
-			bSel ? PanelCyan : PanelText);
+				Segments[i].Length, SAt,
+				bDevice ? ZoneKindName(Segments[i].Zone) : TEXT("")),
+			bSel ? PanelCyan : (bDevice ? PanelAmber : PanelText));
+		SAt += static_cast<double>(Segments[i].Length);
 		Y += Row;
 	}
 	if (Segments.Num() > Window)
@@ -2410,6 +2439,30 @@ void ATUCoasterRide::ClickDiagnostics()
 			CameraMode = ETUCameraMode::Orbit;
 		}
 		return;
+	}
+}
+
+void ATUCoasterRide::StepSelection(int32 Delta)
+{
+	if (Segments.Num() == 0) { return; }
+
+	// NOT WHILE TYPING. A bracket is not a digit, so nothing would be corrupted —
+	// but moving the selection out from under a half-entered number and then
+	// applying it on Enter would write it to the wrong segment, which is the one
+	// outcome this panel must never produce.
+	if (IsTypingInField()) { return; }
+
+	// WRAPS, because the layouts are rings as often as not and a selection that
+	// stopped dead at segment 0 would make walking backwards past the station
+	// impossible on exactly the presets where it is most wanted.
+	const int32 N = Segments.Num();
+	SelectedSegment = SelectedSegment < 0
+		? (Delta > 0 ? 0 : N - 1)
+		: ((SelectedSegment + Delta) % N + N) % N;
+
+	if (CameraMode == ETUCameraMode::Orbit)
+	{
+		FrameSelectedSegment();
 	}
 }
 
