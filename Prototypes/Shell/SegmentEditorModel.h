@@ -83,8 +83,14 @@ inline const char* FieldName(EEditField F)
     }
 }
 
-// UNITS ARE ALWAYS SHOWN — `UI_CONVENTIONS.md`. Authored fields stay in the
-// model's own metres and degrees and are NEVER converted on the way in, which is
+// UNITS ARE ALWAYS SHOWN WHERE THERE IS ONE — `UI_CONVENTIONS.md`.
+//
+// `Turns` is the exception and it is a real one rather than an oversight: a count
+// is DIMENSIONLESS, and "2.5 turns turns" is what putting a unit on it produces.
+// So the rule is that every field with a DIMENSION carries its unit, which the
+// first-run suite asserts by walking this list.
+//
+// Authored fields stay in the model's own metres and degrees and are NEVER converted on the way in, which is
 // the same rule the save format follows and what makes an imperial display a
 // display-layer change later.
 inline const char* FieldUnit(EEditField F)
