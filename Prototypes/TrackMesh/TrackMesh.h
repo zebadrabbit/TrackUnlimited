@@ -117,6 +117,16 @@ struct FMeshSettings
     double TextureMetres = 1.0;
 
     bool bTies = true;
+
+    // Close the open ends of the rails and the spine.
+    //
+    // OFF FOR A CIRCUIT, and that is the caller's to know rather than the
+    // sweep's: on a closed layout the first ring and the last are the same ring,
+    // so a cap is a disc buried inside the seam — invisible, and coplanar with
+    // the geometry either side of it, which is what z-fighting is made of.
+    //
+    // Ties are capped regardless. A strut has two free ends by definition.
+    bool bCapEnds = true;
 };
 
 // A problem found while sweeping. REPORTED, NEVER REPAIRED — the rule this
@@ -160,8 +170,56 @@ inline FVec3 Normalised(const FVec3& V)
 // would run the texture backwards across one quad of every tube on the ride —
 // which looks like a smear rather than like a bug, and is the reason this is
 // spelled out rather than assumed.
+// A flat disc closing one end of a tube.
+//
+// ITS OWN VERTICES, ALWAYS. The cap's normal is the axis and the wall's is
+// radial, so sharing the rim would average the two and put a shading smear
+// around every end on the ride. Duplicating a ring is the cheap half of the same
+// reason the UV seam duplicates one.
+//
+// `Outward` decides the WINDING, not just the normal. The rim runs anticlockwise
+// about AxisA x AxisB, and whether that is anticlockwise about `Outward` is what
+// says which way round the fan goes — get it backwards and the cap is invisible
+// under backface culling with every vertex in exactly the right place, which is
+// the same failure the side wall already carries an assertion for.
+inline void CapRing(FMeshBuffer& Out, const FTubeRing& R, double Radius,
+                    int Sides, const FVec3& Outward)
+{
+    if (Sides < 3)
+    {
+        return;
+    }
+    const std::uint32_t Centre = static_cast<std::uint32_t>(Out.Position.size());
+    Out.Position.push_back(R.Centre);
+    Out.Normal.push_back(Outward);
+    Out.UV.push_back({0.5, 0.5});
+
+    for (int j = 0; j < Sides; ++j)
+    {
+        const double Theta = TrackMeshTwoPi * static_cast<double>(j) / static_cast<double>(Sides);
+        const FVec3 N = R.AxisA * std::cos(Theta) + R.AxisB * std::sin(Theta);
+        Out.Position.push_back(R.Centre + N * Radius);
+        Out.Normal.push_back(Outward);
+        // Planar over the disc rather than the tube's along-and-around, because
+        // a cap is not part of the run of the material — carrying the wall's U
+        // here would stretch one texture repeat across the whole end face.
+        Out.UV.push_back({0.5 + 0.5 * std::cos(Theta), 0.5 + 0.5 * std::sin(Theta)});
+    }
+
+    const bool bFlip = Dot(Cross(R.AxisA, R.AxisB), Outward) < 0.0;
+    for (int j = 0; j < Sides; ++j)
+    {
+        const std::uint32_t A = Centre + 1 + static_cast<std::uint32_t>(j);
+        const std::uint32_t B = Centre + 1 + static_cast<std::uint32_t>((j + 1) % Sides);
+        Out.Index.push_back(Centre);
+        if (bFlip) { Out.Index.push_back(B); Out.Index.push_back(A); }
+        else       { Out.Index.push_back(A); Out.Index.push_back(B); }
+    }
+}
+
 inline void SweepTube(FMeshBuffer& Out, const std::vector<FTubeRing>& Rings,
-                      double Radius, int Sides, double TextureMetres)
+                      double Radius, int Sides, double TextureMetres,
+                      bool bCapStart = false, bool bCapEnd = false)
 {
     if (Rings.size() < 2 || Sides < 3)
     {
@@ -208,6 +266,22 @@ inline void SweepTube(FMeshBuffer& Out, const std::vector<FTubeRing>& Rings,
             Out.Index.push_back(A); Out.Index.push_back(D); Out.Index.push_back(C);
         }
     }
+
+    // THE END AXIS COMES FROM THE ADJACENT RING, not from the chord between the
+    // two ends. On a strut they are the same; on a rail they are not, and an
+    // out-and-back's two ends sit near each other pointing opposite ways — the
+    // chord there is nearly zero and points nowhere useful.
+    if (bCapStart)
+    {
+        const FVec3 Axis = Normalised(Rings.front().Centre - Rings[1].Centre);
+        if (Length(Axis) > 0.0) { CapRing(Out, Rings.front(), Radius, Sides, Axis); }
+    }
+    if (bCapEnd)
+    {
+        const std::size_t N = Rings.size();
+        const FVec3 Axis = Normalised(Rings[N - 1].Centre - Rings[N - 2].Centre);
+        if (Length(Axis) > 0.0) { CapRing(Out, Rings[N - 1], Radius, Sides, Axis); }
+    }
 }
 
 // A straight strut between two points, as a two-ring tube. Ties are built from
@@ -242,7 +316,11 @@ inline void SweepStrut(FMeshBuffer& Out, const FVec3& From, const FVec3& To,
     std::vector<FTubeRing> Rings(2);
     Rings[0] = {From, A, B, 0.0};
     Rings[1] = {To, A, B, L};
-    SweepTube(Out, Rings, Radius, Sides, 1.0);
+    // CAPPED AT BOTH ENDS, ALWAYS. A strut has two free ends by definition —
+    // unlike a rail, which may close on itself — and an uncapped one is a length
+    // of open pipe. It is the most visible instance of it too, because a tie is
+    // short enough that both ends are in shot at once.
+    SweepTube(Out, Rings, Radius, Sides, 1.0, true, true);
 }
 
 // THE ONLY THING HERE THAT TOUCHES AN FTrack, and it walks with AdvanceFrom.
@@ -346,9 +424,11 @@ inline FTrackMesh BuildTrackMesh(const std::vector<FTrackFrame>& Path, double He
         }
     }
 
-    SweepTube(Mesh.Rails, Left, RailRadius, Settings.Sides, Settings.TextureMetres);
-    SweepTube(Mesh.Rails, Right, RailRadius, Settings.Sides, Settings.TextureMetres);
-    SweepTube(Mesh.Spine, Spine, Profile.SpineDiameter * 0.5, Settings.Sides, Settings.TextureMetres);
+    const bool bCap = Settings.bCapEnds;
+    SweepTube(Mesh.Rails, Left, RailRadius, Settings.Sides, Settings.TextureMetres, bCap, bCap);
+    SweepTube(Mesh.Rails, Right, RailRadius, Settings.Sides, Settings.TextureMetres, bCap, bCap);
+    SweepTube(Mesh.Spine, Spine, Profile.SpineDiameter * 0.5, Settings.Sides,
+              Settings.TextureMetres, bCap, bCap);
 
     // TIES ARE A SPACING, NOT A PLACEMENT — TrackProfile.h's own note, and this
     // is the meshing layer finally having the opinion it said belonged here.

@@ -4457,6 +4457,16 @@ void ATUCoasterRide::RebuildTrackMesh()
 	Settings.SampleSpacing = MeshSampleSpacingM;
 	Settings.Sides = MeshSides;
 
+	// CAP THE OPEN ENDS, AND ONLY IF THERE ARE ANY. On a circuit the first ring
+	// and the last are the same ring, so a cap is a disc buried in the seam —
+	// invisible, and coplanar with the geometry either side of it, which is what
+	// z-fighting is made of.
+	//
+	// bTrackIsCircuit is MEASURED at rebuild rather than authored, so this
+	// follows the geometry rather than somebody's intent. Ties are capped either
+	// way: a strut has two free ends whatever the layout does.
+	Settings.bCapEnds = !bTrackIsCircuit;
+
 	// The walk is the ONLY thing that touches the track, and it walks with
 	// AdvanceFrom. The sweep below has no FTrack at all, which is what makes the
 	// O(n^2) trap unreachable rather than merely discouraged — see TrackMesh.h.

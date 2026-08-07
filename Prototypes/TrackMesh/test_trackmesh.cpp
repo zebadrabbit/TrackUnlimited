@@ -14,6 +14,9 @@
 #include <algorithm>
 #include <cstdio>
 #include <vector>
+#include <map>
+#include <tuple>
+#include <utility>
 
 namespace
 {
@@ -135,7 +138,16 @@ void TestASweptRailIsExactlyItsOwnRadiusEverywhere()
     const int Cols = S.Sides + 1;
     double Worst = 0.0;
 
-    // Two rails, laid down in order, so the left rail's rings come first.
+    // Two rails, laid down in order, so the left rail's rings come first — and
+    // then its two CAPS, which is a stride this test has to count rather than
+    // assume. A cap is a centre plus one vertex per side, and it lands between
+    // the left rail's rings and the right's; ignoring it walks straight into the
+    // next rail's vertices and measures them against the wrong axis.
+    const std::size_t RingVerts = Path.size() * static_cast<std::size_t>(Cols);
+    const std::size_t CapVerts =
+        S.bCapEnds ? 2 * (1 + static_cast<std::size_t>(S.Sides)) : 0;
+    const std::size_t RailStride = RingVerts + CapVerts;
+
     for (std::size_t r = 0; r < 2; ++r)
     {
         for (std::size_t i = 0; i < Path.size(); ++i)
@@ -144,7 +156,8 @@ void TestASweptRailIsExactlyItsOwnRadiusEverywhere()
             const FVec3 Axis = r == 0 ? X.LeftRail : X.RightRail;
             for (int j = 0; j < Cols; ++j)
             {
-                const std::size_t v = (r * Path.size() + i) * static_cast<std::size_t>(Cols)
+                const std::size_t v = r * RailStride
+                                    + i * static_cast<std::size_t>(Cols)
                                     + static_cast<std::size_t>(j);
                 Worst = std::max(Worst, std::fabs(Length(M.Rails.Position[v] - Axis) - RailRadius));
             }
@@ -285,8 +298,11 @@ void TestTiesAreSpacedInMETRESAndDoNotCrossTheTrain()
     const FTrackMesh M = Build(T, S, P);
 
     // 20 m at 2 m spacing is 11 ties counting both ends, two struts each, and a
-    // strut is two rings of Sides+1 vertices.
-    const std::size_t PerStrut = 2 * static_cast<std::size_t>(S.Sides + 1);
+    // strut is two rings of Sides+1 vertices — plus two CAPS, each a centre and
+    // one vertex per side, because a strut has two free ends by definition and
+    // is capped whatever bCapEnds says.
+    const std::size_t PerStrut = 2 * static_cast<std::size_t>(S.Sides + 1)
+                               + 2 * (1 + static_cast<std::size_t>(S.Sides));
     assert(M.Ties.NumVertices() == 11 * 2 * PerStrut);
 
     // Nothing in a tie is above the rail plane, so nothing is in the train's way.
@@ -353,6 +369,145 @@ void TestTheHANDEDNESSFlipREVERSESWinding()
                 M.NumTriangles());
 }
 
+// A CAPPED TUBE IS CLOSED, AND A CLOSED MESH ENCLOSES POSITIVE VOLUME.
+//
+// This is the assertion that actually bites, and it is stronger than checking
+// that some triangles exist. Signed volume by the divergence theorem is positive
+// only when EVERY triangle faces outward, so one flipped cap makes it fall by
+// twice that cap's contribution — and a cap wound backwards is invisible under
+// backface culling with every vertex in exactly the right place, which is
+// precisely the bug that shipped in the side wall the first time.
+//
+// Watertightness is the other half: every edge shared by exactly two triangles.
+// An uncapped tube fails it at both rims, which is what made this necessary.
+void TestACappedStrutIsCLOSEDAndENCLOSESVolume()
+{
+    std::printf("A capped strut is closed, and encloses positive volume\n");
+
+    const double R = 0.05;
+    const double L = 2.0;
+    const int Sides = 16;
+
+    FMeshBuffer M;
+    SweepStrut(M, FVec3{0.0, 0.0, 0.0}, FVec3{0.0, 0.0, -L},
+               FVec3{1.0, 0.0, 0.0}, R, Sides);
+
+    CheckIndicesInRange(M);
+    CheckNoDegenerateTriangles(M, "capped strut");
+
+    // ---- Watertight: every undirected edge used exactly twice.
+    //
+    // WELDED BY POSITION, NOT BY INDEX. The UV seam deliberately duplicates a
+    // vertex and the caps duplicate a whole rim, so two different indices at the
+    // same point are the same edge to this question — comparing indices would
+    // report the seam as a hole it is not, and the test would be measuring the
+    // thing the file already explains rather than the thing being added.
+    using FKey = std::tuple<long long, long long, long long>;
+    auto Key = [](const FVec3& P) {
+        return FKey{std::llround(P.X * 1e6), std::llround(P.Y * 1e6), std::llround(P.Z * 1e6)};
+    };
+    std::map<FKey, std::uint32_t> Weld;
+    auto Welded = [&](std::uint32_t Index) {
+        const FKey K = Key(M.Position[Index]);
+        auto It = Weld.find(K);
+        if (It != Weld.end()) { return It->second; }
+        const std::uint32_t Id = static_cast<std::uint32_t>(Weld.size());
+        Weld[K] = Id;
+        return Id;
+    };
+
+    std::map<std::pair<std::uint32_t, std::uint32_t>, int> Edges;
+    for (std::size_t t = 0; t + 2 < M.Index.size(); t += 3)
+    {
+        for (int e = 0; e < 3; ++e)
+        {
+            const std::uint32_t A = Welded(M.Index[t + static_cast<std::size_t>(e)]);
+            const std::uint32_t B = Welded(M.Index[t + static_cast<std::size_t>((e + 1) % 3)]);
+            Edges[{std::min(A, B), std::max(A, B)}] += 1;
+        }
+    }
+    std::size_t Boundary = 0;
+    for (const auto& E : Edges)
+    {
+        if (E.second != 2) { ++Boundary; }
+    }
+    std::printf("  edges %zu, non-manifold or boundary %zu\n", Edges.size(), Boundary);
+    assert(Boundary == 0 && "a capped strut has no open rim");
+
+    // ---- Signed volume. Positive means outward-facing; the magnitude should be
+    // the cylinder's, less the tiny bit an N-gon loses against a true circle.
+    double V6 = 0.0;
+    for (std::size_t t = 0; t + 2 < M.Index.size(); t += 3)
+    {
+        const FVec3& A = M.Position[M.Index[t]];
+        const FVec3& B = M.Position[M.Index[t + 1]];
+        const FVec3& C = M.Position[M.Index[t + 2]];
+        V6 += Dot(A, Cross(B, C));
+    }
+    const double Volume = V6 / 6.0;
+    // A regular N-gon of circumradius R has area (N/2) R^2 sin(2pi/N).
+    const double NgonArea = 0.5 * Sides * R * R * std::sin(TrackMeshTwoPi / Sides);
+    const double Expected = NgonArea * L;
+    std::printf("  volume %.8f m^3, %d-gon prism %.8f m^3\n", Volume, Sides, Expected);
+    assert(Volume > 0.0 && "an outward-wound closed mesh has positive signed volume");
+    assert(std::fabs(Volume - Expected) < 1e-9);
+
+    // ---- And the check bites: flip one cap's triangles and the volume drops by
+    // twice what that cap contributed. Asserted rather than asserted-about,
+    // because a test that cannot fail is decoration.
+    FMeshBuffer Flipped = M;
+    const std::size_t Tris = Flipped.Index.size() / 3;
+    for (std::size_t t = Tris - static_cast<std::size_t>(Sides); t < Tris; ++t)
+    {
+        std::swap(Flipped.Index[t * 3 + 1], Flipped.Index[t * 3 + 2]);
+    }
+    double FlippedV6 = 0.0;
+    for (std::size_t t = 0; t + 2 < Flipped.Index.size(); t += 3)
+    {
+        FlippedV6 += Dot(Flipped.Position[Flipped.Index[t]],
+                         Cross(Flipped.Position[Flipped.Index[t + 1]],
+                               Flipped.Position[Flipped.Index[t + 2]]));
+    }
+    std::printf("  one cap reversed -> %.8f m^3\n", FlippedV6 / 6.0);
+    assert(std::fabs(FlippedV6 / 6.0 - Volume) > 1e-9 && "reversing a cap must be visible here");
+
+    std::printf("  OK\n\n");
+}
+
+// A CIRCUIT IS NOT CAPPED, and that is the caller's decision rather than the
+// sweep's: the first ring and the last are the same ring, so a cap there is a
+// disc buried in the seam, coplanar with the geometry either side of it.
+void TestACircuitGetsNoCaps()
+{
+    std::printf("A circuit's rails get no end caps\n");
+
+    const FTrack Track = Straight(40.0);
+
+    FTrackProfile Profile;
+    FMeshSettings Open;
+    FMeshSettings Closed;
+    Closed.bCapEnds = false;
+
+    const std::vector<FTrackFrame> Path = WalkTrack(Track, 1.0);
+    const FTrackMesh WithCaps = BuildTrackMesh(Path, Track.GetHeartlineHeight(), Profile, Open);
+    const FTrackMesh NoCaps = BuildTrackMesh(Path, Track.GetHeartlineHeight(), Profile, Closed);
+
+    // Two rails and a spine, two ends each, one fan of `Sides` triangles per end.
+    const std::size_t Expected = 6 * static_cast<std::size_t>(Open.Sides);
+    const std::size_t Delta = (WithCaps.Rails.NumTriangles() + WithCaps.Spine.NumTriangles())
+                            - (NoCaps.Rails.NumTriangles() + NoCaps.Spine.NumTriangles());
+    std::printf("  capped adds %zu triangles, expected %zu\n", Delta, Expected);
+    assert(Delta == Expected);
+
+    // TIES ARE CAPPED EITHER WAY. A strut has two free ends by definition, so
+    // bCapEnds must not reach them — if it did, every tie on every circuit would
+    // be an open pipe and the setting would be doing two jobs.
+    assert(WithCaps.Ties.NumTriangles() == NoCaps.Ties.NumTriangles());
+    std::printf("  ties unaffected: %zu triangles either way\n", NoCaps.Ties.NumTriangles());
+
+    std::printf("  OK\n\n");
+}
+
 void TestTheCostOfARealRide()
 {
     // Not a pass/fail — a number to know before something renders it. The
@@ -384,6 +539,8 @@ int main()
     TestTheWALKIsLINEARAndTheMESHERCannotMakeItNot();
     TestTiesAreSpacedInMETRESAndDoNotCrossTheTrain();
     TestTheHANDEDNESSFlipREVERSESWinding();
+    TestACappedStrutIsCLOSEDAndENCLOSESVolume();
+    TestACircuitGetsNoCaps();
     TestTheCostOfARealRide();
 
     std::printf("\ntest_trackmesh: all assertions passed.\n");
