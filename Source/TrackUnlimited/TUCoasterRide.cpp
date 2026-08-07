@@ -1938,8 +1938,8 @@ void ATUCoasterRide::DrawSegmentEditor(UCanvas* Canvas)
 	{
 		const EEditField F = static_cast<EEditField>(f);
 		if (!KindUsesField(Kind, F)) { continue; }
-		if (F == EEditField::ZoneKind || F == EEditField::StartsNewDevice) { continue; }
 		if (F == EEditField::ZoneSpeed && Seg.Zone == ETUSegmentZone::None) { continue; }
+		if (F == EEditField::StartsNewDevice && Seg.Zone == ETUSegmentZone::None) { continue; }
 
 		EditorRowRects.Add(FVector4(Ox, Y, Ox + W, Y + Row));
 		EditorRowField.Add(static_cast<int32>(f));
@@ -1947,19 +1947,45 @@ void ATUCoasterRide::DrawSegmentEditor(UCanvas* Canvas)
 		const bool bFocus = FocusedField == F;
 		if (bFocus) { PanelTile(Canvas, Ox - 4.f, Y - 1.f, W + 8.f, Row, PanelRule); }
 
-		// THE VALUE, AND A CARET WHILE TYPING. What is shown mid-edit is the
-		// buffer rather than the stored number, because showing the stored one
-		// would make typing look like it was doing nothing.
-		const FString Value = bFocus
-			? FieldBuffer + TEXT("_")
-			: FString::Printf(TEXT("%.4g"), ReadField(Seg, F));
+		// A CHOICE IS NOT A NUMBER, and that is why these two rows were skipped
+		// rather than merely unfinished: a device kind is an enumeration and
+		// "starts a new device" is a flag, and neither has anything to type into
+		// a numeric field. The panel could not show them, so changing a brake to
+		// a block brake meant leaving play for the Details panel — which for the
+		// one edit somebody makes most often is the wrong place to send them.
+		//
+		// CLICK CYCLES. That is not the direct manipulation constraint 1 rules
+		// out: nothing is dragged, nothing is placed, and it is the same discrete
+		// pick the Details panel's dropdown already offers — only reachable
+		// without leaving the ride you are looking at.
+		const bool bChoice = (F == EEditField::ZoneKind || F == EEditField::StartsNewDevice);
+		FString Value;
+		if (F == EEditField::ZoneKind)
+		{
+			Value = Seg.Zone == ETUSegmentZone::None
+				? FString(TEXT("none")) : FString(ZoneKindName(Seg.Zone));
+		}
+		else if (F == EEditField::StartsNewDevice)
+		{
+			Value = Seg.bStartsNewDevice ? TEXT("yes") : TEXT("no");
+		}
+		else
+		{
+			// THE VALUE, AND A CARET WHILE TYPING. What is shown mid-edit is the
+			// buffer rather than the stored number, because showing the stored one
+			// would make typing look like it was doing nothing.
+			Value = bFocus
+				? FieldBuffer + TEXT("_")
+				: FString::Printf(TEXT("%.4g"), ReadField(Seg, F));
+		}
 
 		// UNITS ARE ALWAYS SHOWN WHERE THERE IS ONE. Turns is a count and has
 		// none, which is a distinction rather than a gap.
 		PanelLabel(Canvas, Ox + 4.f, Y, UTF8_TO_TCHAR(FieldName(F)), PanelDim);
 		PanelLabel(Canvas, Ox + 150.f, Y,
-			FString::Printf(TEXT("%s %s"), *Value, UTF8_TO_TCHAR(FieldUnit(F))),
-			bFocus ? PanelCyan : PanelText);
+			bChoice ? FString::Printf(TEXT("%s  <click"), *Value)
+			        : FString::Printf(TEXT("%s %s"), *Value, UTF8_TO_TCHAR(FieldUnit(F))),
+			bFocus ? PanelCyan : (bChoice ? PanelAmber : PanelText));
 		Y += Row;
 	}
 
@@ -2003,11 +2029,43 @@ void ATUCoasterRide::ClickSegmentEditor()
 		}
 		else if (Session.EditsAllowed())
 		{
+			const EEditField F = static_cast<EEditField>(Action);
+
+			// A CHOICE CYCLES ON CLICK rather than taking focus, because there is
+			// nothing to type into it. Committed immediately — unlike a number,
+			// which waits for Enter because "3" on the way to "30" is a rebuild
+			// nobody asked for. A pick has no half-typed state to protect.
+			if (F == EEditField::ZoneKind || F == EEditField::StartsNewDevice)
+			{
+				CancelField();
+				FTUTrackSegment& S = Segments[SelectedSegment];
+				if (F == EEditField::StartsNewDevice)
+				{
+					S.bStartsNewDevice = !S.bStartsNewDevice;
+				}
+				else
+				{
+					// Wraps through every zone including None, so the way to
+					// remove a device is the same gesture as adding one.
+					const uint8 Count = static_cast<uint8>(ETUSegmentZone::StationLoad) + 1;
+					S.Zone = static_cast<ETUSegmentZone>((static_cast<uint8>(S.Zone) + 1) % Count);
+
+					// LEAVING A DEVICE CLEARS ITS FLAG. bStartsNewDevice on an
+					// unpowered segment is a setting with nothing to act on, and
+					// it would come back the moment a zone was set again — a
+					// value somebody turned on for a device they have since
+					// deleted, silently applying to its replacement.
+					if (S.Zone == ETUSegmentZone::None) { S.bStartsNewDevice = false; }
+				}
+				RebuildFromSegments();
+				return;
+			}
+
 			// Focusing a field starts EMPTY rather than pre-filled with the
 			// current value. Pre-filling means the first keystroke has to be
 			// select-all or the number becomes "3020" — and there is no
 			// select-all here, so starting empty is the honest shape.
-			FocusedField = static_cast<EEditField>(Action);
+			FocusedField = F;
 			FieldBuffer.Empty();
 		}
 		return;
