@@ -145,6 +145,26 @@ public:
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Camera")
 	bool bInvertLookY = false;
 
+	/**
+	 * THE CURSOR IS VISIBLE WHERE THERE IS SOMETHING TO CLICK, and looking moves
+	 * to a HELD RIGHT BUTTON.
+	 *
+	 * Every panel that takes a click — the main menu, the segment list, the
+	 * diagnostics rows — lives in Menu, Build and Operate, and a captured mouse
+	 * made all three keyboard-only. Ride has nothing to click and a cursor over
+	 * an on-ride camera is only in the way, so it keeps the captured mouse and
+	 * free look.
+	 *
+	 * The two halves are one change: showing the cursor without moving look onto
+	 * a drag gives a camera that spins every time somebody reaches for a row.
+	 */
+	bool bDraggingLook = false;
+	bool bCursorShown = false;    // what was last applied, so this is not set every frame
+
+	void BeginLookDrag() { bDraggingLook = true; }
+	void EndLookDrag() { bDraggingLook = false; }
+	void ApplyCursorMode();
+
 	/** Chase only: how far behind the train to sit, in metres. */
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Camera",
 		meta = (ClampMin = "2.0", UIMax = "60.0",

@@ -1669,6 +1669,16 @@ void ATUCoasterRide::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 	PlayerInputComponent->BindAxisKey(EKeys::MouseX, this, &ATUCoasterRide::AxisLookYaw);
 	PlayerInputComponent->BindAxisKey(EKeys::MouseY, this, &ATUCoasterRide::AxisLookPitch);
 
+	// HOLD RIGHT TO LOOK. The cursor is free wherever there are rows to click, so
+	// a camera that turned on every mouse move would make reaching for a row a
+	// gamble on where it had gone by the time you got there. Right rather than
+	// left because left is already select, and every editor with a viewport and
+	// a panel side by side splits them exactly this way.
+	PlayerInputComponent->BindKey(EKeys::RightMouseButton, IE_Pressed, this,
+		&ATUCoasterRide::BeginLookDrag);
+	PlayerInputComponent->BindKey(EKeys::RightMouseButton, IE_Released, this,
+		&ATUCoasterRide::EndLookDrag);
+
 	// ORBIT. [F] frames the whole track, which is the key you press constantly
 	// once a validation warning points somewhere and you have no idea where. The
 	// wheel zooms multiplicatively, so one notch means the same proportion of the
@@ -2497,6 +2507,36 @@ void ATUCoasterRide::ClickDiagnostics()
 			CameraMode = ETUCameraMode::Orbit;
 		}
 		return;
+	}
+}
+
+void ATUCoasterRide::ApplyCursorMode()
+{
+	APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr;
+	if (!PC) { return; }
+
+	// RIDE IS THE ONLY MODE WITH NOTHING TO CLICK. Everywhere else has rows, and
+	// a captured mouse made every one of them keyboard-only.
+	const bool bWant = Session.Mode() != EAppMode::Ride;
+
+	// Applied only on a CHANGE. SetInputMode every frame resets Slate's capture
+	// state, which shows up as a cursor that stutters and a drag that drops.
+	if (bWant == bCursorShown && PC->bShowMouseCursor == bWant) { return; }
+	bCursorShown = bWant;
+	PC->bShowMouseCursor = bWant;
+
+	if (bWant)
+	{
+		// GameAndUI rather than UIOnly: the key bindings have to keep working
+		// while the cursor is free, because every one of them is still the
+		// fastest way to do the thing it does.
+		FInputModeGameAndUI Mode;
+		Mode.SetHideCursorDuringCapture(false);
+		PC->SetInputMode(Mode);
+	}
+	else
+	{
+		PC->SetInputMode(FInputModeGameOnly());
 	}
 }
 
@@ -5369,6 +5409,23 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 		CameraRigs.For(static_cast<int>(LastCameraMode)) = Orbit;
 		Orbit = CameraRigs.For(static_cast<int>(CameraMode));
 		LastCameraMode = CameraMode;
+	}
+
+	// LOOKING IS A DRAG NOW, because the cursor is free.
+	//
+	// A camera that turned whenever the mouse moved is fine when the mouse has
+	// nothing else to do, and impossible once there are rows to click: every
+	// click becomes a gamble on where the panel went while you were reaching for
+	// it. Holding the right button is what every editor with both a viewport and
+	// a panel does, and it costs nothing to somebody who only wants to look.
+	//
+	// ZEROED RATHER THAN SKIPPED, so a drag starts from where the mouse is
+	// instead of applying everything it travelled while the button was up.
+	ApplyCursorMode();
+	if (!bDraggingLook && Session.Mode() != EAppMode::Ride)
+	{
+		LookYaw = 0.f;
+		LookPitch = 0.f;
 	}
 
 	if (CameraMode == ETUCameraMode::Free)
