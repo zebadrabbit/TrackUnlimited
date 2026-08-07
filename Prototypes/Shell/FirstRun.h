@@ -166,12 +166,32 @@ inline const char* ViewportHint()
 // "New track" must not mean an empty list. The first edit should be CHANGING A
 // NUMBER ON SOMETHING THAT ALREADY RUNS, not authoring geometry from nothing —
 // which is a completely different and much harder first task.
+//
+// AND A TEMPLATE IS A PRESET, NOT NEW GEOMETRY. `ATUCoasterRide::PresetLayout`
+// already ships five worked examples, every one of them MEASURED before it went
+// in — the flat rig is what rolling resistance was calibrated on, the circuit
+// closes to 0.000000 m, the small-batch platform's 5.5-second figure came off it.
+//
+// Authoring a parallel set of "starter" layouts would be a second set of tracks
+// to keep working, drifting from the ones the docs quote. So a template names a
+// preset and adds the two things a preset does not carry: who it is for, and
+// what to change first.
+enum class ETemplatePreset
+{
+    FlatRig,
+    OutAndBack,
+    Reference,
+    TwoTrainCircuit,
+    SmallBatch,
+    Blank,
+};
+
 struct FTemplate
 {
     const char* Name = "";
     const char* Description = "";
     const char* WhatToTryFirst = "";   // the on-ramp: one concrete first edit
-    bool bClosedCircuit = false;
+    ETemplatePreset Preset = ETemplatePreset::Blank;
 };
 
 inline std::size_t NumTemplates() { return 4; }
@@ -182,31 +202,32 @@ inline FTemplate TemplateAt(std::size_t i)
     {
     case 0:
         return {"Starter — lift and drop",
-                "Station, chain lift, one drop, a turnaround and a brake run. The "
-                "smallest thing that is unmistakably a roller coaster.",
+                "Station, eased chain lift, a 34 degree drop, a loop and a banked turn "
+                "into the brakes. The reference layout, and the one every number in the "
+                "docs is quoted from.",
                 "Make the lift taller. Change the lift hill's length and watch the drop "
-                "speed and the airtime on the first hill change with it.",
-                false};
+                "speed and the loop's G reading change with it.",
+                ETemplatePreset::Reference};
     case 1:
         return {"Launched circuit",
                 "A launch instead of a lift, going all the way round and back to the "
-                "station. Carries more than one train.",
+                "station. The only preset that carries more than one train.",
                 "Change the launch speed. Too slow and the train will not make the top "
                 "of the hill — the profile panel will say exactly where it stalls.",
-                true};
+                ETemplatePreset::TwoTrainCircuit};
     case 2:
         return {"Out and back",
-                "Up, over a series of hills, round and home. No inversions, lots of "
-                "airtime.",
-                "Change one hill's crest curvature. Sharper gives more airtime, and the "
-                "vertical G trace shows it going negative.",
-                false};
+                "Lift, drop, an airtime hill, a banked turnaround, brakes. No inversion, "
+                "and it does not pass near itself — the gentlest place to start.",
+                "Change the airtime hill's crest curvature. Sharper gives more airtime, "
+                "and the vertical G trace shows it going negative.",
+                ETemplatePreset::OutAndBack};
     case 3:
     default:
         return {"Blank",
                 "Nothing at all. For somebody who already knows what they are doing.",
                 "Add a straight for the station, then a lift.",
-                false};
+                ETemplatePreset::Blank};
     }
 }
 

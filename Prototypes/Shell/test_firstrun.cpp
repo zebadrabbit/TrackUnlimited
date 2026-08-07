@@ -161,6 +161,15 @@ void TestNEWTrackIsNeverAnEmptyList()
         if (std::string(T.Name) == "Blank") { ++Blank; }
     }
 
+    // A TEMPLATE NAMES A PRESET RATHER THAN CARRYING ITS OWN GEOMETRY. Five
+    // worked examples already ship, every one MEASURED before it went in — a
+    // parallel set of starter layouts would be a second set of tracks to keep
+    // working, drifting from the ones the docs quote.
+    assert(TemplateAt(0).Preset == ETemplatePreset::Reference);
+    assert(TemplateAt(1).Preset == ETemplatePreset::TwoTrainCircuit);
+    assert(TemplateAt(2).Preset == ETemplatePreset::OutAndBack);
+    assert(TemplateAt(3).Preset == ETemplatePreset::Blank);
+
     // Exactly one blank option, and it is NOT the default.
     assert(Blank == 1);
     assert(std::string(TemplateAt(DefaultTemplate()).Name) != "Blank");
