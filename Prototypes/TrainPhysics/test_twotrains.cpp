@@ -27,6 +27,7 @@
 
 #include "../BlockSignal/RideSignals.h"
 #include "../BlockSignal/Evacuation.h"
+#include "../BlockSignal/Scenario.h"
 #include "../BlockSignal/ShowBus.h"
 #include "../BlockSignal/SimDigest.h"
 #include "../BlockSignal/StationProcess.h"
@@ -1134,7 +1135,8 @@ FRunResult RunTrains(std::size_t N, std::size_t Lookahead, double Seconds,
                      const std::vector<FItem>* InItems = nullptr,
                      double InTrainLen = TrainLen,
                      int DegradeZone = -1, double DegradeTo = 1.0,
-                     bool bShow = false)
+                     bool bShow = false,
+                     FScenario* Record = nullptr, FScenario* Play = nullptr)
 {
     const std::vector<FItem> Items = InItems != nullptr ? *InItems : Layout();
     const FCircuit Shape = BuildCircuitFrom(nullptr, Items);
@@ -1227,12 +1229,51 @@ FRunResult RunTrains(std::size_t N, std::size_t Lookahead, double Seconds,
         }
     }
 
+    // What a recording IS: operator actions and fault injections, at the scan
+    // they happened. Not initial state — the preset, the train count and a device
+    // that was already broken when the session opened are not events, and a
+    // recording that tried to carry them would be a save file wearing a
+    // scenario's clothes.
+    FSignalWatch Recorder;
+
     const double Dt = 1.0 / 240.0;
     for (int F = 0; F < static_cast<int>(240.0 * Seconds); ++F)
     {
+        // PLAYBACK AT THE TOP OF THE SCAN, with the inputs, because that is where
+        // a real operator's button is read. Pumped every scan — Due() fires on the
+        // exact scan and counts anything it was not asked about, so a caller that
+        // skipped one is told rather than quietly running a different session.
+        if (Play != nullptr)
+        {
+            for (const FScenarioStep& St : Play->Due(static_cast<std::uint64_t>(F)))
+            {
+                switch (St.Action)
+                {
+                case EScenarioAction::PressEmergencyStop:
+                    Drives.TripEmergencyStop("scenario");
+                    break;
+                case EScenarioAction::DegradeDrive:
+                    Drives.SetDeliveredFraction(static_cast<std::size_t>(St.A), St.B / 100.0);
+                    break;
+                default:
+                    break;
+                }
+            }
+        }
         if (EStopAtSeconds >= 0.0 && F * Dt >= EStopAtSeconds)
         {
             Drives.TripEmergencyStop("test");
+        }
+
+        // THE RECORDER, and it needs no class of its own: an edge detector and
+        // FScenario::Add are the whole of it. Same seeding rule as everything else
+        // here, so the state the session STARTED in is a baseline rather than an
+        // event at scan zero.
+        if (Record != nullptr && Recorder.Changed(0, Drives.IsEmergencyStopped() ? 1 : 0))
+        {
+            Record->Add(static_cast<std::uint64_t>(F),
+                        Drives.IsEmergencyStopped() ? EScenarioAction::PressEmergencyStop
+                                                    : EScenarioAction::ReleaseEmergencyStop);
         }
         ScanStopMarks(Marks, All, true, T.TotalLength());
         ServeStations(Platforms, All, Marks, Drives, Dt, &Loaded);
@@ -1588,6 +1629,54 @@ void TestTheRideIsIDENTICALWithTheShowLayerAbsent()
 
     std::printf("  the show layer sees %zu events and fires %zu cues, and the ride"
                 " is bit-identical without it\n", Lit.ShowEvents, Lit.ShowFirings);
+}
+
+void TestASessionCanBeRECORDEDAndREPLAYEDBitForBit()
+{
+    // THE DETERMINISM CARD'S REMAINING HALF. What existed proved that two
+    // IDENTICAL runs match. What it could not do is take a session somebody
+    // actually had — an operator hitting the stop, a device failing under them —
+    // and run it again.
+    //
+    // A recorder needs no class of its own. FSignalWatch detects the edge and
+    // FScenario::Add writes the step, and both already exist for other reasons;
+    // building a third thing to hold them would be scaffolding.
+    //
+    // The session: three trains, the outer brake dead from the start, and an
+    // operator who stops the ride at 30 seconds.
+    FScenario Recorded;
+    const FRunResult Live = RunTrains(3, 1, 120.0, 30.0, nullptr, TrainLen, 3, 0.0,
+                                      false, &Recorded);
+    assert(Recorded.Num() == 1);                       // one edge, not one a frame
+    assert(Recorded.LastScan() == 240 * 30);           // and at the scan it happened
+
+    // WHAT A RECORDING IS AND IS NOT. It carries EVENTS. It does not carry the
+    // preset, the train count, or a brake that was already dead when the session
+    // opened — those are initial state, and a recording that tried to hold them
+    // would be a save file wearing a scenario's clothes. So the replay is handed
+    // the same starting conditions and nothing else.
+    const FRunResult Replay = RunTrains(3, 1, 120.0, -1.0, nullptr, TrainLen, 3, 0.0,
+                                        false, nullptr, &Recorded);
+    assert(Replay.Digest == Live.Digest);
+    assert(Recorded.MissedSteps() == 0);               // every step fired on its scan
+    assert(Recorded.IsFinished());
+
+    // AND IT IS NOT VACUOUS. A recording of a session where nothing happened
+    // would replay perfectly and prove nothing. This one stopped a moving ride:
+    // the digest has to differ from the same layout left alone.
+    const FRunResult Untouched = RunTrains(3, 1, 120.0, -1.0, nullptr, TrainLen, 3, 0.0);
+    assert(Untouched.Digest != Live.Digest);
+
+    // REWIND, and the second replay is the first. A scenario that could only be
+    // played once is a recording you get one look at.
+    Recorded.Rewind();
+    const FRunResult Again = RunTrains(3, 1, 120.0, -1.0, nullptr, TrainLen, 3, 0.0,
+                                       false, nullptr, &Recorded);
+    assert(Again.Digest == Live.Digest);
+
+    std::printf("  a session recorded (%zu step) and replayed to digest %016llx,"
+                " which an untouched run does not reach\n",
+                Recorded.Num(), static_cast<unsigned long long>(Live.Digest));
 }
 
 void TestSeveralHoldingDevicesInARowStaySeveral()
@@ -2394,6 +2483,7 @@ int main()
     TestAHeldTrainParksInsideItsBlock();
     TestAFailedBrakeAndWhatDoesAndDoesNOTCatchIt();
     TestTheRideIsIDENTICALWithTheShowLayerAbsent();
+    TestASessionCanBeRECORDEDAndREPLAYEDBitForBit();
     TestSeveralHoldingDevicesInARowStaySeveral();
     TestADispatchWaitsForTheLaunchToBeArmed();
     TestTwoIndependentMeansOfKnowingAgreeOnEveryBlock();
