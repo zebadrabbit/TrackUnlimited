@@ -3213,8 +3213,12 @@ void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/
 			Status += FString::Printf(TEXT("   %d Hz SCAN"), SimHz);
 			if (ScanOverruns > 0)
 			{
-				Status += FString::Printf(TEXT("   %d OVERRUN%s"), ScanOverruns,
-					ScanOverruns == 1 ? TEXT("") : TEXT("S"));
+				// THE SECONDS, NOT JUST THE COUNT. 545 overruns reads as "a bit
+				// stuttery"; 54 s dropped says the ride on screen is not the ride
+				// the model computed, and nothing watched across it can be judged.
+				Status += FString::Printf(TEXT("   %d OVERRUN%s, %.1f s DROPPED"),
+					ScanOverruns, ScanOverruns == 1 ? TEXT("") : TEXT("S"),
+					ScanTimeDroppedS);
 			}
 			// SCAN NUMBER AND FINGERPRINT TOGETHER, never the digest alone. It is a
 			// running hash, so two rides only agree AT THE SAME POINT — a digest
@@ -5250,7 +5254,14 @@ static void SetNearPlaneMetres(double Metres)
 	// The engine clamps its own console command to 1 cm, so match it rather than
 	// discovering the floor by rendering through it.
 	const float Cm = FMath::Max(1.f, static_cast<float>(Metres * MetresToUU));
-	if (!FMath::IsNearlyEqual(GNearClippingPlane, Cm, 0.05f))
+
+	// A PROPORTIONAL GUARD, not an absolute one. The near plane is
+	// distance * 0.002, so it moves every frame the camera does — and an absolute
+	// 0.05 cm tolerance meant a render command enqueued on every one of them.
+	// It is only an enqueue rather than a flush, so this was not the performance
+	// problem it looked like, but a near plane exists to be the right ORDER OF
+	// MAGNITUDE and updating it by half a percent buys exactly nothing.
+	if (Cm < GNearClippingPlane * 0.8f || Cm > GNearClippingPlane * 1.25f)
 	{
 		SetNearClipPlaneGlobals(Cm);
 	}
@@ -5392,8 +5403,22 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 	{
 		++ScanOverruns;
 		bScanOverranThisFrame = true;   // the PLC's watchdog reads this next scan
-		LogEvent(FString::Printf(TEXT("SCAN OVERRUN — dropped %.0f ms of backlog"),
-			SimAccumulator * 1000.0));
+
+		// THE TOTAL IS THE NUMBER THAT MATTERS, not the count. One overrun is a
+		// hitch; a count says how many times without saying how much ride went
+		// missing, and 545 of them reads as "a bit stuttery" when it can be a
+		// minute of simulation that never happened.
+		//
+		// This is what decides whether a run can be JUDGED. Dropped time is not
+		// slow motion — the scans never ran, so a train really did move further
+		// between two scans than it should have, and any behaviour somebody
+		// watched across a drop is behaviour of a ride the model did not compute.
+		ScanTimeDroppedS += SimAccumulator;
+		WorstOverrunS = FMath::Max(WorstOverrunS, SimAccumulator);
+
+		LogEvent(FString::Printf(
+			TEXT("SCAN OVERRUN — dropped %.0f ms (overrun %d, %.2f s dropped in total)"),
+			SimAccumulator * 1000.0, ScanOverruns, ScanTimeDroppedS));
 		SimAccumulator = 0.0;
 	}
 

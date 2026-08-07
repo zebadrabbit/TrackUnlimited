@@ -707,6 +707,21 @@ private:
 
 	double SimAccumulator = 0.0;
 	int32 ScanOverruns = 0;
+
+	/**
+	 * HOW MUCH RIDE WENT MISSING, which the count alone does not say.
+	 *
+	 * Dropped time is not slow motion. The scans never ran, so between two
+	 * consecutive scans a train really did travel further than the model would
+	 * ever have moved it — which is precisely the failure the fixed scan period
+	 * exists to prevent, arriving by the back door when the host cannot keep up.
+	 *
+	 * So this is the number that decides whether a run can be JUDGED at all.
+	 * Behaviour somebody watched across a drop is behaviour of a ride nothing
+	 * computed, and no amount of staring at it will settle what it did.
+	 */
+	double ScanTimeDroppedS = 0.0;
+	double WorstOverrunS = 0.0;
 	// The first tick after a load carries the load itself. Not a missed deadline.
 	bool bScanStarted = false;
 	// Raised by the accumulator, consumed by the PLC's watchdog on the next scan.
