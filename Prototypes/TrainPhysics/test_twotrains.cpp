@@ -1122,6 +1122,25 @@ struct FRunResult
     // Tier 3, if it was attached at all. Counted rather than kept, because the
     // point of these is that the ride does not care: they must be able to be any
     // number without the digest above moving by a bit.
+    // The speed trap, which is a SECOND question rather than a better answer to
+    // the interlocking's. Blocks ask "is the space ahead free"; this asks "can
+    // what is ahead stop what is coming".
+    bool bOverspeed = false;
+    double FirstOverspeed = -1.0;    // seconds
+    double OverspeedSpeed = 0.0;     // what the switches measured
+    double OverspeedNeeded = 0.0;    // metres to stop
+    double OverspeedHave = 0.0;      // metres of device
+    int OverspeedZone = -1;
+
+    // WHAT THE TRAP ACTUALLY BUYS on a layout that can absorb the failure: the
+    // smallest gap between what a train needed to stop and what the device it was
+    // entering had. It collapses long before it goes negative, which is a
+    // measurement of degradation rather than a trip.
+    double WorstTrapMarginM = 1e9;
+    int WorstTrapZone = -1;
+    double WorstTrapSpeed = 0.0;
+
+    std::size_t TrapTrips = 0;
     std::size_t ShowEvents = 0;
     std::size_t ShowFirings = 0;
     std::size_t ShowInhibited = 0;
@@ -1215,6 +1234,40 @@ FRunResult RunTrains(std::size_t N, std::size_t Lookahead, double Seconds,
     // its second detection method, and it is worth more than either method alone:
     // the counter proved equal to perfect knowledge over three laps in its own
     // suite, and this is what keeps it equal on every layout after.
+    // SPEED TRAPS, one ahead of every holding device. Two switches a surveyed
+    // 10 m apart, ending 2 m before the device starts — far enough back that a
+    // train has been measured before it commits, and wide enough that the scan
+    // quantisation is 1.25% at 30 m/s rather than the 12.5% a 1 m gap gives.
+    //
+    // This is the detector the failed-brake measurement asked for. Nothing here
+    // decides anything: the trap reports a speed, and the comparison against what
+    // the device can do is the PLC program's, the same rule the drives run on.
+    std::vector<double> TrapAt;
+    std::vector<std::size_t> TrapZone;
+    std::vector<double> TrapDecel;
+    std::vector<double> TrapDeviceLength;
+    for (std::size_t z = 0; z < C.Authored.size(); ++z)
+    {
+        const FTrackZone Z = Owned[0]->GetZone(z);
+        if (!(Z.MaxAccel > 0.0 && Z.MaxDecel > 0.0))
+        {
+            continue;                     // not a holding device: nothing to protect
+        }
+        const double Total2 = T.TotalLength();
+        auto Wrap = [Total2](double X) { return X < 0.0 ? X + Total2 : X; };
+        TrapZone.push_back(z);
+        TrapDecel.push_back(Z.MaxDecel);
+        TrapDeviceLength.push_back(Z.EndS - Z.StartS);
+        TrapAt.push_back(Wrap(Z.StartS - 12.0));
+        TrapAt.push_back(Wrap(Z.StartS - 2.0));
+    }
+    FTrackSensors TrapSensors(TrapAt);
+    FSpeedTraps Traps(TrapSensors);
+    for (std::size_t k = 0; k < TrapZone.size(); ++k)
+    {
+        Traps.Add({2 * k, 2 * k + 1, 10.0});
+    }
+
     FTrackSensors BlockSensors(C.Boundaries);
     FBlockCounter Counter(BlockSensors);
     {
@@ -1275,6 +1328,47 @@ FRunResult RunTrains(std::size_t N, std::size_t Lookahead, double Seconds,
                         Drives.IsEmergencyStopped() ? EScenarioAction::PressEmergencyStop
                                                     : EScenarioAction::ReleaseEmergencyStop);
         }
+        // INPUTS ONCE AT THE TOP OF THE FRAME, with everything else that is read.
+        TrapSensors.BeginScan();
+        for (FTrain* Tr : All)
+        {
+            TrapSensors.Cover(Tr->GetRearS(), Tr->GetFrontS(), true, T.TotalLength());
+        }
+        TrapSensors.EndScan();
+        Traps.Scan(Dt);
+
+        // THE PLC'S DECISION, not the trap's. A fresh measurement, over enough
+        // scans to mean something, against v^2/2a for the device it is about to
+        // enter — the same arithmetic build time already runs, with a MEASURED
+        // speed instead of a predicted one.
+        for (std::size_t k = 0; k < Traps.Num(); ++k)
+        {
+            const FSpeedTrapReading& Tr = Traps.Read(k);
+            if (!Tr.bValid || Tr.AtScan != Traps.ScansTaken() || Tr.OverScans < 8)
+            {
+                continue;
+            }
+            ++R.TrapTrips;
+            const double Needed = StoppingDistanceM(Tr.SpeedMs, TrapDecel[k]);
+            const double Margin = TrapDeviceLength[k] - Needed;
+            if (Margin < R.WorstTrapMarginM)
+            {
+                R.WorstTrapMarginM = Margin;
+                R.WorstTrapZone = static_cast<int>(TrapZone[k]);
+                R.WorstTrapSpeed = Tr.SpeedMs;
+            }
+            if (Needed > TrapDeviceLength[k] && !R.bOverspeed)
+            {
+                R.bOverspeed = true;
+                R.FirstOverspeed = F * Dt;
+                R.OverspeedSpeed = Tr.SpeedMs;
+                R.OverspeedNeeded = Needed;
+                R.OverspeedHave = TrapDeviceLength[k];
+                R.OverspeedZone = static_cast<int>(TrapZone[k]);
+                Drives.TripEmergencyStop("overspeed: too fast for the next device");
+            }
+        }
+
         ScanStopMarks(Marks, All, true, T.TotalLength());
         ServeStations(Platforms, All, Marks, Drives, Dt, &Loaded);
         for (std::size_t t = 0; t < N; ++t)
@@ -1561,36 +1655,71 @@ void TestAFailedBrakeAndWhatDoesAndDoesNOTCatchIt()
     assert(Loaded.FirstViolation > 0.0 && Loaded.FirstViolation < 60.0);
     assert(Loaded.bCounterOverOccupied);
 
-    // ---- 3. AND ON A LIGHTLY LOADED RIDE, NOTHING CATCHES IT AT ALL.
+    // ---- 3. AND ON A LIGHTLY LOADED RIDE IT IS ABSORBED, SILENTLY.
     //
-    // THE UNCOMFORTABLE ONE, and the reason this test is not named after the
-    // interlocking. Two trains, the outer brake dead. The arriving train is not
-    // stopped, rolls through into the next block — WHICH WAS EMPTY — and keeps
-    // circulating. Four minutes, two laps, still doing 30 m/s past a station it
-    // was supposed to be parked in, and NOT ONE VIOLATION.
+    // THIS ENTRY WAS WRONG WHEN IT WAS FIRST WRITTEN, and the speed trap is what
+    // corrected it. The claim was that the arriving train "circulates at 30.5 m/s
+    // past a station it should be parked in, undetected" — a runaway nothing
+    // caught. The 30.5 was the train's speed at the END of a four-minute run,
+    // which says only that it was somewhere fast at t = 240, and was read as
+    // evidence of something it does not show.
     //
-    // The interlocking answers "is the block ahead free". It was. Block signalling
-    // protects trains from each other and was never a check on whether a device
-    // works; a sparse circuit simply has the room to absorb a failure. What is
-    // missing is the question no layer here asks: IS THIS TRAIN GOING TOO FAST FOR
-    // WHAT IS IN FRONT OF IT.
+    // What actually happens, measured at every trap on the way round: the train
+    // is not held at the dead outer brake, arrives at the transfer tyres at
+    // 16.1 m/s instead of 6.1, and IS STOPPED THERE. The layout has the length.
+    // No violation is raised because no train was ever endangered, and that is
+    // correct rather than a gap.
     //
-    // ponytail: the fix is a speed trap — two block-boundary switches a surveyed
-    // distance apart give speed from the time between trips, with no position and
-    // no identity, which is how a real installation measures it and is already the
-    // shape FTrackSensors has. Compare that against v^2/2a for the next holding
-    // device, which build time already computes in
-    // TestEveryHoldingBlockCanActuallyStopWhatArrives. Not built: it is a new
-    // detector, and this test is what justifies building it.
+    // SO A FAILED BRAKE ON A WELL-LAID-OUT RIDE IS NOT A SAFETY EVENT. It is a
+    // capacity and schedule event: a block that should have held a train did not,
+    // the headway is wrong, and every downstream device is working harder than it
+    // was specified to. Nothing in this model says any of that, and the detector
+    // that is actually missing is "a train did not stop where it was told to" —
+    // not overspeed.
     const FRunResult Sparse = RunTrains(2, 1, 240.0, -1.0, nullptr, TrainLen, 3, 0.0);
-    assert(Sparse.Violations == 0);            // the interlocking never objects
-    assert(Sparse.FinalSpeed[1] > 25.0);       // to a train nothing ever stopped
-    assert(Sparse.Laps[1] >= 2);
+    assert(Sparse.Violations == 0);            // and rightly so
+    assert(Sparse.Laps[1] >= 1);               // the ride kept running
+
+    // ---- 4. WHAT THE TRAP BUYS IS THE MARGIN, NOT THE TRIP.
+    //
+    // Two switches a surveyed 10 m apart, ending 2 m before each holding device,
+    // giving speed from the time between two rising edges. No position and no
+    // train identity — what a real installation measures and what this layer is
+    // entitled to know. Against v^2/2a for the device ahead, which is the same
+    // arithmetic build time already runs with a MEASURED speed instead of a
+    // predicted one.
+    //
+    // IT DOES NOT TRIP ON EITHER RUN, and that is the result rather than a
+    // disappointment: a protective detector that fires when nothing is unsafe is
+    // worse than no detector at all. What it shows instead is the STOPPING MARGIN
+    // collapsing — the healthy ride never comes within 20 m of running out of
+    // brake, and with one brake dead the worst case is down to about 5 m.
+    //
+    // That is the number an operator would actually be shown, and it degrades
+    // continuously where a trip is a cliff.
+    assert(!Well.bOverspeed);
+    assert(!Sparse.bOverspeed);
+    assert(!DeadStation.bOverspeed);
+    // Healthy, the tightest moment on the whole circuit is the outer brake: the
+    // trap 12 m upstream reads 16.90 m/s, which needs 23.8 m of the 37.5 m it has.
+    // Slightly conservative by construction, because a trap sits BEFORE the device
+    // and reads a train that has not started braking — which is the right side to
+    // be wrong on.
+    assert(Well.WorstTrapMarginM > 13.0);
+    assert(Well.WorstTrapZone == 3);
+    // With that brake dead the worst case moves to the transfer tyres and falls to
+    // 5.1 m. Still positive, so still absorbed — and down by a factor of nearly
+    // three, which is the thing worth showing somebody.
+    assert(Sparse.WorstTrapMarginM < 6.0);
+    assert(Sparse.WorstTrapMarginM > 0.0);
+    assert(Sparse.WorstTrapZone == 4);
 
     std::printf("  a failed brake: parked on it the ride never dispatches;"
                 " loaded it violates at %.1f s and the counter agrees;"
-                " sparse it circulates at %.1f m/s UNDETECTED\n",
-                Loaded.FirstViolation, Sparse.FinalSpeed[1]);
+                " sparse it is ABSORBED — stopping margin falls from %.1f m to"
+                " %.1f m (zone %d, arriving %.1f m/s) with no violation\n",
+                Loaded.FirstViolation, Well.WorstTrapMarginM, Sparse.WorstTrapMarginM,
+                Sparse.WorstTrapZone, Sparse.WorstTrapSpeed);
 }
 
 void TestTheRideIsIDENTICALWithTheShowLayerAbsent()

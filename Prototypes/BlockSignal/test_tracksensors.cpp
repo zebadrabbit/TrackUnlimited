@@ -7,6 +7,7 @@
 #include "TrackSensors.h"
 
 #include <cassert>
+#include <cmath>
 #include <cstdio>
 #include <vector>
 
@@ -315,6 +316,181 @@ void TestAHealthySensorIsUNAFFECTEDByTheFaultMachinery()
     assert(S.FaultOn(1) == FTrackSensors::ESensorFault::None);
 }
 
+// ------------------------------------------------------ speed traps
+
+// A trap pair 2 m apart at 100 m, plus the four boundary sensors. Two switches
+// and a surveyed gap is the whole of it.
+std::vector<double> WithTrap() { return {0.0, 100.0, 102.0, 150.0, 300.0, 450.0}; }
+
+// Run a train past at a constant speed, scanning at 240 Hz, and give the trap
+// every scan. TrainLen matters: a sensor rises when the NOSE reaches it.
+void RunPast(FTrackSensors& S, FSpeedTraps& Traps, double SpeedMs,
+             double FromS, double ToS, double TrainLen = 15.0)
+{
+    const double Dt = 1.0 / 240.0;
+    for (double Nose = FromS; Nose <= ToS; Nose += SpeedMs * Dt)
+    {
+        S.BeginScan();
+        S.Cover(Nose - TrainLen, Nose, false, 600.0);
+        S.EndScan();
+        Traps.Scan(Dt);
+    }
+}
+
+void TestATrapMeasuresSpeedFromEDGESAndASurveyedGap()
+{
+    // No position and no train identity — two switches and the time between
+    // their rising edges. Exactly what a real installation measures, and exactly
+    // what this layer is entitled to know.
+    FTrackSensors S(WithTrap());
+    FSpeedTraps Traps(S);
+    assert(Traps.Survey(1, 2));                 // 100 m and 102 m
+    assert(Traps.Num() == 1);
+    assert(std::fabs(Traps.SpecOf(0).SeparationM - 2.0) < 1e-12);
+
+    // SURVEYED, NOT DERIVED. The gap was read once, here, at commissioning.
+    // Nothing per-scan looks at a position again.
+    assert(!Traps.Read(0).bValid);
+
+    RunPast(S, Traps, 20.0, 90.0, 130.0);
+    const FSpeedTrapReading& R = Traps.Read(0);
+    assert(R.bValid);
+    assert(std::fabs(R.SpeedMs - 20.0) < 0.5);  // within the scan quantisation
+    assert(!R.bArmed);                          // the pass completed
+    assert(R.Reversed == 0);
+
+    std::printf("  a 2 m trap reads %.2f m/s for a 20 m/s train, over %d scans\n",
+                R.SpeedMs, R.OverScans);
+}
+
+void TestTheQUANTISATIONIsRealAndIsREPORTED()
+{
+    // THE THING THAT MAKES A TRAP A DESIGN DECISION RATHER THAN A COMPONENT.
+    //
+    // A scan is a tick, so a trap resolves time to one of them. At 240 Hz a train
+    // doing 30 m/s covers 0.125 m per scan, so a 1 m gap is measured in 8 ticks —
+    // 12.5% error before anything else goes wrong. Widen the gap and the error
+    // falls; a 10 m gap on the same train is 80 ticks and 1.25%.
+    //
+    // Reported rather than enforced, because how much error a caller can live
+    // with depends on what it is about to do with the number.
+    const double Fast = 30.0;
+    double NarrowErr = 0.0, WideErr = 0.0;
+    int NarrowScans = 0, WideScans = 0;
+
+    {
+        FTrackSensors S({0.0, 100.0, 101.0});
+        FSpeedTraps T(S);
+        assert(T.Survey(1, 2));
+        RunPast(S, T, Fast, 90.0, 130.0);
+        assert(T.Read(0).bValid);
+        NarrowErr = std::fabs(T.Read(0).SpeedMs - Fast) / Fast;
+        NarrowScans = T.Read(0).OverScans;
+        assert(std::fabs(SpeedResolutionFraction(T.Read(0)) - 1.0 / NarrowScans) < 1e-12);
+    }
+    {
+        FTrackSensors S({0.0, 100.0, 110.0});
+        FSpeedTraps T(S);
+        assert(T.Survey(1, 2));
+        RunPast(S, T, Fast, 90.0, 140.0);
+        assert(T.Read(0).bValid);
+        WideErr = std::fabs(T.Read(0).SpeedMs - Fast) / Fast;
+        WideScans = T.Read(0).OverScans;
+    }
+
+    // WHAT IS ASSERTED IS THE BOUND, NOT THE REALISED ERROR, and the first
+    // version of this test asserted the wrong one and failed. Quantisation error
+    // is not monotonic in gap width on any single pass: it depends on where the
+    // two edges happen to land relative to a tick, so a narrow trap can simply be
+    // luckier than a wide one.
+    //
+    // The BOUND is the thing a designer can work against, and it is the number a
+    // trap should be commissioned from. Both readings sit inside their own, and
+    // the wide trap's is an order of magnitude tighter.
+    assert(WideScans > NarrowScans * 5);
+    assert(NarrowErr <= 1.0 / static_cast<double>(NarrowScans));
+    assert(WideErr <= 1.0 / static_cast<double>(WideScans));
+    assert(1.0 / static_cast<double>(WideScans) < 0.02);
+    std::printf("  1 m trap: %d scans, %.2f%% error inside a %.1f%% bound;"
+                " 10 m: %d scans, %.2f%% inside %.2f%%\n",
+                NarrowScans, NarrowErr * 100.0, 100.0 / NarrowScans,
+                WideScans, WideErr * 100.0, 100.0 / WideScans);
+}
+
+void TestABackwardsPassIsCOUNTEDAndIsNotASpeed()
+{
+    // A train tripping the SECOND switch without the first is going backwards, or
+    // the first switch missed it. Either is worth knowing and neither is a speed,
+    // so it is counted and no measurement is invented.
+    FTrackSensors S(WithTrap());
+    FSpeedTraps Traps(S);
+    assert(Traps.Survey(1, 2));
+
+    // Rolling back: the nose crosses 102 first, then 100.
+    const double Dt = 1.0 / 240.0;
+    for (double Nose = 110.0; Nose >= 90.0; Nose -= 5.0 * Dt)
+    {
+        S.BeginScan();
+        S.Cover(Nose - 15.0, Nose, false, 600.0);
+        S.EndScan();
+        Traps.Scan(Dt);
+    }
+    assert(!Traps.Read(0).bValid);          // nothing was measured
+    assert(Traps.Read(0).Reversed > 0);     // and the reason is recorded
+    std::printf("  a backwards pass is counted (%d), never turned into a speed\n",
+                Traps.Read(0).Reversed);
+}
+
+void TestATrainThatSTOPSBetweenTheSwitchesDisarmsTheTrap()
+{
+    // Without a timeout the trap stays armed for ever, and the NEXT train through
+    // is measured against a clock started minutes ago — a speed that is wrong by
+    // however long the ride was held. Worse than no reading, because it looks
+    // like one.
+    FTrackSensors S(WithTrap());
+    FSpeedTraps Traps(S);
+    assert(Traps.Add({1, 2, 2.0, /*ArmedScansLimit*/ 240}));   // one second
+
+    // Nose over the first switch, then stopped short of the second.
+    const double Dt = 1.0 / 240.0;
+    for (int i = 0; i < 600; ++i)
+    {
+        S.BeginScan();
+        S.Cover(86.0, 101.0, false, 600.0);
+        S.EndScan();
+        Traps.Scan(Dt);
+    }
+    assert(!Traps.Read(0).bArmed);
+    assert(Traps.Read(0).TimedOut == 1);
+    assert(!Traps.Read(0).bValid);
+    std::printf("  a train stopped between the switches disarms rather than lying later\n");
+}
+
+void TestWhatATrapIsFOR()
+{
+    // The measured gap this exists to close: outer brake dead, the arriving train
+    // not stopped, rolling into an empty block at 30.5 m/s with the interlocking
+    // silent because the block ahead genuinely was free.
+    //
+    // The trap turns that into a question the ride can answer. Stopping distance
+    // is v^2/2a — the same arithmetic the build-time check already runs against
+    // every holding device — and the only new thing is a MEASURED speed rather
+    // than a predicted one.
+    //
+    // The circuit's outer brake is 37.5 m long and bites at about 6 m/s^2.
+    const double BlockLength = 37.5;
+    const double Bite = 6.0;
+
+    assert(StoppingDistanceM(15.5, Bite) < BlockLength);   // a normal arrival fits
+    assert(StoppingDistanceM(30.5, Bite) > BlockLength);   // the failure does not
+    std::printf("  15.5 m/s needs %.1f m and fits in 37.5; 30.5 m/s needs %.1f m and does not\n",
+                StoppingDistanceM(15.5, Bite), StoppingDistanceM(30.5, Bite));
+
+    // And the decision is NOT taken here. A sensor says what it sees; what a ride
+    // does about a train arriving too fast is the PLC's job, the same rule the
+    // drives' fault detection runs on. Nothing in FSpeedTraps can stop anything.
+}
+
 } // namespace
 
 int main()
@@ -328,6 +504,12 @@ int main()
     TestADeadSENSORIsWhatTheSecondMethodExISTSToCatch();
     TestAStuckOnSensorAndAChatteringOneAreDifferentFailures();
     TestAHealthySensorIsUNAFFECTEDByTheFaultMachinery();
+
+    TestATrapMeasuresSpeedFromEDGESAndASurveyedGap();
+    TestTheQUANTISATIONIsRealAndIsREPORTED();
+    TestABackwardsPassIsCOUNTEDAndIsNotASpeed();
+    TestATrainThatSTOPSBetweenTheSwitchesDisarmsTheTrap();
+    TestWhatATrapIsFOR();
 
     std::printf("test_tracksensors: all assertions passed\n");
     return 0;

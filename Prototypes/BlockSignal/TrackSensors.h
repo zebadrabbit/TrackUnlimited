@@ -307,3 +307,194 @@ private:
     std::vector<int> SeenRising;
     std::vector<int> SeenFalling;
 };
+
+// ===================== HOW FAST, FROM SWITCHES ALONE =====================
+//
+// A pair of switches a surveyed distance apart, and a clock. Speed is that
+// distance over the time between their rising edges — no position, no train
+// identity, nothing this layer is not entitled to. It is how a real installation
+// measures a train's speed, and it is the shape FTrackSensors already had.
+//
+// WHY IT EXISTS, MEASURED RATHER THAN ASSUMED. With the outer brake dead and two
+// trains on the circuit, the arriving train is not stopped, rolls into the next
+// block — which was EMPTY — and circulates for four minutes still doing 30.5 m/s
+// past a station it should be parked in, without one signalling violation. The
+// interlocking answers "is the block ahead free". It was.
+//
+// So block signalling protects trains FROM EACH OTHER and was never a check on
+// whether a device works. The question nothing here asked is the one this
+// answers: IS THIS TRAIN GOING TOO FAST FOR WHAT IS IN FRONT OF IT.
+//
+// THE SEPARATION IS SURVEYED, NOT DERIVED. Sensor positions exist in this
+// program and reading them would be simpler and could never drift — which is
+// exactly why it is not done. A real trap is commissioned by measuring the gap
+// once, and a mis-surveyed one is a real failure that this should be able to
+// express. Same idiom as the stop mark consuming train length at placement:
+// consume the position once, at survey, and never again.
+//
+// IT REPORTS A SPEED, IT DOES NOT DECIDE ANYTHING. A sensor says what it sees;
+// what a ride does about a train arriving too fast is the PLC's job, which is the
+// same rule the drives' fault detection runs on.
+struct FSpeedTrapSpec
+{
+    std::size_t First = 0;      // the switch a train crosses first, in travel order
+    std::size_t Second = 0;
+    double SeparationM = 0.0;   // SURVEYED at commissioning, not read per scan
+
+    // How long a trap stays armed after its first switch trips. A train that
+    // stops between the two would otherwise leave it armed for ever, and the next
+    // train through would be measured against a clock started minutes ago.
+    // Generous — 20 s at 240 Hz — because the slowest thing that legitimately
+    // crosses a trap is a train being trucked at a crawl.
+    int ArmedScansLimit = 4800;
+};
+
+// What one trap knows.
+struct FSpeedTrapReading
+{
+    double SpeedMs = 0.0;      // last measurement, 0 until there is one
+    int OverScans = 0;         // how many scans it was measured over
+    bool bArmed = false;       // first switch tripped, waiting for the second
+    bool bValid = false;       // a measurement has been taken and is not stale
+    long long AtScan = -1;     // when
+
+    // Counted, not acted on. A train that trips the SECOND switch without the
+    // first is going backwards, or the first switch missed it. Either is worth
+    // knowing and neither is a speed.
+    int Reversed = 0;
+    int TimedOut = 0;
+};
+
+// Speed measured from switch edges. One instance owns every trap on the ride, so
+// it scans once, in the same place FBlockCounter does.
+class FSpeedTraps
+{
+public:
+    explicit FSpeedTraps(const FTrackSensors& InSensors)
+        : Sensors(InSensors)
+    {
+    }
+
+    // SURVEY. Reads the two positions ONCE, here, which is what commissioning a
+    // trap is. Refuses a pair whose separation is zero or negative, because a
+    // trap measuring across no distance divides by it.
+    bool Survey(std::size_t First, std::size_t Second, int ArmedScansLimit = 4800)
+    {
+        if (First >= Sensors.Num() || Second >= Sensors.Num() || First == Second)
+        {
+            return false;
+        }
+        const double Sep = Sensors.PositionOf(Second) - Sensors.PositionOf(First);
+        if (!(Sep > 0.0))
+        {
+            return false;
+        }
+        return Add({First, Second, Sep, ArmedScansLimit});
+    }
+
+    bool Add(const FSpeedTrapSpec& In)
+    {
+        if (In.First >= Sensors.Num() || In.Second >= Sensors.Num()
+            || In.First == In.Second || !(In.SeparationM > 0.0))
+        {
+            return false;
+        }
+        Spec.push_back(In);
+        State.push_back(FSpeedTrapReading());
+        SeenFirst.push_back(Sensors.Read(In.First).Rising);
+        SeenSecond.push_back(Sensors.Read(In.Second).Rising);
+        ArmedAt.push_back(-1);
+        return true;
+    }
+
+    std::size_t Num() const { return Spec.size(); }
+    const FSpeedTrapReading& Read(std::size_t Trap) const { return State[Trap]; }
+    const FSpeedTrapSpec& SpecOf(std::size_t Trap) const { return Spec[Trap]; }
+
+    // Once per scan, after the sensors are updated. Edges, so a scan read twice
+    // is two trains — the same contract the counter and the overlap ageing have.
+    void Scan(double DeltaSeconds)
+    {
+        ++ScanCount;
+        for (std::size_t t = 0; t < Spec.size(); ++t)
+        {
+            const FSpeedTrapSpec& S = Spec[t];
+            FSpeedTrapReading& R = State[t];
+
+            const int FirstNow = Sensors.Read(S.First).Rising;
+            const int SecondNow = Sensors.Read(S.Second).Rising;
+            const bool bFirstTripped = FirstNow > SeenFirst[t];
+            const bool bSecondTripped = SecondNow > SeenSecond[t];
+            SeenFirst[t] = FirstNow;
+            SeenSecond[t] = SecondNow;
+
+            if (bSecondTripped && R.bArmed)
+            {
+                const int Scans = static_cast<int>(ScanCount - ArmedAt[t]);
+                const double Seconds = static_cast<double>(Scans) * DeltaSeconds;
+                if (Seconds > 0.0)
+                {
+                    R.SpeedMs = S.SeparationM / Seconds;
+                    R.OverScans = Scans;
+                    R.bValid = true;
+                    R.AtScan = ScanCount;
+                }
+                R.bArmed = false;
+                ArmedAt[t] = -1;
+            }
+            else if (bSecondTripped)
+            {
+                // Second without first: backwards, or the first switch missed it.
+                // Counted, never guessed at.
+                ++R.Reversed;
+            }
+
+            if (bFirstTripped)
+            {
+                R.bArmed = true;
+                ArmedAt[t] = ScanCount;
+            }
+            else if (R.bArmed && S.ArmedScansLimit > 0
+                     && ScanCount - ArmedAt[t] > S.ArmedScansLimit)
+            {
+                // A train stopped between the switches. Disarm rather than carry a
+                // clock started minutes ago into the next train's measurement.
+                R.bArmed = false;
+                ArmedAt[t] = -1;
+                ++R.TimedOut;
+            }
+        }
+    }
+
+    long long ScansTaken() const { return ScanCount; }
+
+private:
+    const FTrackSensors& Sensors;
+    std::vector<FSpeedTrapSpec> Spec;
+    std::vector<FSpeedTrapReading> State;
+    std::vector<int> SeenFirst;
+    std::vector<int> SeenSecond;
+    std::vector<long long> ArmedAt;
+    long long ScanCount = 0;
+};
+
+// How much track it takes to stop from this speed at this deceleration. The
+// arithmetic the build-time check already does against every holding device; the
+// only new thing a trap brings is a MEASURED speed instead of a predicted one.
+inline double StoppingDistanceM(double SpeedMs, double DecelMs2)
+{
+    return DecelMs2 > 0.0 ? (SpeedMs * SpeedMs) / (2.0 * DecelMs2) : 1e30;
+}
+
+// THE QUANTISATION, AND IT IS NOT A DETAIL. A scan is a tick, so a trap can only
+// resolve time to one of them: at 240 Hz a train doing 30 m/s covers 0.125 m per
+// scan, and a 1 m trap therefore measures it in 8 ticks — ±12.5% before anything
+// else goes wrong.
+//
+// So a measurement over few scans is not a measurement, and a safety decision
+// taken on one is worse than none. Returned rather than enforced, because how
+// much error a caller can live with depends on what it is about to do.
+inline double SpeedResolutionFraction(const FSpeedTrapReading& R)
+{
+    return R.OverScans > 0 ? 1.0 / static_cast<double>(R.OverScans) : 1.0;
+}

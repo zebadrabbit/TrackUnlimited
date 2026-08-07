@@ -88,24 +88,53 @@ is *approaching* rather than standing on them: it overruns into a block it was n
 interlocking raises a violation at 32.3 s, and the block counter — which knows only that switches
 tripped — independently counts a block occupied twice. Both trip the E-stop.
 
-**3. Sparse, NOTHING catches it.** Two trains, the outer brake killed. The arriving train is not
-stopped, rolls through into the next block — *which was empty* — and keeps circulating. Four minutes,
-two laps, still doing **30.5 m/s** past a station it was supposed to be parked in, and **not one
-violation**.
+**3. Sparse, it is ABSORBED — silently.** Two trains, the outer brake killed. The arriving train is
+not held there, reaches the transfer tyres at **16.1 m/s instead of 6.1**, and is stopped by them.
+The layout has the length. No violation is raised because no train was ever endangered.
 
-That third case is the honest state of things and the reason this entry is no longer titled after the
-interlocking. Block signalling answers *"is the block ahead free"*; it was. It protects trains from
-each other and was never a check on whether a device works — a sparse circuit simply has the room to
-absorb a failure. The old text's "so it *is* detected, indirectly" was true only for case 2 and was
-never measured.
+> **This entry said something else for a few hours and it was wrong.** The claim was that the train
+> "circulates at 30.5 m/s past a station it should be parked in, undetected" — a runaway nothing
+> caught. The 30.5 was the train's speed at the *end* of a four-minute run, which says only that it
+> was somewhere fast at t = 240, and it was read as evidence of something it does not show. The speed
+> trap below is what corrected it, by measuring what the train was actually doing at every device on
+> the way round. The original card text — *"the layout catches it, if the layout has somewhere to
+> catch it"* — turns out to have been right.
 
-**What is missing is the question no layer here asks: is this train going too fast for what is in
-front of it.** The fix is a **speed trap** — two block-boundary switches a surveyed distance apart,
-giving speed from the time between trips, with no position and no train identity. That is how a real
-installation measures it and it is already the shape `FTrackSensors` has. Compare it against `v²/2a`
-for the next holding device, which build time already computes in
-`TestEveryHoldingBlockCanActuallyStopWhatArrives`. Not built: it is a new detector rather than a
-wiring job, and case 3 above is what justifies building it.
+**So a failed brake on a well-laid-out ride is not a safety event at all.** It is a **capacity and
+schedule** event: a block that should have held a train did not, the headway is wrong, and every
+downstream device is working harder than it was specified to. Nothing in this model reports any of
+that, and the detector actually missing is *"a train did not stop where it was told to"* — not
+overspeed.
+
+### The speed trap, and what it turned out to be for
+
+**BUILT 2026-08-06.** `FSpeedTraps` in `TrackSensors.h`. Two switches a **surveyed** distance apart
+and a clock: speed is the gap over the time between their rising edges, with no position and no train
+identity. That is how a real installation measures it, and it is the shape `FTrackSensors` already
+had. The gap is read from the sensor positions **once, at commissioning**, and never again — the same
+idiom as the stop mark consuming train length at survey rather than in the dispatcher.
+
+Four things it gets right, each asserted:
+
+- **The quantisation is real and is reported.** A scan is a tick, so at 240 Hz a train doing 30 m/s
+  covers 0.125 m per scan and a 1 m trap measures it in 8 ticks — a **12.5% bound** before anything
+  else goes wrong. A 10 m trap is 80 ticks and 1.25%. What is asserted is the *bound*, not the
+  realised error: quantisation is not monotonic in gap width on any single pass, and the first
+  version of that test asserted the wrong one and failed.
+- **A backwards pass is counted, never turned into a speed.** Second switch without the first is a
+  rollback or a missed trip; both are worth knowing and neither is a measurement.
+- **A train that stops between the switches disarms the trap.** Without it the next train through is
+  measured against a clock started minutes ago — worse than no reading, because it looks like one.
+- **It reports; it does not decide.** The comparison against `v²/2a` for the device ahead is the PLC
+  program's, the same rule the drives' fault detection runs on.
+
+**And on the real circuit it never trips, which is the result rather than a disappointment** — a
+protective detector that fires when nothing is unsafe is worse than none. What it shows instead is
+the **stopping margin**, and that is the useful number: healthy, the tightest moment on the whole ride
+is the outer brake at **13.7 m** to spare; with one brake dead the worst case moves to the transfer
+tyres and falls to **5.1 m**. Still positive, so still absorbed — and down by nearly a factor of
+three. A margin degrades continuously where a trip is a cliff, and it is what an operator should
+actually be shown.
 
 ---
 
