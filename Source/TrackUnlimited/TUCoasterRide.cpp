@@ -1831,10 +1831,21 @@ void ATUCoasterRide::DrawSegmentEditor(UCanvas* Canvas)
 
 	const float Row = 15.f;
 	const float W = 320.f;
-	const float Ox = 20.f;
-	float Y = 40.f;
 
-	PanelTile(Canvas, Ox - 8.f, Y - 8.f, W + 16.f, 24.f + Row * 20.f, PanelGround);
+	// LOWER RIGHT, because it is the only corner nothing else wants. The upper
+	// left is the telemetry readout's and this drew straight over it; the upper
+	// right belongs to the diagnostics panel, which is 620 wide.
+	//
+	// ANCHORED TO THE CANVAS rather than typed, so it stays in the corner at any
+	// resolution — and the tooltip's two lines are counted into the anchor, or
+	// the thing that explains a field is the thing that falls off the bottom of
+	// the screen.
+	const float BodyH = 24.f + Row * 20.f;
+	const float TipH = 6.f + Row * 2.f;
+	const float Ox = Canvas->SizeX - W - 20.f;
+	float Y = Canvas->SizeY - (BodyH + TipH) - 20.f;
+
+	PanelTile(Canvas, Ox - 8.f, Y - 8.f, W + 16.f, BodyH, PanelGround);
 
 	if (Segments.Num() == 0)
 	{
@@ -5159,17 +5170,30 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 	const FTrackFrame& Frame = Train->GetFrameAt(SeatOffset);
 	const FQuat Rotation = ToWorldRotation(Frame);
 
-	// One car per sample point. The cars sit on the RAILS; the rider sits at
-	// the heartline. That distinction is the entire reason the heartline model
-	// exists, so the slice shows it rather than putting both in one place.
+	// THE BODY OF THE TRAIN, ONE BOX PER SAMPLE POINT — and the boxes ABUT into
+	// one continuous body rather than standing apart as vehicles.
+	//
+	// A SAMPLE POINT IS NOT A CAR, and treating it as one is what the first
+	// version did. SampleCount() is 9 because that is what the mean-height
+	// gravity integration needs; it has nothing to do with how many vehicles a
+	// train has, and FTrainConfig has no car count at all — it models a train as
+	// a LENGTH. Dividing that length into nine and leaving a gap between each
+	// piece made a 15 m train look accidentally plausible (nine 1.5 m boxes) and
+	// the 6 m small-batch vehicle look like nine playing cards standing on edge.
+	// Same code, and only one of the two presets exposed it.
+	//
+	// So the boxes are the sample SPACING long and touch end to end. What is
+	// drawn is then exactly what the physics knows: a body of TrainLength,
+	// following the track, with no invented vehicle count.
 	//
 	// Frames come from the train rather than from Track.EvaluateAt, which is
-	// O(track length) a call and would be six of those every frame.
+	// O(track length) a call and would be nine of those per train every frame.
 	{
-		const int32 CarCount = Train->NumSamplePoints();
-		const int32 Total = CarCount * Trains.Num();
-		const double CarLength =
-			TrainLengthM > 0.f ? TrainLengthM / CarCount : 2.4;
+		const int32 Points = Train->NumSamplePoints();
+		const int32 Total = Points * Trains.Num();
+		// Nose-to-tail over Points samples is Points-1 gaps.
+		const double Spacing = (Points > 1 && TrainLengthM > 0.f)
+			? static_cast<double>(TrainLengthM) / (Points - 1) : 2.4;
 		if (Cars->GetInstanceCount() != Total)
 		{
 			Cars->ClearInstances();
@@ -5178,14 +5202,32 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 				Cars->AddInstance(FTransform::Identity, true);
 			}
 		}
-		const FVector CarScale(CarLength * 0.9, 1.4, 1.0);
+
+		// Generic, per constraint 5: a shade under a metre and a half across and
+		// about chest height on a seated rider.
+		const double BodyWidth = 1.4;
+		const double BodyHeight = 1.2;
+		const FVector CarScale(Spacing, BodyWidth, BodyHeight);
+
 		for (int32 t = 0; t < Trains.Num(); ++t)
 		{
-			for (int32 i = 0; i < CarCount; ++i)
+			for (int32 i = 0; i < Points; ++i)
 			{
-				const int32 Slot = t * CarCount + i;
+				const int32 Slot = t * Points + i;
 				const FTrackFrame& CarFrame = Trains[t]->GetSamplePoint(i);
-				const FVec3 OnRails = CarFrame.Position - CarFrame.Up * Track.GetHeartlineHeight();
+
+				// SITS ON THE RAILS, WHICH IS NOT THE SAME AS CENTRED ON THEM.
+				// The first version put the box's CENTRE at the rail plane, so
+				// half of it was buried in the ties and the spine — which is
+				// exactly what the screenshot showed. A cube's origin is its
+				// middle, so the body has to be lifted by half its height.
+				//
+				// The rider still sits at the heartline, which is above this.
+				// That distinction is the entire reason the heartline model
+				// exists, so the slice shows it rather than putting both in one
+				// place.
+				const FVec3 OnRails = CarFrame.Position
+					- CarFrame.Up * (Track.GetHeartlineHeight() - BodyHeight * 0.5);
 				Cars->UpdateInstanceTransform(Slot,
 					FTransform(ToWorldRotation(CarFrame), ToWorld(OnRails), CarScale), true,
 					Slot == Total - 1, true);
