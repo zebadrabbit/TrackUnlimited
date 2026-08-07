@@ -3,9 +3,9 @@
 Injecting failures into the ride and recording **whether the safety design catches them**. Breaking
 things is easy; the artifact worth having is the second column.
 
-**Status: partly built.** The injection hooks marked ✅ below exist and are asserted. Nothing
-schedules them yet — there is no scenario layer, and that is the missing piece rather than a missing
-concept.
+**Status: the taxonomy holds and most of it is built.** Every hook marked ✅ exists and is
+asserted, and `Prototypes/BlockSignal/Scenario.h` schedules them against the scan counter. What is
+still hand-rolled is the assertion vocabulary, not the mechanism.
 
 ---
 
@@ -42,8 +42,58 @@ on a scan counter for that reason.
 | Loose connection / chatter | ✅ `ESensorFault::Chatter` | **E-stop** | Edges from nothing; the counter drifts from the span and the cross-check trips. |
 | Drive slipping / stalled motor | ⚠️ detection only | **Fault → E-stop** | Slip **and** torque **and** time **and** not gaining. No injection hook yet; feedback can be reported by hand. |
 | **Failed brake** | ✅ `FTrackDrives::SetDeliveredFraction` | **Depends entirely on where the ride was** | Three measured answers, one of which is "nothing". See below — still the most interesting entry here. |
-| Broken wire on a safety input | ❌ | **Nothing** | Needs inputs modelled normally-closed — de-energise to trip. On the Tier 1 card, not built. |
-| Welded contactor | ❌ | **Nothing** | Needs external device monitoring: NC aux contacts in series into the reset, so a welded contactor blocks it. On the Tier 1 card. |
+| Broken wire on a safety input | ✅ `FSafetyChannel` | **Reads as a pressed button** | Inputs are normally-closed, so a stop is demanded by the ABSENCE of current. Nothing has to know why it stopped. |
+| Welded contactor | ✅ `FContactorPair::Weld` | **Blocks the reset, for ever** | Mirror contacts (NC, mechanically linked) in series into the reset circuit. One weld is latent and the second is power reaching a machine the relay switched off — and now that is expressible. |
+| Short to the supply on one channel | ✅ | **The other channel's polarity** | Two channels of OPPOSITE polarity: the fault that makes one read safe makes the other read demanded. Beyond the discrepancy window it latches. |
+| A diverse sensor pair loses one | ✅ `FDiversePair` | **Degrades to a stop** | Not to the surviving sensor. One dead and one saying safe is a single point of failure wearing the appearance of a checked one. |
+| Restraint power lost | ✅ `FRestraintLock` | **Bars stay DOWN** | The exception that proves the rule: fail-safe is not "de-energise", it is "fail to the state that cannot hurt anybody", and for a restraint that is LOCKED. |
+
+### De-energise to trip, and the wiring under the E-stop
+
+**BUILT 2026-08-06.** `SafetyIo.h`. `FTrackDrives` already held the E-stop and its stop categories;
+this is everything BELOW that, which the project had been modelling as plain booleans.
+
+**A safety input is a circuit, not a button.** It carries current while all is well, and a stop is
+demanded by the ABSENCE of current — so a broken wire, a pulled connector, a dead supply and a
+pressed button are the same signal, and nothing has to know which. The failure modes of the wiring
+land on the safe side by construction rather than by being enumerated. It is the same shape as three
+things already here — the fail-safe brake, CiA 402's active-low quick stop, the block counter's
+falling edge — and this is where the idea finally gets named.
+
+**Two channels, opposite polarity.** One channel fails to danger in one specific way: a short to the
+supply makes a normally-closed contact read energised for ever, which reads as safe, which means a
+pressed E-stop does nothing. Doubling the channel does not help — one short in a shared loom takes
+both. Opposite polarity does: the fault that makes one read safe makes the other read demanded. That
+is the difference between **redundancy and diversity**.
+
+**A stop is EITHER channel, not both.** A pair that required agreement would be a system where one
+broken wire disables the E-stop.
+
+**The comparison is not instant.** A dual-channel button's two contact blocks never switch on the
+same millisecond, so an instant comparison faults on every legitimate press. Hence the discrepancy
+window — 0.5 s here, 3 s on some relays. Measured: 50 ms of disagreement is fine, a full second is a
+latched fault.
+
+**Instantaneous and delayed outputs, and Cat 1 is impossible without both.** A relay whose contactors
+open the instant the button is pressed leaves nothing to ramp with, so "controlled stop with power
+retained" would be a Cat 0 wearing a label. The delayed output is where the retention physically
+lives, and its deadline is the same 5 s the drives already hold — the same relay described from two
+sides.
+
+> **One safety mechanism caught another's bug during this work.** The delay was armed from
+> construction rather than from a transition, so a relay that had never been enabled held its
+> contactors closed for the first five seconds of its life. It surfaced because the mirror contacts
+> then refused the very first reset, correctly reporting that the mains had never opened. That is
+> worth more than the assertion that noticed.
+
+**A restraint fails the other way, and that is not an exception to the rule.** Fail-safe was never
+"de-energise"; it is *fail to the state that cannot hurt anybody*, and for a brake that is applied
+while for a restraint it is shut. `FRestraintLock` needs command AND power to unlock, and can say
+which of the two identical-looking kinds of "locked" it is in.
+
+**Not modelled:** OSSD pulse testing, cross-monitoring between separate relays, PL/SIL arithmetic.
+Those are how an installation *proves* a category rather than implements one, and they need a
+failure-rate model this project has no business inventing.
 
 ### Dead and stuck-on are not mirror images
 
