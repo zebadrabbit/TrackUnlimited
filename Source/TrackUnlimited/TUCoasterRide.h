@@ -1064,6 +1064,79 @@ private:
 	TArray<FVector4> MenuRowRects;
 	TArray<int32> MenuRowAction;   // >=0 template, -1000-n recent index, -1 open
 
+	/**
+	 * THE SEGMENT EDITOR, AS A RUNTIME PANEL.
+	 *
+	 * The Details panel is the developer path; this is the shipping one, and
+	 * constraint 1 still holds absolutely — numeric entry only, no drag handles
+	 * in the viewport, ever.
+	 *
+	 * TYPED, NOT NUDGED. A numeric field needs digits, a decimal point, a minus
+	 * sign and backspace, and every one of those is a bindable key — so this is
+	 * genuine typed entry rather than a stepper wearing its name. What it does
+	 * not have is selection, clipboard or IME, which is why the field shows a
+	 * caret and edits from the right rather than pretending to be a text box.
+	 *
+	 * Which fields show, and what happens to a value whose field stops showing,
+	 * are decided in Prototypes/Shell/SegmentEditorModel.h and tested there:
+	 * HIDDEN IS NOT DELETED, so flipping Arc to Straight and back keeps a radius.
+	 */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Editor")
+	bool bShowSegmentEditor = false;
+
+	/** Which field is taking keystrokes, or Count for none. */
+	EEditField FocusedField = EEditField::Count;
+
+	/** What has been typed so far. Committed on Enter, discarded on Escape —
+	 *  never applied per keystroke, because "3" on the way to "30" is a segment
+	 *  3 m long and a rebuild nobody asked for. */
+	FString FieldBuffer;
+
+	TArray<FVector4> EditorRowRects;
+	TArray<int32> EditorRowField;    // EEditField as int, or -1000-n for a segment row
+
+	void DrawSegmentEditor(class UCanvas* Canvas);
+	void ClickSegmentEditor();
+	void TypeDigit(int32 D);
+	void TypePoint();
+	void TypeMinus();
+	void TypeBackspace();
+
+	/**
+	 * CONTEXT, WHICH IS THE PART PEOPLE LEAVE OUT — and `FInputMap`'s own test
+	 * says so: it is why one key can mean two things without either being a
+	 * mistake, and why a GLOBAL binding conflicts with every context.
+	 *
+	 * Three keys are genuinely wanted twice here. Backspace is the emergency stop
+	 * AND deletes a digit; the full stop steps one scan AND types a decimal
+	 * point. Binding both to each would fire both — and an operator typing a
+	 * radius would E-STOP THE RIDE, which is not a UI wart, it is the worst kind
+	 * of surprise this project can produce.
+	 *
+	 * So they dispatch on whether a field has focus. Editing wins while editing;
+	 * the operator's controls win the rest of the time.
+	 */
+	bool IsTypingInField() const { return FocusedField != EEditField::Count; }
+	void KeyBackspace();
+	void KeyPeriod();
+
+	/** Ten of them, because BindKey wants a no-argument method. Tedious and
+	 *  honest: the alternative is a lambda per key doing the same thing. */
+	void Type0() { TypeDigit(0); } void Type1() { TypeDigit(1); }
+	void Type2() { TypeDigit(2); } void Type3() { TypeDigit(3); }
+	void Type4() { TypeDigit(4); } void Type5() { TypeDigit(5); }
+	void Type6() { TypeDigit(6); } void Type7() { TypeDigit(7); }
+	void Type8() { TypeDigit(8); } void Type9() { TypeDigit(9); }
+	void CommitField();
+	void CancelField();
+	void ToggleSegmentEditor() { bShowSegmentEditor = !bShowSegmentEditor; CancelField(); }
+
+	/** The authored value behind a field, and the way back. One place, so the
+	 *  panel and the model cannot disagree about which float is which. */
+	double ReadField(const FTUTrackSegment& S, EEditField F) const;
+	void WriteField(FTUTrackSegment& S, EEditField F, double V);
+	static EEditKind KindOf(ETUSegmentKind K);
+
 	void DrawMainMenu(class UCanvas* Canvas);
 	void ClickMainMenu();
 

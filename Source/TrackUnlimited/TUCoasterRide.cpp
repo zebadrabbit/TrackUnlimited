@@ -1546,8 +1546,11 @@ void ATUCoasterRide::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 		&ATUCoasterRide::PressDispatch);
 	PlayerInputComponent->BindKey(EKeys::SpaceBar, IE_Released, this,
 		&ATUCoasterRide::ReleaseDispatch);
+	// BACKSPACE IS WANTED TWICE — the emergency stop, and deleting a digit. It
+	// dispatches on whether a field has focus rather than being bound twice,
+	// because two handlers on one key both fire.
 	PlayerInputComponent->BindKey(EKeys::BackSpace, IE_Pressed, this,
-		&ATUCoasterRide::PressEmergencyStop);
+		&ATUCoasterRide::KeyBackspace);
 	// MONITORED RESET: pressed AND released, both bound, because the reset happens
 	// on the release. A key bound only on press is a taped button.
 	PlayerInputComponent->BindKey(EKeys::End, IE_Pressed, this,
@@ -1609,13 +1612,47 @@ void ATUCoasterRide::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 	PlayerInputComponent->BindKey(EKeys::Tab, IE_Pressed, this,
 		&ATUCoasterRide::CycleAppMode);
 
+	// THE SEGMENT EDITOR. Numeric entry only — constraint 1 holds absolutely, and
+	// a digit key IS typed entry rather than a stepper wearing its name.
+	PlayerInputComponent->BindKey(EKeys::B, IE_Pressed, this,
+		&ATUCoasterRide::ToggleSegmentEditor);
+	PlayerInputComponent->BindKey(EKeys::Enter, IE_Pressed, this,
+		&ATUCoasterRide::CommitField);
+	PlayerInputComponent->BindKey(EKeys::Escape, IE_Pressed, this,
+		&ATUCoasterRide::CancelField);
+	PlayerInputComponent->BindKey(EKeys::Decimal, IE_Pressed, this,
+		&ATUCoasterRide::TypePoint);
+	// The digits, main row and numpad. Ten methods rather than ten lambdas,
+	// because BindKey wants a no-argument method either way.
+	const FKey Row[10] = {EKeys::Zero, EKeys::One, EKeys::Two, EKeys::Three, EKeys::Four,
+		EKeys::Five, EKeys::Six, EKeys::Seven, EKeys::Eight, EKeys::Nine};
+	const FKey Pad[10] = {EKeys::NumPadZero, EKeys::NumPadOne, EKeys::NumPadTwo,
+		EKeys::NumPadThree, EKeys::NumPadFour, EKeys::NumPadFive, EKeys::NumPadSix,
+		EKeys::NumPadSeven, EKeys::NumPadEight, EKeys::NumPadNine};
+	void (ATUCoasterRide::*Digit[10])() = {
+		&ATUCoasterRide::Type0, &ATUCoasterRide::Type1, &ATUCoasterRide::Type2,
+		&ATUCoasterRide::Type3, &ATUCoasterRide::Type4, &ATUCoasterRide::Type5,
+		&ATUCoasterRide::Type6, &ATUCoasterRide::Type7, &ATUCoasterRide::Type8,
+		&ATUCoasterRide::Type9};
+	for (int32 i = 0; i < 10; ++i)
+	{
+		PlayerInputComponent->BindKey(Row[i], IE_Pressed, this, Digit[i]);
+		PlayerInputComponent->BindKey(Pad[i], IE_Pressed, this, Digit[i]);
+	}
+	PlayerInputComponent->BindKey(EKeys::Hyphen, IE_Pressed, this,
+		&ATUCoasterRide::TypeMinus);
+	PlayerInputComponent->BindKey(EKeys::Subtract, IE_Pressed, this,
+		&ATUCoasterRide::TypeMinus);
+
 	// THE SIM CLOCK. Watching a buffer count down at quarter speed is how
 	// somebody learns what the interlocking is doing, and stepping one scan at a
 	// time is how they see a permissive drop the frame a restraint opens.
 	PlayerInputComponent->BindKey(EKeys::Pause, IE_Pressed, this,
 		&ATUCoasterRide::TogglePause);
+	// And the full stop: one scan when the ride is what you are looking at, a
+	// decimal point when a field is.
 	PlayerInputComponent->BindKey(EKeys::Period, IE_Pressed, this,
-		&ATUCoasterRide::StepOneScan);
+		&ATUCoasterRide::KeyPeriod);
 	PlayerInputComponent->BindKey(EKeys::Comma, IE_Pressed, this,
 		&ATUCoasterRide::SlowDown);
 	PlayerInputComponent->BindKey(EKeys::Slash, IE_Pressed, this,
@@ -1643,6 +1680,280 @@ void ATUCoasterRide::CycleCameraMode()
 	// Re-seed on the way in, so the free camera starts from wherever you were
 	// just looking rather than teleporting you somewhere unrecognisable.
 	bFreeInitialised = false;
+}
+
+EEditKind ATUCoasterRide::KindOf(ETUSegmentKind K)
+{
+	switch (K)
+	{
+	case ETUSegmentKind::Arc:      return EEditKind::Arc;
+	case ETUSegmentKind::Clothoid: return EEditKind::Clothoid;
+	case ETUSegmentKind::Helix:    return EEditKind::Helix;
+	default:                       return EEditKind::Straight;
+	}
+}
+
+double ATUCoasterRide::ReadField(const FTUTrackSegment& S, EEditField F) const
+{
+	switch (F)
+	{
+	case EEditField::Length:         return S.Length;
+	case EEditField::Radius:         return S.Radius;
+	case EEditField::CurvatureStart: return S.CurvatureStart;
+	case EEditField::CurvatureEnd:   return S.CurvatureEnd;
+	case EEditField::ClimbAngle:     return S.ClimbAngleDegrees;
+	case EEditField::Turns:          return S.Turns;
+	case EEditField::Roll:           return S.RollEndDegrees;
+	case EEditField::ZoneSpeed:      return S.ZoneSpeed;
+	default:                         return 0.0;
+	}
+}
+
+void ATUCoasterRide::WriteField(FTUTrackSegment& S, EEditField F, double V)
+{
+	switch (F)
+	{
+	case EEditField::Length:         S.Length = static_cast<float>(V); break;
+	case EEditField::Radius:         S.Radius = static_cast<float>(V); break;
+	case EEditField::CurvatureStart: S.CurvatureStart = static_cast<float>(V); break;
+	case EEditField::CurvatureEnd:   S.CurvatureEnd = static_cast<float>(V); break;
+	case EEditField::ClimbAngle:     S.ClimbAngleDegrees = static_cast<float>(V); break;
+	case EEditField::Turns:          S.Turns = static_cast<float>(V); break;
+	case EEditField::Roll:           S.RollEndDegrees = static_cast<float>(V); break;
+	case EEditField::ZoneSpeed:      S.ZoneSpeed = static_cast<float>(V); break;
+	default: break;
+	}
+}
+
+void ATUCoasterRide::DrawSegmentEditor(UCanvas* Canvas)
+{
+	if (!bShowSegmentEditor || !Canvas || !GEngine) { return; }
+
+	EditorRowRects.Reset();
+	EditorRowField.Reset();
+
+	const float Row = 15.f;
+	const float W = 320.f;
+	const float Ox = 20.f;
+	float Y = 40.f;
+
+	PanelTile(Canvas, Ox - 8.f, Y - 8.f, W + 16.f, 24.f + Row * 20.f, PanelGround);
+
+	if (Segments.Num() == 0)
+	{
+		PanelLabel(Canvas, Ox, Y, TEXT("SEGMENTS   [B] hide"), PanelDim);
+		PanelLabel(Canvas, Ox, Y + 20.f,
+			UTF8_TO_TCHAR(EmptyStateFor(EPanelKind::SegmentList)), PanelDim);
+		return;
+	}
+
+	// EDITS ARE A MODE QUESTION, and the panel says so rather than simply
+	// ignoring keystrokes — a field that has stopped accepting numbers with no
+	// explanation is indistinguishable from a broken one.
+	const bool bEditable = Session.EditsAllowed();
+	PanelLabel(Canvas, Ox, Y, bEditable
+		? TEXT("SEGMENTS   [B] hide   click a field, type, Enter")
+		: TEXT("SEGMENTS   read-only while the ride runs   [Tab] to BUILD"),
+		bEditable ? PanelDim : PanelAmber);
+	Y += 20.f;
+
+	// ---- The list. Windowed around the selection, because a 23-segment layout
+	// fits and a CSV import of four thousand does not — and a list that drew all
+	// of them would be a wall rather than a panel.
+	const int32 Window = 8;
+	const int32 First = FMath::Max(0, FMath::Min(SelectedSegment - Window / 2,
+		Segments.Num() - Window));
+	const int32 Last = FMath::Min(Segments.Num(), First + Window);
+	for (int32 i = FMath::Max(0, First); i < Last; ++i)
+	{
+		EditorRowRects.Add(FVector4(Ox, Y, Ox + W, Y + Row));
+		EditorRowField.Add(-1000 - i);
+		const bool bSel = i == SelectedSegment;
+		if (bSel) { PanelTile(Canvas, Ox - 4.f, Y - 1.f, W + 8.f, Row, PanelRule); }
+		PanelLabel(Canvas, Ox + 4.f, Y,
+			FString::Printf(TEXT("%2d  %s  %.1f m"), i,
+				*UEnum::GetDisplayValueAsText(Segments[i].Kind).ToString(),
+				Segments[i].Length),
+			bSel ? PanelCyan : PanelText);
+		Y += Row;
+	}
+	if (Segments.Num() > Window)
+	{
+		// NO SILENT WINDOWING, same rule as the diagnostics list.
+		PanelLabel(Canvas, Ox + 4.f, Y,
+			FString::Printf(TEXT("   %d of %d"), Last - FMath::Max(0, First), Segments.Num()),
+			PanelDim);
+		Y += Row;
+	}
+
+	if (SelectedSegment < 0 || SelectedSegment >= Segments.Num()) { return; }
+	const FTUTrackSegment& Seg = Segments[SelectedSegment];
+	Y += 8.f;
+
+	// ---- The fields, per kind. EditConditionHides, reimplemented — and the
+	// visibility rule lives in the tested model rather than being asked again
+	// here, or the two would drift the first time a kind gained a field.
+	const EEditKind Kind = KindOf(Seg.Kind);
+	for (std::size_t f = 0; f < static_cast<std::size_t>(EEditField::Count); ++f)
+	{
+		const EEditField F = static_cast<EEditField>(f);
+		if (!KindUsesField(Kind, F)) { continue; }
+		if (F == EEditField::ZoneKind || F == EEditField::StartsNewDevice) { continue; }
+		if (F == EEditField::ZoneSpeed && Seg.Zone == ETUSegmentZone::None) { continue; }
+
+		EditorRowRects.Add(FVector4(Ox, Y, Ox + W, Y + Row));
+		EditorRowField.Add(static_cast<int32>(f));
+
+		const bool bFocus = FocusedField == F;
+		if (bFocus) { PanelTile(Canvas, Ox - 4.f, Y - 1.f, W + 8.f, Row, PanelRule); }
+
+		// THE VALUE, AND A CARET WHILE TYPING. What is shown mid-edit is the
+		// buffer rather than the stored number, because showing the stored one
+		// would make typing look like it was doing nothing.
+		const FString Value = bFocus
+			? FieldBuffer + TEXT("_")
+			: FString::Printf(TEXT("%.4g"), ReadField(Seg, F));
+
+		// UNITS ARE ALWAYS SHOWN WHERE THERE IS ONE. Turns is a count and has
+		// none, which is a distinction rather than a gap.
+		PanelLabel(Canvas, Ox + 4.f, Y, UTF8_TO_TCHAR(FieldName(F)), PanelDim);
+		PanelLabel(Canvas, Ox + 150.f, Y,
+			FString::Printf(TEXT("%s %s"), *Value, UTF8_TO_TCHAR(FieldUnit(F))),
+			bFocus ? PanelCyan : PanelText);
+		Y += Row;
+	}
+
+	// ---- The tooltip for whatever is focused, because a numeric box with no
+	// context is a box somebody types 1000 into to see what happens.
+	if (FocusedField != EEditField::Count)
+	{
+		const FFieldHelp Help = HelpFor(FocusedField);
+		Y += 6.f;
+		PanelLabel(Canvas, Ox, Y, UTF8_TO_TCHAR(Help.Tooltip), PanelDim);
+		if (Help.bHasRange)
+		{
+			PanelLabel(Canvas, Ox, Y + Row,
+				FString::Printf(TEXT("typically %.4g to %.4g %s   ·  Enter to apply, Esc to cancel"),
+					Help.TypicalMin, Help.TypicalMax, UTF8_TO_TCHAR(FieldUnit(FocusedField))),
+				PanelDim);
+		}
+	}
+}
+
+void ATUCoasterRide::ClickSegmentEditor()
+{
+	APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr;
+	if (!PC || !bShowSegmentEditor) { return; }
+	float Mx = 0.f, My = 0.f;
+	if (!PC->GetMousePosition(Mx, My)) { return; }
+
+	for (int32 i = 0; i < EditorRowRects.Num() && i < EditorRowField.Num(); ++i)
+	{
+		const FVector4& R = EditorRowRects[i];
+		if (Mx < R.X || Mx > R.Z || My < R.Y || My > R.W) { continue; }
+
+		const int32 Action = EditorRowField[i];
+		if (Action <= -1000)
+		{
+			// SELECTING A DIFFERENT SEGMENT BREAKS THE EDIT RUN, or typing here,
+			// clicking away and coming back would be ONE undo step covering both.
+			CancelField();
+			SelectedSegment = -1000 - Action;
+			FrameSelectedSegment();
+		}
+		else if (Session.EditsAllowed())
+		{
+			// Focusing a field starts EMPTY rather than pre-filled with the
+			// current value. Pre-filling means the first keystroke has to be
+			// select-all or the number becomes "3020" — and there is no
+			// select-all here, so starting empty is the honest shape.
+			FocusedField = static_cast<EEditField>(Action);
+			FieldBuffer.Empty();
+		}
+		return;
+	}
+	// A click outside every row cancels rather than committing, because a
+	// half-typed number applied because somebody looked elsewhere is worse than
+	// one lost.
+	CancelField();
+}
+
+void ATUCoasterRide::KeyBackspace()
+{
+	// EDITING WINS WHILE EDITING, and the operator's stop wins the rest of the
+	// time. Binding both to Backspace would fire both — and an operator typing a
+	// radius would E-stop the ride, which is not a UI wart but the worst kind of
+	// surprise this project can produce.
+	if (IsTypingInField()) { TypeBackspace(); }
+	else                   { PressEmergencyStop(); }
+}
+
+void ATUCoasterRide::KeyPeriod()
+{
+	if (IsTypingInField()) { TypePoint(); }
+	else                   { StepOneScan(); }
+}
+
+void ATUCoasterRide::TypeDigit(int32 D)
+{
+	if (FocusedField == EEditField::Count) { return; }
+	FieldBuffer.AppendChar(static_cast<TCHAR>('0' + FMath::Clamp(D, 0, 9)));
+}
+
+void ATUCoasterRide::TypePoint()
+{
+	// ONE decimal point. A second one makes a string no parser accepts, and
+	// silently dropping it is what every numeric field has always done.
+	if (FocusedField == EEditField::Count || FieldBuffer.Contains(TEXT("."))) { return; }
+	FieldBuffer.AppendChar('.');
+}
+
+void ATUCoasterRide::TypeMinus()
+{
+	// A minus is only a minus at the FRONT. Anywhere else it is a typo, and a
+	// field that accepted "3-0" would produce a number nobody meant.
+	if (FocusedField == EEditField::Count || FieldBuffer.Len() > 0) { return; }
+	FieldBuffer.AppendChar('-');
+}
+
+void ATUCoasterRide::TypeBackspace()
+{
+	if (FocusedField == EEditField::Count || FieldBuffer.IsEmpty()) { return; }
+	FieldBuffer.LeftChopInline(1);
+}
+
+void ATUCoasterRide::CommitField()
+{
+	if (FocusedField == EEditField::Count || !Session.EditsAllowed()
+		|| SelectedSegment < 0 || SelectedSegment >= Segments.Num())
+	{
+		CancelField();
+		return;
+	}
+	// AN EMPTY BUFFER IS A CANCEL, not a zero. Somebody who clicked a field and
+	// pressed Enter meant "never mind", and writing 0 into a radius because of it
+	// would be the most destructive possible reading.
+	if (FieldBuffer.IsEmpty() || FieldBuffer == TEXT("-") || FieldBuffer == TEXT("."))
+	{
+		CancelField();
+		return;
+	}
+
+	const double V = FCString::Atod(*FieldBuffer);
+	WriteField(Segments[SelectedSegment], FocusedField, V);
+
+	// COMMITTED ON ENTER, NEVER PER KEYSTROKE. "3" on the way to "30" is a
+	// segment 3 m long and a rebuild nobody asked for — and on a closed circuit
+	// it is a rebuild that briefly reports the track as not closing.
+	FocusedField = EEditField::Count;
+	FieldBuffer.Empty();
+	RebuildFromSegments();
+}
+
+void ATUCoasterRide::CancelField()
+{
+	FocusedField = EEditField::Count;
+	FieldBuffer.Empty();
 }
 
 void ATUCoasterRide::DrawMainMenu(UCanvas* Canvas)
@@ -1762,8 +2073,16 @@ void ATUCoasterRide::StartFromTemplate(int32 Index)
 void ATUCoasterRide::ClickPrimary()
 {
 	// The menu owns the click while it is up; everything else is the editor's.
-	if (Session.Mode() == EAppMode::MainMenu) { ClickMainMenu(); }
-	else                                      { ClickDiagnostics(); }
+	if (Session.Mode() == EAppMode::MainMenu) { ClickMainMenu(); return; }
+	// The editor gets first refusal because it is the panel somebody is working
+	// in; a click that misses every one of its rows falls through to the
+	// diagnostics list, which is the other clickable thing on screen.
+	const int32 Before = SelectedSegment;
+	ClickSegmentEditor();
+	if (SelectedSegment == Before && FocusedField == EEditField::Count)
+	{
+		ClickDiagnostics();
+	}
 }
 
 void ATUCoasterRide::ClickMainMenu()
@@ -2531,6 +2850,7 @@ void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/
 	// Drawn FIRST so the control panel, which is the operator's, is never
 	// obscured by the author's graph.
 	DrawMainMenu(Canvas);
+	DrawSegmentEditor(Canvas);
 	DrawModeBanner(Canvas);
 	DrawProfileGraph(Canvas);
 	DrawDiagnosticsPanel(Canvas);
