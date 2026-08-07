@@ -1727,12 +1727,10 @@ void ATUCoasterRide::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 	PlayerInputComponent->BindKey(EKeys::Home, IE_Pressed, this,
 		&ATUCoasterRide::AcknowledgeFaults);
 
-	PlayerInputComponent->BindAxisKey(EKeys::W, this, &ATUCoasterRide::AxisForward);
-	PlayerInputComponent->BindAxisKey(EKeys::S, this, &ATUCoasterRide::AxisBack);
-	PlayerInputComponent->BindAxisKey(EKeys::D, this, &ATUCoasterRide::AxisRight);
-	PlayerInputComponent->BindAxisKey(EKeys::A, this, &ATUCoasterRide::AxisLeft);
-	PlayerInputComponent->BindAxisKey(EKeys::E, this, &ATUCoasterRide::AxisUp);
-	PlayerInputComponent->BindAxisKey(EKeys::Q, this, &ATUCoasterRide::AxisDown);
+	// ONLY THE MOUSE IS AN AXIS HERE. BindAxisKey asserts on IsAxis1D(), and a
+	// letter key is a BUTTON — WASDQE were bound this way and were always wrong,
+	// surviving only because `ensure` logs and carries on. They are polled in
+	// PollMovementKeys instead, which is also six bindings and six methods less.
 	PlayerInputComponent->BindAxisKey(EKeys::MouseX, this, &ATUCoasterRide::AxisLookYaw);
 	PlayerInputComponent->BindAxisKey(EKeys::MouseY, this, &ATUCoasterRide::AxisLookPitch);
 
@@ -2575,6 +2573,31 @@ void ATUCoasterRide::ClickDiagnostics()
 		}
 		return;
 	}
+}
+
+void ATUCoasterRide::PollMovementKeys()
+{
+	MoveForward = MoveRight = MoveUp = 0.f;
+
+	APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr;
+	if (!PC)
+	{
+		return;
+	}
+
+	// TYPING A NUMBER IS NOT FLYING. The segment editor takes digits, and A, S, D,
+	// E and W are all one keystroke away from a field somebody is working in —
+	// but more to the point, a camera that drifted while somebody typed a radius
+	// would move the thing they are looking at out from under them.
+	if (IsTypingInField())
+	{
+		return;
+	}
+
+	auto Down = [PC](const FKey& K) { return PC->IsInputKeyDown(K) ? 1.f : 0.f; };
+	MoveForward = Down(EKeys::W) - Down(EKeys::S);
+	MoveRight = Down(EKeys::D) - Down(EKeys::A);
+	MoveUp = Down(EKeys::E) - Down(EKeys::Q);
 }
 
 void ATUCoasterRide::ApplyCursorMode()
@@ -5526,6 +5549,7 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 	// ZEROED RATHER THAN SKIPPED, so a drag starts from where the mouse is
 	// instead of applying everything it travelled while the button was up.
 	ApplyCursorMode();
+	PollMovementKeys();
 	if (!bDraggingLook && Session.Mode() != EAppMode::Ride)
 	{
 		LookYaw = 0.f;
@@ -5836,7 +5860,11 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 		}
 	}
 
-	MoveForward = MoveRight = MoveUp = LookYaw = LookPitch = 0.f;
+	// ONLY THE MOUSE IS RESET HERE NOW. A bound axis ACCUMULATES over the frame
+	// and has to be cleared after it is read; a polled key is read fresh at the
+	// top of the frame, and clearing it here as well would be harmless today and
+	// wrong the first time anything reads movement after this line.
+	LookYaw = LookPitch = 0.f;
 
 	// Send it round again once it has settled at the END of the track. The return
 	// to the station is a teleport, and the range diff handles it with no special

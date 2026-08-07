@@ -1337,12 +1337,18 @@ private:
 
 	// One per key rather than one per axis: BindAxisKey reports 1.0 while a key
 	// is held, so the sign has to come from which key was bound.
-	void AxisForward(float V) { MoveForward += V; }
-	void AxisBack(float V) { MoveForward -= V; }
-	void AxisRight(float V) { MoveRight += V; }
-	void AxisLeft(float V) { MoveRight -= V; }
-	void AxisUp(float V) { MoveUp += V; }
-	void AxisDown(float V) { MoveUp -= V; }
+	/**
+	 * WASDQE IS POLLED, NOT BOUND AS AN AXIS.
+	 *
+	 * BindAxisKey asserts on IsAxis1D() and a letter key is a BUTTON — the six
+	 * binds this replaces were always wrong, and only survived because `ensure`
+	 * logs rather than kills. MouseX and MouseY are genuine 1D axes and stay
+	 * bound; those are the only two here that ever were.
+	 *
+	 * Polling is also simply less: six bindings and six one-line methods become
+	 * one function, and there is no accumulate-then-reset dance to get wrong.
+	 */
+	void PollMovementKeys();
 	void AxisLookYaw(float V) { LookYaw += V; }
 	void AxisLookPitch(float V) { LookPitch += V; }
 };
