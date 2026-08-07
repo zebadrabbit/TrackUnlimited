@@ -1702,6 +1702,13 @@ void ATUCoasterRide::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 	PlayerInputComponent->BindKey(EKeys::Tab, IE_Pressed, this,
 		&ATUCoasterRide::CycleAppMode);
 
+	// [F2] — every overlay off, for a screenshot. Not routed through
+	// IsTypingInField: F2 is not a character, so it cannot be part of a number
+	// somebody is entering, and a function key that stopped working inside the
+	// segment editor would be a worse surprise than one that always works.
+	PlayerInputComponent->BindKey(EKeys::F2, IE_Pressed, this,
+		&ATUCoasterRide::ToggleOverlays);
+
 	// THE SEGMENT EDITOR. Numeric entry only — constraint 1 holds absolutely, and
 	// a digit key IS typed entry rather than a stepper wearing its name.
 	PlayerInputComponent->BindKey(EKeys::B, IE_Pressed, this,
@@ -2875,7 +2882,11 @@ void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/
 	//
 	// Drawn FIRST so the control panel, which is the operator's, is never
 	// obscured by the author's graph.
+	// THE MENU IS NOT AN OVERLAY, so [F2] leaves it alone — hiding it would strand
+	// somebody on a screen whose only controls are the ones just hidden.
 	DrawMainMenu(Canvas);
+	if (bHideOverlays) { return; }
+
 	DrawSegmentEditor(Canvas);
 	DrawModeBanner(Canvas);
 	DrawProfileGraph(Canvas);
@@ -4994,6 +5005,41 @@ static void SetNearPlaneMetres(double Metres)
 	}
 }
 
+// [F2] — EVERY OVERLAY OFF, AND BACK EXACTLY AS IT WAS.
+//
+// A MASTER GATE RATHER THAN A SNAPSHOT. Saving the eight toggles, clearing them
+// and putting them back is the obvious version and it is wrong: anything that
+// touches one while hidden gets overwritten on restore, and the symptom is a
+// panel coming back that somebody had deliberately turned off. One bool
+// consulted at draw time restores the previous state for free, because nothing
+// was ever changed.
+//
+// The wireframe and the ride-profile trace are PERSISTENT debug lines drawn once
+// at BeginPlay rather than every frame, so hiding them means flushing and
+// unhiding means redrawing. Everything else is a per-frame gate.
+void ATUCoasterRide::ToggleOverlays()
+{
+	bHideOverlays = !bHideOverlays;
+
+	if (UWorld* World = GetWorld())
+	{
+		FlushPersistentDebugLines(World);
+	}
+	if (!bHideOverlays)
+	{
+		// bDrawTrack is still consulted, so [F2] does not turn on a wireframe
+		// somebody had switched off in the Details panel.
+		if (bDrawTrack) { DrawTrack(); }
+		DrawRideProfile();
+	}
+
+	// SAID ONCE, IN THE LOG, because the banner that would normally carry a hint
+	// is one of the things just hidden — and a screenshot mode that printed a
+	// caption over the screenshot would defeat itself.
+	UE_LOG(LogTUEvents, Log, TEXT("overlays %s  [F2]"),
+		bHideOverlays ? TEXT("hidden") : TEXT("shown"));
+}
+
 void ATUCoasterRide::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
@@ -5102,8 +5148,11 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 
 	// ---- Everything below is DRAWING, and runs once per rendered frame. It reads
 	// the state the last scan left and never advances anything.
-	DrawRestraints();
-	DrawBlockMarkers();
+	if (!bHideOverlays)
+	{
+		DrawRestraints();
+		DrawBlockMarkers();
+	}
 
 	// Where the rider is sitting, which is a real choice now that cars differ.
 	const double SeatOffset = RiderPosition * TrainLengthM * 0.5;
@@ -5256,7 +5305,7 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 			(Target - ChaseLocation).ToOrientationQuat());
 	}
 
-	if (bShowTelemetry && GEngine)
+	if (bShowTelemetry && !bHideOverlays && GEngine)
 	{
 		// What the RIDER feels, at whichever row they are sitting in — not the
 		// train's centre. That is the whole point of choosing a seat.

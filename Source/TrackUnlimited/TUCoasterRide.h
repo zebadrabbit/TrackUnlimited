@@ -812,6 +812,10 @@ private:
 	// already showed the panel beats a second binding nobody remembers.
 	void CyclePanelView()
 	{
+		// ASKING FOR ONE OVERLAY MEANS YOU WANT OVERLAYS. Without this the key
+		// appears dead while [F2] is holding everything off, and the state it
+		// silently changed underneath is waiting to surprise somebody later.
+		bHideOverlays = false;
 		switch (PanelView)
 		{
 		case ETUPanelView::Operator:    PanelView = ETUPanelView::Maintenance; break;
@@ -1173,7 +1177,7 @@ private:
 	void Type8() { TypeDigit(8); } void Type9() { TypeDigit(9); }
 	void CommitField();
 	void CancelField();
-	void ToggleSegmentEditor() { bShowSegmentEditor = !bShowSegmentEditor; CancelField(); }
+	void ToggleSegmentEditor() { bShowSegmentEditor = !bShowSegmentEditor; CancelField(); bHideOverlays = false; }
 
 	/** The authored value behind a field, and the way back. One place, so the
 	 *  panel and the model cannot disagree about which float is which. */
@@ -1206,9 +1210,29 @@ private:
 	void DrawModeBanner(class UCanvas* Canvas);
 	void BuildDiagnostics();
 	void DrawDiagnosticsPanel(class UCanvas* Canvas);
-	void ToggleDiagnostics() { bShowDiagnostics = !bShowDiagnostics; }
+	void ToggleDiagnostics() { bShowDiagnostics = !bShowDiagnostics; bHideOverlays = false; }
 	void CycleProfileChannel();
-	void ToggleProfileGraph() { bShowProfileGraph = !bShowProfileGraph; }
+	void ToggleProfileGraph() { bShowProfileGraph = !bShowProfileGraph; bHideOverlays = false; }
+
+	/**
+	 * [F2] — EVERY OVERLAY OFF, AND BACK EXACTLY AS IT WAS.
+	 *
+	 * A MASTER GATE, NOT A SAVE-AND-RESTORE. The obvious version snapshots the
+	 * eight toggles, clears them, and puts them back — and it is wrong the moment
+	 * anything else touches one while hidden, which is a bug that only shows up
+	 * as "my panel came back that I had turned off". One bool consulted at draw
+	 * time restores the exact previous state for free, because nothing was ever
+	 * changed.
+	 *
+	 * What it does NOT hide is the track mesh, the trains, or the main menu.
+	 * Those are the product; this hides the instrumentation drawn over it.
+	 *
+	 * The wireframe and the ride-profile trace are PERSISTENT debug lines drawn
+	 * once at BeginPlay, so they have to be flushed and redrawn rather than
+	 * merely skipped — which is why this is a function and not a one-line lambda.
+	 */
+	bool bHideOverlays = false;
+	void ToggleOverlays();
 
 	/** [F] — frame the whole track. The thing you press constantly when a
 	 *  validation warning points somewhere and you have no idea where. */
