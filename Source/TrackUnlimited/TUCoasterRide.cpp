@@ -1416,6 +1416,73 @@ void ATUCoasterRide::RebuildFromSegments()
 	// report a stall at the first block brake and call the ride broken.
 	Profile_ = RunRideProfile(*Trains[0], Track, 1.0);
 
+	// ===================== WHAT THE DEVICES WILL ACTUALLY DO =====================
+	//
+	// HERE rather than in BuildDiagnostics, because this is the one place the
+	// derived zones and the ride profile both exist. Deriving the zones a second
+	// time to ask these questions would be a second derivation that can disagree
+	// with the first, which this project treats as a defect wherever it appears.
+	//
+	// THE AUTHORITIES COME FROM THE ZONE, NOT FROM THE SEGMENT ENUM, and they come
+	// from the SAME TEST the interlocking uses one screen down — MaxAccel > 0 and
+	// MaxDecel > 0. Reading the enum here instead would be a second opinion about
+	// what a block boundary is, and the day the two disagreed the panel would be
+	// reassuring somebody about a layout the signalling was refusing to run.
+	{
+		LastDeviceFindings.clear();
+		std::vector<FDeviceSpan> Devices;
+		Devices.reserve(static_cast<std::size_t>(Zones.Num()));
+		for (const FTrackZone& Z : Zones)
+		{
+			FDeviceSpan D;
+			D.StartS = Z.StartS;
+			D.EndS = Z.EndS;
+			D.CommandedSpeed = Z.TargetSpeed;
+			D.bCanHold = Z.MaxDecel > 0.0;
+			D.bCanRelease = Z.MaxAccel > 0.0;
+			D.bIsBlockBoundary = D.bCanHold && D.bCanRelease;
+
+			// The name is only for the message. FTrackZone drops the kind on
+			// purpose — a station, a block brake and a lift chain are the same
+			// physics — so it is looked up by midpoint from the list that kept it.
+			const double Mid = 0.5 * (Z.StartS + Z.EndS);
+			D.Name = "device";
+			for (const FTUZoneSpan& Span : ZoneSpans)
+			{
+				if (Mid >= Span.StartS && Mid <= Span.EndS)
+				{
+					D.Name = TCHAR_TO_UTF8(ZoneKindName(Span.Kind));
+					break;
+				}
+			}
+			Devices.push_back(D);
+		}
+
+		FDeviceAuditSettings Audit;
+		Audit.TrainLengthM = static_cast<double>(TrainLengthM);
+		Audit.NoseClearanceM = HoldNoseClearanceM;
+
+		// A RIDE THAT DID NOT COMPLETE HAS NO SPEEDS TO READ, and reporting a
+		// braking distance against a profile that stopped at 46 m would be the
+		// envelope suite's own old failure — a verdict on a ride that did not
+		// happen. The length and authority checks need no speed and still run;
+		// this reports 0 past the end, which is silent rather than wrong.
+		const FRideProfile& P = Profile_;
+		LastDeviceFindings = AuditDevices(Devices, Audit, [&P](double S) -> double
+		{
+			if (!P.bCompleted || P.Samples.empty()) { return 0.0; }
+			// Samples are ordered in S. A handful of devices against a few
+			// thousand samples does not need a binary search to find them.
+			double Best = 0.0;
+			for (const FRideSample& Sm : P.Samples)
+			{
+				if (Sm.S > S) { break; }
+				Best = Sm.Speed;
+			}
+			return Best;
+		});
+	}
+
 	// BACK TO ITS HOLDING POSITION, not to zero. The profile run leaves train 0
 	// wherever the ride ended, so it has to be put back — but putting it at 0.0
 	// puts it ON THE SEAM, where a train straddles the boundary and legitimately
@@ -2760,6 +2827,18 @@ void ATUCoasterRide::EndPlay(const EEndPlayReason::Type Reason)
 void ATUCoasterRide::BuildDiagnostics()
 {
 	Diagnostics.Clear();
+
+	// WHAT THE DEVICES WILL DO, which the validator structurally cannot say.
+	// It reads the authored values; these depend on the train's length and on
+	// the speed at that point, which depends on every metre of track before it.
+	// Computed during the rebuild where the zones and the profile both exist.
+	for (const FDeviceFinding& D : LastDeviceFindings)
+	{
+		FDiagTarget T;
+		T.S = D.S;
+		Diagnostics.Add(D.bIsError ? EDiagSeverity::Error : EDiagSeverity::Warning,
+			"Devices", D.What, T);
+	}
 
 	// The validator's own findings, verbatim. Its messages already name fields
 	// and quantities, so rewording them here would be a second voice saying

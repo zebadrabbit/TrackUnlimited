@@ -22,6 +22,7 @@
 // range-for hundreds of lines away from the actual cause.
 #include "TrackSpline/TrackValidate.h"
 #include "BlockSignal/RideSignals.h"
+#include "BlockSignal/DeviceAudit.h"
 #include "BlockSignal/SignalWatch.h"
 #include "BlockSignal/Evacuation.h"
 #include "BlockSignal/PlcUnit.h"
@@ -1045,6 +1046,17 @@ private:
 
 	FDiagnostics Diagnostics;
 	std::vector<FTrackDiagnostic> LastDiagnostics;
+
+	/**
+	 * What the DEVICES will do, as opposed to whether the geometry is valid.
+	 *
+	 * Kept the same way LastDiagnostics is, and for the same reason: it is
+	 * produced during the rebuild where the derived zones and the ride profile
+	 * both exist, and consumed later by the panel. Computing it in
+	 * BuildDiagnostics instead would mean deriving the zones a second time, and a
+	 * second derivation is a second thing that can disagree with the first.
+	 */
+	std::vector<FDeviceFinding> LastDeviceFindings;
 
 	/**
 	 * WHICH SEGMENT IS SELECTED, and the thing that turns a finding from a
