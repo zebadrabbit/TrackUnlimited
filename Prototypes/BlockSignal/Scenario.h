@@ -37,6 +37,16 @@ enum class EScenarioAction
     FailSensor,          // A = sensor,   B = mode
     HealSensor,          // A = sensor
 
+    // Hardware that no longer delivers what it is rated for: a glazed pad, low
+    // line pressure, a worn tyre. NOT a wrong command and not a drive fault — the
+    // command is right, the drive writes it, and less comes out.
+    //
+    // B is a PERCENTAGE rather than a fraction, because a step carries two ints
+    // and widening it for one action would be paying for this everywhere. 100 is
+    // healthy hardware, so healing is DegradeDrive with B = 100 and no second
+    // action is needed.
+    DegradeDrive,        // A = zone,     B = percent of rated authority delivered
+
     // The operator. Included because half of what a scenario is testing is what
     // a person does about a fault, not only the fault.
     PressEmergencyStop,

@@ -106,6 +106,7 @@ public:
         , Spec(NumDrives, InDefault)
         , Cia(NumDrives)
         , LastSlip(NumDrives, 0.0)
+        , Delivered(NumDrives, 1.0)
     {
     }
 
@@ -570,6 +571,44 @@ public:
     }
     const FDriveSpec& SpecOf(std::size_t Drive) const { return Spec[Drive]; }
 
+    // ===================== A DEVICE THAT DOES NOT DELIVER =====================
+    //
+    // How much of its rated authority this device is physically producing, 0..1.
+    // ONE is healthy hardware and is the default, so nothing shipped moves.
+    //
+    // NOT a command and not a fault flag — the command is still correct and the
+    // drive still writes it. This is the pad glazed, the line pressure low, the
+    // tyre worn: the device is doing everything it is told and less is coming out.
+    // FAULTS.md called a failed brake the one fault this project could not express
+    // at all, and this is the smallest thing that expresses it.
+    //
+    // It lives HERE, not on FTrackZone and not on FTrain, for the reason Output
+    // does: a zone is authored data (a track file must not be able to ship a
+    // broken brake) and every train carries its own copy of every zone, so health
+    // held per train would let two trains disagree about one piece of hardware.
+    // One device, one number, pushed to every copy each frame.
+    void SetDeliveredFraction(std::size_t Drive, double Fraction)
+    {
+        if (Drive < Delivered.size())
+        {
+            Delivered[Drive] = std::max(0.0, std::min(1.0, Fraction));
+        }
+    }
+
+    double DeliveredFraction(std::size_t Drive) const
+    {
+        return Drive < Delivered.size() ? Delivered[Drive] : 1.0;
+    }
+
+    bool AnyDegraded() const
+    {
+        for (double F : Delivered)
+        {
+            if (F < 1.0) { return true; }
+        }
+        return false;
+    }
+
     // Signed: positive means the drive is running faster than its load, which is a
     // drive pushing; negative means the load is running away from it, which is a
     // brake being overhauled or a train being carried by gravity through a zone.
@@ -665,6 +704,8 @@ private:
     // rather than on the reading, because it is the fault rule's own scratch space
     // and not something a panel would ever show.
     std::vector<double> LastSlip;
+    // Per drive, 0..1. Healthy hardware until something says otherwise.
+    std::vector<double> Delivered;
 
     // Ride-wide rather than per drive, because that is what an E-stop is: one
     // circuit, one button, everything dead. A per-drive version would be a way of

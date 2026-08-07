@@ -631,6 +631,40 @@ void TestReadyIsNotTheSameAsCommanded()
     assert(G.IsReady(0));
 }
 
+void TestDegradedHardwareIsNotAFaultAndNotACommand()
+{
+    // A device that no longer delivers what it is rated for. FAULTS.md called this
+    // the one fault the project could not express at all.
+    //
+    // THREE NUMBERS THAT STAY SEPARATE. The command is still correct, the drive
+    // still writes it, and the output still reaches it — a glazed pad does not
+    // change what the PLC asked for or what the caliper did about it. So a
+    // degraded device is still READY, and it must be: refusing dispatch because a
+    // pad is worn would be a fault detector wearing a permissive's clothes, and
+    // nothing here has measured that the pad is worn.
+    FTrackDrives D(2);
+    D.Preset(0, 6.0);
+    assert(D.DeliveredFraction(0) == 1.0);      // healthy until told otherwise
+    assert(!D.AnyDegraded());
+
+    D.SetDeliveredFraction(0, 0.3);
+    assert(D.DeliveredFraction(0) == 0.3);
+    assert(D.AnyDegraded());
+    assert(D.Output(0) == 6.0);                 // the command is untouched
+    assert(D.IsReady(0));                       // and so is readiness
+    assert(!D.IsFaulted(0));                    // and nothing here knows it is bad
+
+    // Clamped, because it is a fraction of rated authority and there is no such
+    // thing as a brake delivering 140% of itself or less than nothing.
+    D.SetDeliveredFraction(1, 4.0);
+    assert(D.DeliveredFraction(1) == 1.0);
+    D.SetDeliveredFraction(1, -2.0);
+    assert(D.DeliveredFraction(1) == 0.0);
+    D.SetDeliveredFraction(9, 0.5);             // no such drive, no crash
+    assert(D.DeliveredFraction(9) == 1.0);
+    std::printf("  degraded hardware is neither a command nor a fault\n");
+}
+
 } // namespace
 
 int main()
@@ -649,6 +683,7 @@ int main()
     TestResetIsMonitoredAndCannotBeTiedDown();
     TestAStoppedDriveIsNotAlsoAccusedOfSlipping();
     TestReadyIsNotTheSameAsCommanded();
+    TestDegradedHardwareIsNotAFaultAndNotACommand();
 
     std::printf("test_trackdrives: all assertions passed\n");
     return 0;

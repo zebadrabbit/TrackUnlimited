@@ -3407,6 +3407,11 @@ void ATUCoasterRide::SimStep(double DeltaSeconds)
 			for (std::size_t z = 0; z < Drives->Num(); ++z)
 			{
 				Trains[t]->SetZoneTargetSpeed(z, Drives->Output(z));
+				// And how much of that the hardware is actually producing, for the
+				// same reason and by the same route: one device, one number, every
+				// train's copy hearing the same thing about it. 1.0 unless
+				// something has injected a failure, so this is free until it is not.
+				Trains[t]->SetZoneHealth(z, Drives->DeliveredFraction(z));
 			}
 		}
 	}

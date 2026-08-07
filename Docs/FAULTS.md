@@ -41,7 +41,7 @@ on a scan counter for that reason.
 | Block sensor stuck on | ✅ `ESensorFault::StuckOn` | **E-stop, and it fails SAFE** | Over-reports occupancy, so the ride stops rather than admitting a train. Not a mirror image of Dead — see below. |
 | Loose connection / chatter | ✅ `ESensorFault::Chatter` | **E-stop** | Edges from nothing; the counter drifts from the span and the cross-check trips. |
 | Drive slipping / stalled motor | ⚠️ detection only | **Fault → E-stop** | Slip **and** torque **and** time **and** not gaining. No injection hook yet; feedback can be reported by hand. |
-| **Failed brake** | ❌ | **Nothing directly** | See below. The most interesting gap. |
+| **Failed brake** | ✅ `FTrackDrives::SetDeliveredFraction` | **Depends entirely on where the ride was** | Three measured answers, one of which is "nothing". See below — still the most interesting entry here. |
 | Broken wire on a safety input | ❌ | **Nothing** | Needs inputs modelled normally-closed — de-energise to trip. On the Tier 1 card, not built. |
 | Welded contactor | ❌ | **Nothing** | Needs external device monitoring: NC aux contacts in series into the reset, so a welded contactor blocks it. On the Tier 1 card. |
 
@@ -56,39 +56,81 @@ That asymmetry is the whole argument for wiring detection so the **safe** direct
 de-energised one, and it is why the second detection method exists rather than a better single
 sensor. Asserted both ways in `test_tracksensors.cpp`.
 
-### The failed brake is the real gap
+### The failed brake, now measured
 
-A brake that does not bite is currently **inexpressible**, and it is the failure with the least
-protection:
+A brake that does not bite is **expressible** as of 2026-08-06:
+`FTrackDrives::SetDeliveredFraction(zone, 0..1)`, pushed to every train's copy of that zone each
+frame exactly as `Output` is, and multiplying both tractive authorities where `FTrain::Step` clamps
+what a zone asks for to what it has.
 
-- The train overruns its stop mark, enters the next block, and the interlocking raises a violation →
-  E-stop. So it *is* detected, indirectly.
-- But an E-stop cannot stop it either, because the thing that stops trains is the brake that failed.
-  What actually arrests it is the **next** block brake, or an anti-rollback catch.
+Three things stay separate, and keeping them separate is the whole design. The **command** is still
+correct, the **drive** still writes it, and the **output** still reaches it — a glazed pad does not
+change what the PLC asked for or what the caliper did about it. So a degraded device still reports
+`IsReady`, and it must: refusing a dispatch because a pad is worn would be a fault detector wearing a
+permissive's clothes, and nothing has measured that the pad is worn. Health lives on the **drive**,
+not on `FTrackZone` (a track file must not be able to ship a broken brake) and not on `FTrain` (every
+train carries its own copy of every zone, so two trains would disagree about one piece of hardware).
 
-So the honest answer today is "the layout catches it, if the layout has somewhere to catch it" — and
-that is a property worth being able to *measure* per track rather than assume. Injecting it needs a
-zone whose commanded deceleration is not the deceleration it delivers, which the drive layer's
-`Output` vs `Actual` split can already express and the physics does not yet read.
+The section this replaces predicted one outcome. There are **three**, and which one you get depends
+entirely on where the ride was when the device failed. Measured on the two-train circuit, every zone
+killed outright, at two, three and four trains — `test_twotrains.cpp`,
+`TestAFailedBrakeAndWhatDoesAndDoesNOTCatchIt`.
+
+**1. A dead device with a train standing on it stops the ride, and nobody arranged that.** The
+dispatcher's rule is *truck forward until a switch says far enough*. A train on a device that
+delivers nothing never reaches its stop mark, so it is never in position, so the permissive never
+grants. Zero laps, zero violations, nothing moves. The ride does not dispatch a train it could not
+have held — a fail-safe falling out of having made holding a question a **switch** answers instead of
+a number in the program, and the strongest argument yet for that decision.
+
+**2. Loaded, two independent mechanisms catch it.** Three trains, transfer tyres killed while a train
+is *approaching* rather than standing on them: it overruns into a block it was not given, the
+interlocking raises a violation at 32.3 s, and the block counter — which knows only that switches
+tripped — independently counts a block occupied twice. Both trip the E-stop.
+
+**3. Sparse, NOTHING catches it.** Two trains, the outer brake killed. The arriving train is not
+stopped, rolls through into the next block — *which was empty* — and keeps circulating. Four minutes,
+two laps, still doing **30.5 m/s** past a station it was supposed to be parked in, and **not one
+violation**.
+
+That third case is the honest state of things and the reason this entry is no longer titled after the
+interlocking. Block signalling answers *"is the block ahead free"*; it was. It protects trains from
+each other and was never a check on whether a device works — a sparse circuit simply has the room to
+absorb a failure. The old text's "so it *is* detected, indirectly" was true only for case 2 and was
+never measured.
+
+**What is missing is the question no layer here asks: is this train going too fast for what is in
+front of it.** The fix is a **speed trap** — two block-boundary switches a surveyed distance apart,
+giving speed from the time between trips, with no position and no train identity. That is how a real
+installation measures it and it is already the shape `FTrackSensors` has. Compare it against `v²/2a`
+for the next holding device, which build time already computes in
+`TestEveryHoldingBlockCanActuallyStopWhatArrives`. Not built: it is a new detector rather than a
+wiring job, and case 3 above is what justifies building it.
 
 ---
 
-## What is missing is the scheduler, not the concepts
+### A degraded device is silent about itself
 
-Three faults are injectable and asserted, and all three are set by hand in a test. What does not
-exist is anything that says *"jam group 2 at the load platform at t = 40 s, and clear it at t = 90"*.
+Worth knowing before it surprises somebody: the drive layer does **not** fault on its own
+degradation. `FTrain::GetZoneLoad` reports the applied acceleration as a fraction of the zone's
+**authored** authority, so a device delivering 30% reads 30% torque — and the drive's fault rule
+needs *full* torque. That is deliberate on both counts. It makes the degradation directly visible on
+the VFD module rather than hidden behind a saturated bar, and a device reporting its own failure is
+precisely the thing a second, independent means of detection exists so as not to have to trust.
 
-That is the scenario layer, and it wants:
+## The scheduler exists
 
-- a timeline of injections against the sim clock, deterministic and replayable
-- the transition log (`bLogStateTransitions`) as its recording, which is already built and already
-  writes to `Saved/Logs/` under `LogTUEvents`
-- an assertion vocabulary — *did the ride stop, how long did it take, did a train move while
-  anything was unsecured* — of which the per-frame securing invariant in `test_twotrains.cpp` is the
-  first example
+`Prototypes/BlockSignal/Scenario.h`: a timeline of injections against the **scan count**, not the
+wall clock — a step is due on an exact scan, and a scan that was skipped counts the step as missed
+rather than firing it late. Stable-sorted, rewindable, and deterministic in the sense that matters,
+which is that `FSimDigest` fingerprints every scan so two runs can be compared as runs rather than as
+outcomes.
 
-Not scheduled. The pieces it needs are being built as they come up for other reasons, which is the
-right order.
+Actions cover the restraint and gate banks, the sensors, the drives (`DegradeDrive`, where `B` is a
+percentage so healing is the same action with `B = 100`), the operator's controls, and the
+controller's power. What is still hand-rolled is the **assertion vocabulary** — *did the ride stop,
+how long did it take, did a train move while anything was unsecured* — of which the per-frame
+securing invariant and the failed-brake test in `test_twotrains.cpp` are the worked examples.
 
 ## A foundation, not a claim
 

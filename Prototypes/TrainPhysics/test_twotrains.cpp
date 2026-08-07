@@ -620,6 +620,10 @@ void DriveTheTrack(const FTrackDrives& D, const std::vector<FTrain*>& Trains)
         for (std::size_t z = 0; z < D.Num(); ++z)
         {
             Tr->SetZoneTargetSpeed(z, D.Output(z));
+            // And how much of that the hardware is actually producing. One device,
+            // so every train's copy hears the same thing about it — the same reason
+            // Output is pushed here rather than held per train.
+            Tr->SetZoneHealth(z, D.DeliveredFraction(z));
         }
     }
 }
@@ -1120,7 +1124,8 @@ struct FRunResult
 FRunResult RunTrains(std::size_t N, std::size_t Lookahead, double Seconds,
                      double EStopAtSeconds = -1.0,
                      const std::vector<FItem>* InItems = nullptr,
-                     double InTrainLen = TrainLen)
+                     double InTrainLen = TrainLen,
+                     int DegradeZone = -1, double DegradeTo = 1.0)
 {
     const std::vector<FItem> Items = InItems != nullptr ? *InItems : Layout();
     const FCircuit Shape = BuildCircuitFrom(nullptr, Items);
@@ -1157,6 +1162,13 @@ FRunResult RunTrains(std::size_t N, std::size_t Lookahead, double Seconds,
 
     FTrackSensors Marks(C.StopMarkS);
     FTrackDrives Drives = OpenDrives(*Owned[0], C);
+    // A piece of hardware that does not deliver. Set on the DRIVE, before the run,
+    // and never touched again — nothing here commands it differently and nothing
+    // is told it is broken.
+    if (DegradeZone >= 0)
+    {
+        Drives.SetDeliveredFraction(static_cast<std::size_t>(DegradeZone), DegradeTo);
+    }
     std::vector<FTrain*> All;
     for (std::size_t t = 0; t < N; ++t) { All.push_back(Owned[t].get()); }
     std::vector<FPlatform> Platforms = BuildPlatforms(C);
@@ -1399,6 +1411,89 @@ void TestAHeldTrainParksInsideItsBlock()
     assert(R.ClosestToStationStart > TrainLen * 0.5);
     assert(R.ClosestToStationStart < 26.0 - TrainLen * 0.5);
     assert(R.ClosestToStationStart > 26.0 - TrainLen * 0.5 - 2.0);   // near the far end
+}
+
+void TestAFailedBrakeAndWhatDoesAndDoesNOTCatchIt()
+{
+    // FAULTS.md listed the failed brake twice: as the one fault this project could
+    // not EXPRESS, and as the one with the least protection. Expressing it is
+    // FTrackDrives::SetDeliveredFraction — the command is still correct, the drive
+    // still writes it, and less comes out of the hardware. A glazed pad, low line
+    // pressure, a worn tyre.
+    //
+    // What it is protected BY turned out to be three different answers depending
+    // on where the ride was when the device failed, and one of them is "nothing".
+    // Zones: 0 station, 1 launch, 2 mid-course brake, 3 outer brake,
+    // 4 transfer tyres, 5 inner brake.
+    const FCircuit Shape = BuildCircuit(nullptr);
+    assert(Shape.Kinds[3] == EZone::BlockBrake && Shape.Authored[3] == 6.0);
+
+    // FIRST, THE DEFAULT COSTS NOTHING. Every figure this file prints was measured
+    // before health existed, so healthy hardware has to leave the ride not merely
+    // similar but IDENTICAL — the same digest, which is every drive output and
+    // every train position on all 57,600 scans of a four-minute run.
+    const FRunResult Well = RunTrains(2, 1, 240.0);
+    const FRunResult Same = RunTrains(2, 1, 240.0, -1.0, nullptr, TrainLen, 3, 1.0);
+    assert(Same.Digest == Well.Digest);
+    assert(Well.Violations == 0);
+
+    // ---- 1. A DEAD DEVICE UNDER A TRAIN STOPS THE RIDE, and nobody arranged it.
+    //
+    // The dispatcher's rule is "truck forward until a switch says far enough". A
+    // train standing on a device that delivers nothing never reaches its mark, so
+    // it is never in position, so the permissive never grants. The ride does not
+    // dispatch a train it could not have held.
+    //
+    // That is the fail-safe falling out of the stop mark rather than out of any
+    // check for it, and it is the strongest argument yet for having made holding a
+    // question a SWITCH answers instead of a number in the program.
+    const FRunResult DeadStation = RunTrains(2, 1, 240.0, -1.0, nullptr, TrainLen, 0, 0.0);
+    assert(DeadStation.Laps[0] == 0 && DeadStation.Laps[1] == 0);
+    assert(DeadStation.Violations == 0);
+    assert(DeadStation.FinalSpeed[0] == 0.0);
+
+    // ---- 2. LOADED, THE INTERLOCKING CATCHES IT, AND SO DOES THE COUNTER.
+    //
+    // Three trains, and the transfer tyres fail while a train is approaching them
+    // rather than standing on them. It overruns into a block it was not given, the
+    // interlocking says so, and the second independent means of detection — the
+    // block counter, which knows only that switches tripped — independently counts
+    // a block occupied twice. Two mechanisms with nothing in common but the answer.
+    const FRunResult Loaded = RunTrains(3, 1, 240.0, -1.0, nullptr, TrainLen, 4, 0.0);
+    assert(Loaded.Violations > 0);
+    assert(Loaded.FirstViolation > 0.0 && Loaded.FirstViolation < 60.0);
+    assert(Loaded.bCounterOverOccupied);
+
+    // ---- 3. AND ON A LIGHTLY LOADED RIDE, NOTHING CATCHES IT AT ALL.
+    //
+    // THE UNCOMFORTABLE ONE, and the reason this test is not named after the
+    // interlocking. Two trains, the outer brake dead. The arriving train is not
+    // stopped, rolls through into the next block — WHICH WAS EMPTY — and keeps
+    // circulating. Four minutes, two laps, still doing 30 m/s past a station it
+    // was supposed to be parked in, and NOT ONE VIOLATION.
+    //
+    // The interlocking answers "is the block ahead free". It was. Block signalling
+    // protects trains from each other and was never a check on whether a device
+    // works; a sparse circuit simply has the room to absorb a failure. What is
+    // missing is the question no layer here asks: IS THIS TRAIN GOING TOO FAST FOR
+    // WHAT IS IN FRONT OF IT.
+    //
+    // ponytail: the fix is a speed trap — two block-boundary switches a surveyed
+    // distance apart give speed from the time between trips, with no position and
+    // no identity, which is how a real installation measures it and is already the
+    // shape FTrackSensors has. Compare that against v^2/2a for the next holding
+    // device, which build time already computes in
+    // TestEveryHoldingBlockCanActuallyStopWhatArrives. Not built: it is a new
+    // detector, and this test is what justifies building it.
+    const FRunResult Sparse = RunTrains(2, 1, 240.0, -1.0, nullptr, TrainLen, 3, 0.0);
+    assert(Sparse.Violations == 0);            // the interlocking never objects
+    assert(Sparse.FinalSpeed[1] > 25.0);       // to a train nothing ever stopped
+    assert(Sparse.Laps[1] >= 2);
+
+    std::printf("  a failed brake: parked on it the ride never dispatches;"
+                " loaded it violates at %.1f s and the counter agrees;"
+                " sparse it circulates at %.1f m/s UNDETECTED\n",
+                Loaded.FirstViolation, Sparse.FinalSpeed[1]);
 }
 
 void TestSeveralHoldingDevicesInARowStaySeveral()
@@ -2203,6 +2298,7 @@ int main()
     TestTwoTrainsQueueBeforeTheStation();
     TestTheCatchHoldsAFailedLaunchOnTheRealLayout();
     TestAHeldTrainParksInsideItsBlock();
+    TestAFailedBrakeAndWhatDoesAndDoesNOTCatchIt();
     TestSeveralHoldingDevicesInARowStaySeveral();
     TestADispatchWaitsForTheLaunchToBeArmed();
     TestTwoIndependentMeansOfKnowingAgreeOnEveryBlock();

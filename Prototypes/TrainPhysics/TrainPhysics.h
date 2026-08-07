@@ -219,6 +219,44 @@ public:
         return true;
     }
 
+    // ===================== A DEVICE THAT DOES NOT DELIVER =====================
+    //
+    // How much of its authored authority this device is actually producing,
+    // 0..1. ONE is a healthy device and is the default, so nothing measured
+    // moves until something injects a fault.
+    //
+    // This is what makes A FAILED BRAKE expressible, which FAULTS.md recorded as
+    // the one fault nothing could model and the one with the least protection.
+    // A brake that does not bite is not a brake commanded wrongly — the command
+    // is right and the pad is glazed, the pressure is low, the tyre is worn. So
+    // it scales what the device DELIVERS, leaving the command untouched, which
+    // is also why the drive layer's Commanded-vs-Actual disagreement is the
+    // thing that would detect it.
+    //
+    // Deliberately NOT a field on FTrackZone: a zone is authored data — extent,
+    // target, authorities — and health is runtime fault state. Putting it there
+    // would mean a track file could ship a broken brake, which is a different
+    // and much worse idea.
+    //
+    // Scales BOTH authorities, because it is one device. A block brake is pads
+    // and drive tyres in a single zone, and a failure that took out only one of
+    // them would be modelling a distinction this vocabulary does not draw.
+    bool SetZoneHealth(std::size_t Index, double Fraction)
+    {
+        if (Index >= Zones.size() || !(Fraction >= 0.0) || !(Fraction <= 1.0))
+        {
+            return false;
+        }
+        ZoneHealth.resize(Zones.size(), 1.0);
+        ZoneHealth[Index] = Fraction;
+        return true;
+    }
+
+    double GetZoneHealth(std::size_t Index) const
+    {
+        return Index < ZoneHealth.size() ? ZoneHealth[Index] : 1.0;
+    }
+
     // Its current target, or negative if there is no such zone — so a dispatcher
     // can stash the authored speed it is about to overwrite without a second
     // bounds check, and put it back on release.
@@ -525,7 +563,10 @@ public:
                 continue;
             }
             const double Needed = (Zone.TargetSpeed - VelocityMs) / DeltaSeconds - GravityAccel + Resistive;
-            const double Applied = std::max(-Zone.MaxDecel, std::min(Zone.MaxAccel, Needed));
+            // What the device DELIVERS, which on a healthy one is all of it.
+            const double Health = zi < ZoneHealth.size() ? ZoneHealth[zi] : 1.0;
+            const double Applied = std::max(-Zone.MaxDecel * Health,
+                                            std::min(Zone.MaxAccel * Health, Needed));
             ZoneApplied[zi] = Applied;
             // Overlapping zones are an authoring error, but a ride control
             // system should fail toward the slower answer, so the most
@@ -779,6 +820,9 @@ private:
     // by Step, sized from Zones there — a zone added mid-run therefore reads zero
     // until the next step rather than indexing out of range.
     std::vector<double> ZoneApplied;
+    // Per zone, 0..1. Empty means every device is healthy, so the common
+    // case costs nothing and no existing caller has to know this exists.
+    std::vector<double> ZoneHealth;
 
     // Arc-length spans a train cannot roll back through. A pair rather than a
     // struct because that is genuinely all a catch is — no speed, no authority,
