@@ -15,6 +15,12 @@
 #include "TrainPhysics/TrainPhysics.h"
 #include "TrainPhysics/RideProfile.h"
 #include "TrackSpline/TrackProfile.h"
+// FTrackDiagnostic is a MEMBER type below, not just something the .cpp uses.
+// The .cpp included this and the header did not, so the member declared with it
+// was ill-formed and MSVC recovered into a bare `std::vector` -- which then
+// misreported as "no default constructor" in generated code and as a broken
+// range-for hundreds of lines away from the actual cause.
+#include "TrackSpline/TrackValidate.h"
 #include "BlockSignal/RideSignals.h"
 #include "BlockSignal/SignalWatch.h"
 #include "BlockSignal/Evacuation.h"

@@ -202,10 +202,6 @@ enum class ETUPanelView : uint8
 	Maintenance UMETA(DisplayName = "Maintenance (engineering)"),
 };
 
-UENUM(BlueprintType)
-// Which trace the ride-profile graph is showing. ONE AT A TIME rather than four
-// overlaid, because four traces on one axis is a picture rather than a reading —
-// and per-channel scale is exactly what the Phase 1 legibility card asked for.
 // A TRACK STYLE: the cross-section's dimensions and what it is painted.
 //
 // One struct, because a style is not two decisions. Change a gauge without
@@ -258,6 +254,7 @@ struct FTUTrackStyle
 };
 
 // The shipped styles. Named for what they ARE.
+UENUM(BlueprintType)
 enum class ETUTrackStyleName : uint8
 {
 	// Slim rails, a deep box-ish spine, ties every metre. What most modern steel
@@ -273,6 +270,10 @@ enum class ETUTrackStyleName : uint8
 	SteelCompact UMETA(DisplayName = "Steel - compact / family"),
 };
 
+// Which trace the ride-profile graph is showing. ONE AT A TIME rather than four
+// overlaid, because four traces on one axis is a picture rather than a reading —
+// and per-channel scale is exactly what the Phase 1 legibility card asked for.
+UENUM(BlueprintType)
 enum class ETUProfileChannel : uint8
 {
 	VerticalG UMETA(DisplayName = "Vertical G"),
@@ -284,6 +285,7 @@ enum class ETUProfileChannel : uint8
 	RollRate UMETA(DisplayName = "Roll rate"),
 };
 
+UENUM(BlueprintType)
 enum class ETUCameraMode : uint8
 {
 	// At the chosen seat, in the rider's own frame — so it inverts through the

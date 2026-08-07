@@ -1,6 +1,7 @@
 #include "TUCoasterRide.h"
 
 #include "ProceduralMeshComponent.h"
+#include "RenderCore.h"                 // SetNearClipPlaneGlobals
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 
@@ -105,6 +106,74 @@ ATUCoasterRide::ATUCoasterRide()
 	// document. The menu is for the packaged shell, which starts somewhere else.
 	Session.Enter(EAppMode::MainMenu);
 	Session.Enter(EAppMode::Build);
+}
+
+// The drawing palette and its two primitives, HOISTED ABOVE EVERY PANEL THAT
+// USES THEM. There are four now — the mode banner, the profile graph, the
+// diagnostics list and the control panel — and a palette declared beside the
+// last one only compiles for the last one.
+//
+// Shared deliberately rather than duplicated: the panels are meant to look like
+// one instrument seen from different angles, and two copies of a colour drift
+// the first time somebody adjusts one.
+namespace
+{
+	// The drawing's own palette, so the panel and the splash are the same object
+	// seen twice. Near-black ground, amber for what is working, cyan for what is
+	// measured, red for what has stopped.
+	const FLinearColor PanelGround(0.043f, 0.055f, 0.067f, 0.92f);
+	const FLinearColor PanelRule(0.20f, 0.24f, 0.28f, 1.f);
+	const FLinearColor PanelText(0.72f, 0.78f, 0.82f, 1.f);
+	const FLinearColor PanelDim(0.42f, 0.47f, 0.52f, 1.f);
+	const FLinearColor PanelAmber(0.98f, 0.62f, 0.16f, 1.f);
+	const FLinearColor PanelCyan(0.35f, 0.74f, 1.00f, 1.f);
+	const FLinearColor PanelGreen(0.35f, 0.82f, 0.45f, 1.f);
+	const FLinearColor PanelRed(0.95f, 0.28f, 0.24f, 1.f);
+
+	void PanelTile(UCanvas* C, float X, float Y, float W, float H, const FLinearColor& Col)
+	{
+		FCanvasTileItem Tile(FVector2D(X, Y), FVector2D(W, H), Col);
+		Tile.BlendMode = SE_BLEND_Translucent;
+		C->DrawItem(Tile);
+	}
+
+	void PanelLabel(UCanvas* C, float X, float Y, const FString& S, const FLinearColor& Col)
+	{
+		FCanvasTextItem Item(FVector2D(X, Y), FText::FromString(S), GEngine->GetSmallFont(), Col);
+		Item.EnableShadow(FLinearColor::Black);
+		C->DrawItem(Item);
+	}
+
+	// What a zone IS, for the module heading. FTrackZone drops the kind because the
+	// physics does not care; the panel is the one place that has to say it.
+	const TCHAR* ZoneKindName(ETUSegmentZone Kind)
+	{
+		switch (Kind)
+		{
+		case ETUSegmentZone::Lift:          return TEXT("LIFT");
+		case ETUSegmentZone::Launch:        return TEXT("LAUNCH");
+		case ETUSegmentZone::Brake:         return TEXT("TRIM");
+		case ETUSegmentZone::BlockBrake:    return TEXT("BLOCK BRAKE");
+		case ETUSegmentZone::Station:       return TEXT("STATION");
+		case ETUSegmentZone::StationUnload: return TEXT("UNLOAD");
+		case ETUSegmentZone::StationLoad:   return TEXT("LOAD");
+		default:                            return TEXT("-");
+		}
+	}
+
+	const TCHAR* PhaseName(EStationPhase P)
+	{
+		switch (P)
+		{
+		case EStationPhase::Empty:     return TEXT("EMPTY");
+		case EStationPhase::Arriving:  return TEXT("ARRIVING");
+		case EStationPhase::Unloading: return TEXT("UNLOADING");
+		case EStationPhase::Loading:   return TEXT("LOADING");
+		case EStationPhase::Securing:  return TEXT("SECURING");
+		case EStationPhase::Ready:     return TEXT("READY");
+		default:                       return TEXT("DEPARTING");
+		}
+	}
 }
 
 TArray<FTUTrackSegment> ATUCoasterRide::PresetLayout(ETUPresetLayout Which)
@@ -1771,11 +1840,14 @@ void ATUCoasterRide::DrawSegmentEditor(UCanvas* Canvas)
 	// EDITS ARE A MODE QUESTION, and the panel says so rather than simply
 	// ignoring keystrokes — a field that has stopped accepting numbers with no
 	// explanation is indistinguishable from a broken one.
-	const bool bEditable = Session.EditsAllowed();
-	PanelLabel(Canvas, Ox, Y, bEditable
+	// NOT bEditable -- AActor already has one under WITH_EDITORONLY_DATA, and a
+	// local that shadows it compiles in a packaged build and fails only in the
+	// editor. Named for what it asks rather than for what it is.
+	const bool bEditsAllowed = Session.EditsAllowed();
+	PanelLabel(Canvas, Ox, Y, bEditsAllowed
 		? TEXT("SEGMENTS   [B] hide   click a field, type, Enter")
 		: TEXT("SEGMENTS   read-only while the ride runs   [Tab] to BUILD"),
-		bEditable ? PanelDim : PanelAmber);
+		bEditsAllowed ? PanelDim : PanelAmber);
 	Y += 20.f;
 
 	// ---- The list. Windowed around the selection, because a 23-segment layout
@@ -2243,73 +2315,6 @@ void ATUCoasterRide::CycleAppMode()
 		break;
 	}
 }
-// The drawing palette and its two primitives, HOISTED ABOVE EVERY PANEL THAT
-// USES THEM. There are four now — the mode banner, the profile graph, the
-// diagnostics list and the control panel — and a palette declared beside the
-// last one only compiles for the last one.
-//
-// Shared deliberately rather than duplicated: the panels are meant to look like
-// one instrument seen from different angles, and two copies of a colour drift
-// the first time somebody adjusts one.
-namespace
-{
-	// The drawing's own palette, so the panel and the splash are the same object
-	// seen twice. Near-black ground, amber for what is working, cyan for what is
-	// measured, red for what has stopped.
-	const FLinearColor PanelGround(0.043f, 0.055f, 0.067f, 0.92f);
-	const FLinearColor PanelRule(0.20f, 0.24f, 0.28f, 1.f);
-	const FLinearColor PanelText(0.72f, 0.78f, 0.82f, 1.f);
-	const FLinearColor PanelDim(0.42f, 0.47f, 0.52f, 1.f);
-	const FLinearColor PanelAmber(0.98f, 0.62f, 0.16f, 1.f);
-	const FLinearColor PanelCyan(0.35f, 0.74f, 1.00f, 1.f);
-	const FLinearColor PanelGreen(0.35f, 0.82f, 0.45f, 1.f);
-	const FLinearColor PanelRed(0.95f, 0.28f, 0.24f, 1.f);
-
-	void PanelTile(UCanvas* C, float X, float Y, float W, float H, const FLinearColor& Col)
-	{
-		FCanvasTileItem Tile(FVector2D(X, Y), FVector2D(W, H), Col);
-		Tile.BlendMode = SE_BLEND_Translucent;
-		C->DrawItem(Tile);
-	}
-
-	void PanelLabel(UCanvas* C, float X, float Y, const FString& S, const FLinearColor& Col)
-	{
-		FCanvasTextItem Item(FVector2D(X, Y), FText::FromString(S), GEngine->GetSmallFont(), Col);
-		Item.EnableShadow(FLinearColor::Black);
-		C->DrawItem(Item);
-	}
-
-	// What a zone IS, for the module heading. FTrackZone drops the kind because the
-	// physics does not care; the panel is the one place that has to say it.
-	const TCHAR* ZoneKindName(ETUSegmentZone Kind)
-	{
-		switch (Kind)
-		{
-		case ETUSegmentZone::Lift:          return TEXT("LIFT");
-		case ETUSegmentZone::Launch:        return TEXT("LAUNCH");
-		case ETUSegmentZone::Brake:         return TEXT("TRIM");
-		case ETUSegmentZone::BlockBrake:    return TEXT("BLOCK BRAKE");
-		case ETUSegmentZone::Station:       return TEXT("STATION");
-		case ETUSegmentZone::StationUnload: return TEXT("UNLOAD");
-		case ETUSegmentZone::StationLoad:   return TEXT("LOAD");
-		default:                            return TEXT("-");
-		}
-	}
-
-	const TCHAR* PhaseName(EStationPhase P)
-	{
-		switch (P)
-		{
-		case EStationPhase::Empty:     return TEXT("EMPTY");
-		case EStationPhase::Arriving:  return TEXT("ARRIVING");
-		case EStationPhase::Unloading: return TEXT("UNLOADING");
-		case EStationPhase::Loading:   return TEXT("LOADING");
-		case EStationPhase::Securing:  return TEXT("SECURING");
-		case EStationPhase::Ready:     return TEXT("READY");
-		default:                       return TEXT("DEPARTING");
-		}
-	}
-}
 
 
 void ATUCoasterRide::DrawModeBanner(UCanvas* Canvas)
@@ -2634,14 +2639,14 @@ void ATUCoasterRide::BuildDiagnostics()
 			FDiagTarget T;
 			T.S = F.S;
 			Diagnostics.Add(EDiagSeverity::Warning, "Structure",
-				FString::Printf(TEXT("%s (%.0f m of track)"),
-					UTF8_TO_TCHAR(F.What.c_str()), F.LengthM()), T);
+				TCHAR_TO_UTF8(*FString::Printf(TEXT("%s (%.0f m of track)"),
+					UTF8_TO_TCHAR(F.What.c_str()), F.LengthM())), T);
 		}
 		if (Plan.LongestGapM > 0.0)
 		{
 			Diagnostics.Add(EDiagSeverity::Info, "Structure",
-				FString::Printf(TEXT("%d supports, longest unsupported run %.1f m"),
-					static_cast<int32>(Plan.Leg.size()), Plan.LongestGapM));
+				TCHAR_TO_UTF8(*FString::Printf(TEXT("%d supports, longest unsupported run %.1f m"),
+					static_cast<int32>(Plan.Leg.size()), Plan.LongestGapM)));
 		}
 	}
 
@@ -4967,6 +4972,28 @@ void ATUCoasterRide::SimStep(double DeltaSeconds)
 	}
 }
 
+// THE NEAR PLANE IS ONE GLOBAL, and that is UE's answer rather than a limitation
+// of this code: UCameraComponent carries an ortho near plane and no perspective
+// one, because FMinimalViewInfo::PerspectiveNearClipPlane defaults negative
+// meaning "use GNearClippingPlane". SetNearClipPlaneGlobals is what the engine's
+// own r.SetNearClipPlane console command calls, and it moves the render thread's
+// copy as well — writing GNearClippingPlane directly moves only half of it.
+//
+// One global is not a compromise here. There is one camera.
+//
+// GUARDED, because this is called every frame and the setter flushes rendering
+// commands. A near plane that has not moved must not cost a flush.
+static void SetNearPlaneMetres(double Metres)
+{
+	// The engine clamps its own console command to 1 cm, so match it rather than
+	// discovering the floor by rendering through it.
+	const float Cm = FMath::Max(1.f, static_cast<float>(Metres * MetresToUU));
+	if (!FMath::IsNearlyEqual(GNearClippingPlane, Cm, 0.05f))
+	{
+		SetNearClipPlaneGlobals(Cm);
+	}
+}
+
 void ATUCoasterRide::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
@@ -5181,14 +5208,15 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 		// top of the hill is gone; set it for the hill and the restraint in front
 		// of a rider is clipped away.
 		const FDepthRange D = DepthRangeFor(Orbit.Distance, Orbit.Distance);
-		Camera->SetCustomNearClippingPlane(static_cast<float>(D.Near * MetresToUU));
+		SetNearPlaneMetres(D.Near);
 	}
 	else if (CameraMode == ETUCameraMode::Rider)
 	{
 		Camera->SetWorldLocationAndRotation(ToWorld(Frame.Position), Rotation);
 		// Centimetres in a seat, or the restraint in front of the rider is clipped
-		// off — the other end of the same trade the orbit camera makes.
-		Camera->SetCustomNearClippingPlane(static_cast<float>(0.02 * MetresToUU));
+		// off — the other end of the same trade the orbit camera makes. 2 cm is
+		// twice the engine's own 1 cm floor, so it survives the clamp.
+		SetNearPlaneMetres(0.02);
 	}
 	else
 	{

@@ -15,6 +15,10 @@ public class TrackUnlimited : ModuleRules
 		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "EnhancedInput",
 			// Phase 4: the swept track mesh. A built-in engine plugin, enabled in
 			// the .uproject — nothing is downloaded and removing both lines reverts it.
-			"ProceduralMeshComponent" });
+			"ProceduralMeshComponent",
+			// SetNearClipPlaneGlobals. UCameraComponent has no perspective near-plane
+			// setter — the near plane is one global, and this is the engine's own
+			// supported way to move it (r.SetNearClipPlane calls exactly this).
+			"RenderCore" });
 	}
 }
