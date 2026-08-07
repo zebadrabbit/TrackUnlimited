@@ -90,6 +90,19 @@ ATUCoasterRide::ATUCoasterRide()
 	// point — Preset + bLoadPreset puts a known-good one back if an edit goes
 	// wrong, or swaps in a different worked example to take apart.
 	Segments = PresetLayout(Preset);
+
+	// AND THE SESSION STARTS IN BUILD, not in Boot.
+	//
+	// This matters more than it looks: EditsAllowed() is false everywhere except
+	// Build, and PostEditChangeProperty now refuses on it — so a session left in
+	// Boot would silently reject every number typed into the Details panel, which
+	// is the whole editing surface today.
+	//
+	// Boot exists to discover a crash sidecar before anything can overwrite it,
+	// and an actor placed in a level has already skipped that: the level IS the
+	// document. The menu is for the packaged shell, which starts somewhere else.
+	Session.Enter(EAppMode::MainMenu);
+	Session.Enter(EAppMode::Build);
 }
 
 TArray<FTUTrackSegment> ATUCoasterRide::PresetLayout(ETUPresetLayout Which)
@@ -1584,13 +1597,29 @@ void ATUCoasterRide::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 	// carrying a place.
 	PlayerInputComponent->BindKey(EKeys::Z, IE_Pressed, this,
 		&ATUCoasterRide::FrameSelectedSegment);
+	// ONE BINDING, dispatching by mode. Two handlers on one key both fire and
+	// which one "wins" depends on registration order — the exact ambiguity
+	// FInputMap's conflict test exists to warn about, and shipping it in the same
+	// repository as that test would be poor form.
 	PlayerInputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed, this,
-		&ATUCoasterRide::ClickDiagnostics);
+		&ATUCoasterRide::ClickPrimary);
 	// BUILD / OPERATE / RIDE. The mode decides the camera, the panels and whether
 	// edits are accepted at all — which is what makes it a mode rather than a
 	// label on a screen.
 	PlayerInputComponent->BindKey(EKeys::Tab, IE_Pressed, this,
 		&ATUCoasterRide::CycleAppMode);
+
+	// THE SIM CLOCK. Watching a buffer count down at quarter speed is how
+	// somebody learns what the interlocking is doing, and stepping one scan at a
+	// time is how they see a permissive drop the frame a restraint opens.
+	PlayerInputComponent->BindKey(EKeys::Pause, IE_Pressed, this,
+		&ATUCoasterRide::TogglePause);
+	PlayerInputComponent->BindKey(EKeys::Period, IE_Pressed, this,
+		&ATUCoasterRide::StepOneScan);
+	PlayerInputComponent->BindKey(EKeys::Comma, IE_Pressed, this,
+		&ATUCoasterRide::SlowDown);
+	PlayerInputComponent->BindKey(EKeys::Slash, IE_Pressed, this,
+		&ATUCoasterRide::SpeedUp);
 	PlayerInputComponent->BindKey(EKeys::MouseScrollUp, IE_Pressed, this,
 		&ATUCoasterRide::OrbitZoomIn);
 	PlayerInputComponent->BindKey(EKeys::MouseScrollDown, IE_Pressed, this,
@@ -1614,6 +1643,222 @@ void ATUCoasterRide::CycleCameraMode()
 	// Re-seed on the way in, so the free camera starts from wherever you were
 	// just looking rather than teleporting you somewhere unrecognisable.
 	bFreeInitialised = false;
+}
+
+void ATUCoasterRide::DrawMainMenu(UCanvas* Canvas)
+{
+	if (!Canvas || !GEngine || Session.Mode() != EAppMode::MainMenu) { return; }
+
+	MenuRowRects.Reset();
+	MenuRowAction.Reset();
+
+	const float W = 620.f;
+	const float Row = 20.f;
+	const float Ox = 60.f;
+	float Y = 80.f;
+
+	PanelTile(Canvas, Ox - 20.f, 50.f, W + 40.f, 460.f, PanelGround);
+	PanelLabel(Canvas, Ox, 56.f, TEXT("TRACKUNLIMITED"), PanelCyan);
+	// AN OSS PROJECT'S MENU IS FREE ADVERTISING FOR CONTRIBUTION, and a version
+	// string is the first thing anybody filing a bug is asked for.
+	PanelLabel(Canvas, Ox + 200.f, 58.f,
+		TEXT("free and open source  ·  github.com/zebadrabbit/TrackUnlimited"), PanelDim);
+
+	// ---- START FROM A TEMPLATE.
+	//
+	// NOT AN EMPTY LIST. The first edit should be changing a number on something
+	// that already runs, not authoring geometry from nothing — a completely
+	// different and much harder first task.
+	PanelLabel(Canvas, Ox, Y, TEXT("START"), PanelDim);
+	Y += Row;
+	for (std::size_t i = 0; i < NumTemplates(); ++i)
+	{
+		const FTemplate T = TemplateAt(i);
+		MenuRowRects.Add(FVector4(Ox, Y, Ox + W, Y + Row));
+		MenuRowAction.Add(static_cast<int32>(i));
+		PanelLabel(Canvas, Ox + 12.f, Y, UTF8_TO_TCHAR(T.Name), PanelText);
+		PanelLabel(Canvas, Ox + 230.f, Y + 2.f, UTF8_TO_TCHAR(T.Description), PanelDim);
+		Y += Row;
+	}
+
+	// ---- RECENT.
+	Y += 10.f;
+	PanelLabel(Canvas, Ox, Y, TEXT("RECENT"), PanelDim);
+	Y += Row;
+
+	const std::vector<FTrackEntry> Rows =
+		FTrackBrowser::Rows(std::vector<FTrackEntry>(), Browser.RecentList());
+	if (Rows.empty())
+	{
+		PanelLabel(Canvas, Ox + 12.f, Y,
+			UTF8_TO_TCHAR(EmptyStateFor(EPanelKind::RecentTracks)), PanelDim);
+		Y += Row;
+	}
+	for (std::size_t i = 0; i < Rows.size(); ++i)
+	{
+		const FTrackEntry& E = Rows[i];
+		MenuRowRects.Add(FVector4(Ox, Y, Ox + W, Y + Row));
+		MenuRowAction.Add(-1000 - static_cast<int32>(i));
+
+		// A MISSING FILE IS STILL LISTED AND STILL CLICKABLE, because the
+		// commonest cause is an unplugged drive and "reconnect it and click
+		// again" only works if it is still there to click. It is dimmed and it
+		// says which kind of problem it is — one is "plug the drive back in" and
+		// the other is "line 12 is wrong".
+		PanelLabel(Canvas, Ox + 12.f, Y, UTF8_TO_TCHAR(E.Name.c_str()),
+			E.IsUsable() ? PanelText : PanelAmber);
+		PanelLabel(Canvas, Ox + 230.f, Y + 2.f,
+			UTF8_TO_TCHAR(FTrackBrowser::Subtitle(E).c_str()), PanelDim);
+		Y += Row;
+	}
+
+	// ---- OPEN, and quit.
+	Y += 10.f;
+	MenuRowRects.Add(FVector4(Ox, Y, Ox + W, Y + Row));
+	MenuRowAction.Add(-1);
+	PanelLabel(Canvas, Ox + 12.f, Y, TEXT("Open a track file..."), PanelText);
+	Y += Row + 8.f;
+	PanelLabel(Canvas, Ox, Y,
+		TEXT("click to choose   ·   [Tab] once a track is open"), PanelDim);
+}
+
+void ATUCoasterRide::StartFromTemplate(int32 Index)
+{
+	if (Index < 0 || static_cast<std::size_t>(Index) >= NumTemplates()) { return; }
+	const FTemplate T = TemplateAt(static_cast<std::size_t>(Index));
+
+	// A TEMPLATE NAMES A PRESET rather than carrying its own geometry. Five
+	// measured worked examples already ship, and a parallel set of starter
+	// layouts would be a second set of tracks to keep working — drifting from the
+	// ones every number in the docs is quoted from.
+	switch (T.Preset)
+	{
+	case ETemplatePreset::FlatRig:         Preset = ETUPresetLayout::FlatRig; break;
+	case ETemplatePreset::OutAndBack:      Preset = ETUPresetLayout::OutAndBack; break;
+	case ETemplatePreset::TwoTrainCircuit: Preset = ETUPresetLayout::TwoTrainCircuit; break;
+	case ETemplatePreset::SmallBatch:      Preset = ETUPresetLayout::SmallBatch; break;
+	case ETemplatePreset::Blank:           Segments.Reset(); break;
+	default:                               Preset = ETUPresetLayout::Reference; break;
+	}
+	if (T.Preset != ETemplatePreset::Blank)
+	{
+		Segments = PresetLayout(Preset);
+		ApplyPresetTrainSetup(Preset);
+	}
+
+	Session.DidCreateNew(std::string());
+	Session.Enter(EAppMode::Build);
+	CameraMode = ETUCameraMode::Orbit;
+	RebuildFromSegments();
+	FrameWholeTrack();
+
+	// WHAT TO TRY FIRST, next to the thing it describes. Not a tutorial sequence
+	// — that is a thing to dismiss, and this project's argument is that the tool
+	// tells you the truth plainly.
+	UE_LOG(LogTUEvents, Log, TEXT("%s — %s"),
+		UTF8_TO_TCHAR(T.Name), UTF8_TO_TCHAR(T.WhatToTryFirst));
+}
+
+void ATUCoasterRide::ClickPrimary()
+{
+	// The menu owns the click while it is up; everything else is the editor's.
+	if (Session.Mode() == EAppMode::MainMenu) { ClickMainMenu(); }
+	else                                      { ClickDiagnostics(); }
+}
+
+void ATUCoasterRide::ClickMainMenu()
+{
+	APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr;
+	if (!PC || Session.Mode() != EAppMode::MainMenu) { return; }
+
+	float Mx = 0.f, My = 0.f;
+	if (!PC->GetMousePosition(Mx, My)) { return; }
+
+	for (int32 i = 0; i < MenuRowRects.Num() && i < MenuRowAction.Num(); ++i)
+	{
+		const FVector4& R = MenuRowRects[i];
+		if (Mx < R.X || Mx > R.Z || My < R.Y || My > R.W) { continue; }
+
+		const int32 Action = MenuRowAction[i];
+		if (Action >= 0)
+		{
+			StartFromTemplate(Action);
+		}
+		else if (Action == -1)
+		{
+			// THE OS FILE DIALOG IS EDITOR-ONLY, and that is a real limit rather
+			// than an oversight: IDesktopPlatform does not ship in a packaged
+			// game. The browser list above is the primary path precisely because
+			// it works everywhere, and this is the convenience on top of it.
+			//
+			// A packaged build needs a different picker, and pretending otherwise
+			// by calling this unguarded would compile in the editor and fail to
+			// link in the thing anybody actually downloads.
+#if WITH_EDITOR
+			UE_LOG(LogTUEvents, Log, TEXT("open: needs the desktop file dialog"));
+#else
+			UE_LOG(LogTUEvents, Warning,
+				TEXT("open: a packaged build has no OS file dialog yet; use the recent list"));
+#endif
+		}
+		else
+		{
+			const int32 Which = -1000 - Action;
+			if (Which >= 0 && Which < static_cast<int32>(Browser.NumRecent()))
+			{
+				const std::string& Path = Browser.RecentAt(static_cast<std::size_t>(Which));
+				UE_LOG(LogTUEvents, Log, TEXT("open recent: %s"), UTF8_TO_TCHAR(Path.c_str()));
+			}
+		}
+		return;
+	}
+}
+
+void ATUCoasterRide::FrameStation()
+{
+	// WHERE AN OPERATOR STANDS. Chase follows a train around the ride, which is
+	// the wrong view for a console: the question in Operate is "may this train
+	// go", and that is asked and answered at the platform.
+	//
+	// The station is the first holding zone, which the block walk already
+	// derived — nothing here is authored or searched for.
+	double Start = 0.0, End = 0.0;
+	bool bFound = false;
+	for (int32 i = 0; i < Segments.Num(); ++i)
+	{
+		const double L = static_cast<double>(Segments[i].Length);
+		if (!bFound && (Segments[i].Zone == ETUSegmentZone::Station
+			|| Segments[i].Zone == ETUSegmentZone::StationLoad
+			|| Segments[i].Zone == ETUSegmentZone::StationUnload))
+		{
+			Start = End;
+			bFound = true;
+		}
+		End += L;
+		if (bFound && End - Start > 30.0) { break; }
+	}
+	if (!bFound)
+	{
+		// A ride with no platform is a test rig, and framing the whole thing is
+		// the honest answer rather than picking an arbitrary metre.
+		FrameWholeTrack();
+		return;
+	}
+
+	FCamBounds B;
+	const int Steps = 10;
+	for (int i = 0; i <= Steps; ++i)
+	{
+		const FTrackFrame F = Track.EvaluateAt(Start + (End - Start) * (double(i) / Steps));
+		B.Add({F.Position.X, F.Position.Y, F.Position.Z});
+	}
+	// Stand back far enough to see the train AND the block ahead of it, because
+	// the dispatch decision is about both.
+	const double Pad = 25.0;
+	B.Add({B.Min.X - Pad, B.Min.Y - Pad, B.Min.Z - 2.0});
+	B.Add({B.Max.X + Pad, B.Max.Y + Pad, B.Max.Z + Pad});
+	Orbit.Frame(B, Camera ? static_cast<double>(Camera->FieldOfView) : 90.0, 16.0 / 9.0);
+	bOrbitFramed = true;
 }
 
 void ATUCoasterRide::CycleAppMode()
@@ -1642,7 +1887,11 @@ void ATUCoasterRide::CycleAppMode()
 	{
 	case EAppMode::Operate:
 		PanelView = ETUPanelView::Operator;
-		CameraMode = ETUCameraMode::Chase;
+		// THE STATION, not a chase. Chase follows a train around the ride; the
+		// question in Operate is "may this train go", and that is asked and
+		// answered at the platform.
+		CameraMode = ETUCameraMode::Orbit;
+		FrameStation();
 		break;
 	case EAppMode::Ride:
 		PanelView = ETUPanelView::Off;
@@ -1743,6 +1992,18 @@ void ATUCoasterRide::DrawModeBanner(UCanvas* Canvas)
 		Line += TEXT("   editing is off while the ride is running");
 	}
 	if (Session.IsDirty()) { Line += TEXT("   *unsaved"); }
+
+	// THE CLOCK IS ALWAYS STATED WHEN IT IS NOT 1x. A ride running at quarter
+	// speed with nothing saying so is a ride somebody will report as too slow —
+	// and a paused one is a ride they will report as broken.
+	if (bSimPaused)
+	{
+		Line += TEXT("   PAUSED  [.] step  [Pause] run");
+	}
+	else if (!FMath::IsNearlyEqual(TimeScale, 1.f))
+	{
+		Line += FString::Printf(TEXT("   %.2fx  [,] slower  [/] faster"), TimeScale);
+	}
 
 	PanelTile(Canvas, 10.f, 6.f, 8.f + Line.Len() * 6.2f, 18.f, PanelGround);
 	PanelLabel(Canvas, 12.f, 8.f, Line, Ink);
@@ -2269,6 +2530,7 @@ void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/
 	//
 	// Drawn FIRST so the control panel, which is the operator's, is never
 	// obscured by the author's graph.
+	DrawMainMenu(Canvas);
 	DrawModeBanner(Canvas);
 	DrawProfileGraph(Canvas);
 	DrawDiagnosticsPanel(Canvas);
@@ -4336,7 +4598,24 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 		return;
 	}
 
-	SimAccumulator += DeltaSeconds;
+	// PAUSED, SCALED, OR STEPPED — and all three change how much TIME arrives,
+	// never the step itself. The scan period stays 1/SimHz, so a quarter-speed
+	// run is the same sequence of scans delivered more slowly and the digest
+	// still matches a real-time run. Scaling the step instead would change every
+	// rate inside the controller and make slow motion a different ride.
+	if (bSimPaused)
+	{
+		// A single step is COUNTED rather than timed, so one press is exactly one
+		// scan whatever the frame rate — which is the whole reason to want it.
+		if (StepsOwed > 0)
+		{
+			SimStep(Step);
+			--StepsOwed;
+		}
+		SimAccumulator = 0.0;
+		return;
+	}
+	SimAccumulator += DeltaSeconds * static_cast<double>(TimeScale);
 
 	int32 Ran = 0;
 	while (SimAccumulator >= Step && Ran < MaxStepsPerFrame)

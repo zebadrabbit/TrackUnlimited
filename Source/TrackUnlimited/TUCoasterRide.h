@@ -25,6 +25,7 @@
 #include "Shell/DiagnosticsModel.h"
 #include "Shell/FirstRun.h"
 #include "Shell/SessionState.h"
+#include "Shell/TrackBrowser.h"
 #include "TrackMesh/TrackSupports.h"
 #include "BlockSignal/ShowBus.h"
 #include "BlockSignal/SimDigest.h"
@@ -1011,6 +1012,74 @@ private:
 	 * The session's rules are tested in Prototypes/Shell/SessionState.h.
 	 */
 	FSession Session;
+
+	/**
+	 * THE SIM CLOCK, which is an OPERATOR'S tool rather than a debug convenience.
+	 *
+	 * Watching a buffer count down at quarter speed is how somebody learns what
+	 * the interlocking is doing, and stepping one scan at a time is how they see
+	 * a permissive drop the frame a restraint opens. Neither is visible at 1x.
+	 *
+	 * IT SCALES THE CLOCK, NOT THE STEP. The scan period stays 1/SimHz, and time
+	 * scale changes how much wall-clock time is fed to the accumulator — so a
+	 * quarter-speed run is the SAME SEQUENCE OF SCANS, just delivered more
+	 * slowly, and FSimDigest still matches a real-time run of the same session.
+	 * Scaling the step instead would change every rate inside the controller and
+	 * make slow motion a different ride.
+	 */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Simulation",
+		meta = (ClampMin = "0.05", ClampMax = "4.0"))
+	float TimeScale = 1.f;
+
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Simulation")
+	bool bSimPaused = false;
+
+	/** Scans still owed to a [.] press. Stepping is counted rather than timed, so
+	 *  one press is exactly one scan whatever the frame rate. */
+	int32 StepsOwed = 0;
+
+	void TogglePause() { bSimPaused = !bSimPaused; }
+	void StepOneScan() { StepsOwed += 1; }
+	void SlowDown() { TimeScale = FMath::Max(0.05f, TimeScale * 0.5f); }
+	void SpeedUp() { TimeScale = FMath::Min(4.f, TimeScale * 2.f); }
+
+	/** Frame the station, which is where an operator stands. */
+	void FrameStation();
+
+	/**
+	 * THE MAIN MENU. The first screen anyone sees, and the first thing that makes
+	 * this an application rather than a project.
+	 *
+	 * Drawn on the same canvas as every other panel and clicked the same
+	 * immediate-mode way, so it needs no asset and works the moment somebody runs
+	 * it. The list's own rules — most-recent-first, deduplicated across three
+	 * spellings of one path, a missing file kept and marked rather than pruned,
+	 * and a file that will not load carrying the loader's REASON — are in
+	 * Prototypes/Shell/TrackBrowser.h and are tested there.
+	 */
+	FTrackBrowser Browser;
+
+	/** Where each menu row was drawn, so a click can find it. Immediate mode:
+	 *  rebuilt every frame, nothing to keep in sync. */
+	TArray<FVector4> MenuRowRects;
+	TArray<int32> MenuRowAction;   // >=0 template, -1000-n recent index, -1 open
+
+	void DrawMainMenu(class UCanvas* Canvas);
+	void ClickMainMenu();
+
+	/**
+	 * ONE BINDING FOR THE LEFT MOUSE, dispatching by mode.
+	 *
+	 * Two handlers bound to one key both fire, and which one "wins" depends on
+	 * registration order — the exact ambiguity FInputMap's conflict test exists
+	 * to warn about, and it would be poor form to ship the thing the test warns
+	 * against in the same repository.
+	 */
+	void ClickPrimary();
+
+	/** Load a template — which names a PRESET rather than carrying its own
+	 *  geometry, because five measured worked examples already ship. */
+	void StartFromTemplate(int32 Index);
 
 	/** [Tab] — Build to Operate and back. The camera, the panels and whether
 	 *  edits are accepted all follow from it, which is the point of a mode. */
