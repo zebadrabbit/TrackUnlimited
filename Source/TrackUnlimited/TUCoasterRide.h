@@ -457,6 +457,44 @@ private:
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Mesh")
 	bool bBuildTrackMesh = true;
 
+	/**
+	 * THE VISUAL STYLE, so a coaster looks like a structure rather than a spline
+	 * in space.
+	 *
+	 * NO AUTHORED ASSET. The three mesh sections take dynamic material instances
+	 * over an ENGINE material referenced by path — the same trick the cars
+	 * already use for their cube — so a style is data in this file rather than a
+	 * `.uasset` somebody has to make before anything looks like anything.
+	 *
+	 * That is a real limit as well as a convenience: an engine base material has
+	 * a colour and nothing else, so there is no roughness, no metal and no normal
+	 * map here. It is a FIRST style, and the card asked for one complete style
+	 * rather than a good one.
+	 */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Mesh")
+	ETUTrackStyleName TrackStyle = ETUTrackStyleName::SteelModern;
+
+	/** Override the preset's numbers. Empty name means "use the preset". */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Mesh")
+	FTUTrackStyle CustomStyle;
+
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Mesh")
+	bool bUseCustomStyle = false;
+
+	static FTUTrackStyle StylePreset(ETUTrackStyleName Which);
+	FTUTrackStyle ActiveStyle() const;
+	void ApplyTrackStyle();
+
+	UPROPERTY(Transient)
+	TObjectPtr<class UMaterialInterface> BaseMaterial;
+
+	UPROPERTY(Transient)
+	TObjectPtr<class UMaterialInstanceDynamic> RailMaterial;
+	UPROPERTY(Transient)
+	TObjectPtr<class UMaterialInstanceDynamic> SpineMaterial;
+	UPROPERTY(Transient)
+	TObjectPtr<class UMaterialInstanceDynamic> TieMaterial;
+
 	/** Metres between rings. THE quality/cost knob, and a distance rather than a
 	 *  count so a long track does not come out coarser than a short one. */
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Mesh",

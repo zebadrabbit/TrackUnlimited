@@ -1,6 +1,8 @@
 #include "TUCoasterRide.h"
 
 #include "ProceduralMeshComponent.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "Materials/MaterialInterface.h"
 
 #include "TrackSpline/TrackClose.h"
 #include "TrackSpline/TrackValidate.h"
@@ -1435,6 +1437,25 @@ void ATUCoasterRide::RebuildFromSegments()
 	// the heartline origin is RIDER height and z = 0 in track space is about
 	// 1.7 m above the bottom of the spine. Built here rather than beside
 	// DrawTrack so both the editor preview and BeginPlay get it from one place.
+	// THE STYLE IS THE SECTION AS WELL AS THE COLOUR, and it is applied HERE
+	// rather than inside RebuildTrackMesh — which returns early when the mesh is
+	// off, and would then leave the wireframe and the support planner reading a
+	// gauge nobody chose. Everything downstream shares one Profile, so it has to
+	// be set before any of them run.
+	//
+	// Changing a gauge without changing the paint would give a different track
+	// that looks the same, which is exactly the confusion a "style" prevents — so
+	// one pick moves both.
+	{
+		const FTUTrackStyle Style = ActiveStyle();
+		Profile.Gauge = Style.GaugeM;
+		Profile.RailDiameter = Style.RailDiameterM;
+		Profile.SpineDrop = Style.SpineDropM;
+		Profile.SpineDiameter = Style.SpineDiameterM;
+		Profile.TieSpacing = Style.TieSpacingM;
+		Profile.TieDiameter = Style.TieDiameterM;
+	}
+
 	RebuildTrackMesh();
 
 	// AFTER everything else, because it reads the ride profile and the derived
@@ -4309,6 +4330,92 @@ void ATUCoasterRide::PushMeshSection(UProceduralMeshComponent* Target, const FMe
 		TArray<FLinearColor>(), TArray<FProcMeshTangent>(), /*bCreateCollision*/ false);
 }
 
+FTUTrackStyle ATUCoasterRide::StylePreset(ETUTrackStyleName Which)
+{
+	FTUTrackStyle S;
+	switch (Which)
+	{
+	case ETUTrackStyleName::SteelClassic:
+		S.Name = TEXT("Steel - classic tubular");
+		S.RailColour = FLinearColor(0.55f, 0.56f, 0.58f);
+		S.SpineColour = FLinearColor(0.16f, 0.35f, 0.55f);
+		S.TieColour = FLinearColor(0.22f, 0.24f, 0.26f);
+		S.GaugeM = 1.22f;              // the wide end of the real range
+		S.RailDiameterM = 0.127f;      // and the fat end of the rail range
+		S.SpineDropM = 0.38f;
+		S.SpineDiameterM = 0.36f;
+		S.TieSpacingM = 0.75f;
+		S.TieDiameterM = 0.06f;
+		break;
+	case ETUTrackStyleName::SteelCompact:
+		S.Name = TEXT("Steel - compact / family");
+		S.RailColour = FLinearColor(0.70f, 0.72f, 0.75f);
+		S.SpineColour = FLinearColor(0.20f, 0.60f, 0.42f);
+		S.TieColour = FLinearColor(0.34f, 0.36f, 0.38f);
+		// NARROW GAUGE FOR THE SMALL VEHICLES the small-batch preset already
+		// ships. 0.76 m is the bottom of the real range and it is where a
+		// six-metre car belongs.
+		S.GaugeM = 0.78f;
+		S.RailDiameterM = 0.09f;
+		S.SpineDropM = 0.30f;
+		S.SpineDiameterM = 0.22f;
+		S.TieSpacingM = 0.60f;
+		S.TieDiameterM = 0.04f;
+		break;
+	default:
+		break;                          // the struct's own defaults are Modern
+	}
+	return S;
+}
+
+FTUTrackStyle ATUCoasterRide::ActiveStyle() const
+{
+	return bUseCustomStyle ? CustomStyle : StylePreset(TrackStyle);
+}
+
+void ATUCoasterRide::ApplyTrackStyle()
+{
+	// NO AUTHORED ASSET. Dynamic instances over an engine material referenced by
+	// path, which is the same trick the cars already use for their cube. A style
+	// is therefore data in this file rather than a .uasset somebody has to make
+	// before anything looks like anything.
+	if (!BaseMaterial)
+	{
+		BaseMaterial = LoadObject<UMaterialInterface>(nullptr,
+			TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
+	}
+	if (!BaseMaterial)
+	{
+		// REPORTED, NOT FAKED. Without a base the sections keep the engine's
+		// default grey, which is honest — a track that silently rendered
+		// untextured with no explanation would be read as the mesher failing.
+		UE_LOG(LogTemp, Warning,
+			TEXT("TrackUnlimited: no base material; the track will draw untextured."));
+		return;
+	}
+
+	const FTUTrackStyle S = ActiveStyle();
+	auto Paint = [this](TObjectPtr<UMaterialInstanceDynamic>& Mid,
+		UProceduralMeshComponent* Mesh, const FLinearColor& C)
+	{
+		if (!Mesh) { return; }
+		if (!Mid) { Mid = UMaterialInstanceDynamic::Create(BaseMaterial, this); }
+		if (!Mid) { return; }
+		// The engine base exposes a "Color" parameter. Setting one that does not
+		// exist is a no-op rather than an error, so this degrades to plain grey
+		// rather than failing if the asset ever changes.
+		Mid->SetVectorParameterValue(TEXT("Color"), C);
+		Mesh->SetMaterial(0, Mid);
+	};
+
+	// THREE MATERIALS FOR THREE BUFFERS, which is why the mesher emits three:
+	// running rail is polished where the wheels touch it, spine is painted
+	// structure, ties are usually neither.
+	Paint(RailMaterial, RailMesh, S.RailColour);
+	Paint(SpineMaterial, SpineMesh, S.SpineColour);
+	Paint(TieMaterial, TieMesh, S.TieColour);
+}
+
 void ATUCoasterRide::RebuildTrackMesh()
 {
 	if (!bBuildTrackMesh || Track.TotalLength() <= 0.0)
@@ -4333,6 +4440,10 @@ void ATUCoasterRide::RebuildTrackMesh()
 	PushMeshSection(RailMesh, Mesh.Rails);
 	PushMeshSection(SpineMesh, Mesh.Spine);
 	PushMeshSection(TieMesh, Mesh.Ties);
+
+	// AFTER the sections exist, because SetMaterial on a component with no
+	// section is a colour assigned to nothing.
+	ApplyTrackStyle();
 
 	// REPORTED, NEVER REPAIRED. A curve tighter than half the gauge folds the
 	// inner rail through its own axis, and the fix is a wider curve — geometry

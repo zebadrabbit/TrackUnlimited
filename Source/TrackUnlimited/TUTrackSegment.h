@@ -206,6 +206,73 @@ UENUM(BlueprintType)
 // Which trace the ride-profile graph is showing. ONE AT A TIME rather than four
 // overlaid, because four traces on one axis is a picture rather than a reading —
 // and per-channel scale is exactly what the Phase 1 legibility card asked for.
+// A TRACK STYLE: the cross-section's dimensions and what it is painted.
+//
+// One struct, because a style is not two decisions. Change a gauge without
+// changing the colour and you have a different track that looks the same, which
+// is exactly the confusion a "style" is supposed to prevent.
+//
+// PER CONSTRAINT 5, every figure here is generic. Real steel coaster track spans
+// roughly 0.76-1.22 m gauge, 100-127 mm running rail with ~10 mm wall, and
+// tubular spines to ~0.36 m; the presets below sit inside that and are named for
+// what they are rather than for who builds them.
+USTRUCT(BlueprintType)
+struct FTUTrackStyle
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, Category = "Style")
+	FString Name = TEXT("Steel - modern");
+
+	// ---- Colour. Three, because the mesher emits three buffers and that was the
+	// reason: running rail is polished where the wheels touch it, spine is painted
+	// structure, ties are usually neither.
+	UPROPERTY(EditAnywhere, Category = "Style")
+	FLinearColor RailColour = FLinearColor(0.62f, 0.65f, 0.70f);
+
+	UPROPERTY(EditAnywhere, Category = "Style")
+	FLinearColor SpineColour = FLinearColor(0.86f, 0.31f, 0.16f);
+
+	UPROPERTY(EditAnywhere, Category = "Style")
+	FLinearColor TieColour = FLinearColor(0.30f, 0.32f, 0.35f);
+
+	// ---- Section. The same knobs FTrackProfile carries, surfaced so a style is
+	// one thing to pick rather than a colour plus six numbers somewhere else.
+	UPROPERTY(EditAnywhere, Category = "Style", meta = (ClampMin = "0.4", ClampMax = "2.0"))
+	float GaugeM = 1.10f;
+
+	UPROPERTY(EditAnywhere, Category = "Style", meta = (ClampMin = "0.05", ClampMax = "0.3"))
+	float RailDiameterM = 0.115f;
+
+	UPROPERTY(EditAnywhere, Category = "Style", meta = (ClampMin = "0.05", ClampMax = "2.0"))
+	float SpineDropM = 0.45f;
+
+	UPROPERTY(EditAnywhere, Category = "Style", meta = (ClampMin = "0.05", ClampMax = "1.0"))
+	float SpineDiameterM = 0.35f;
+
+	UPROPERTY(EditAnywhere, Category = "Style", meta = (ClampMin = "0.3", ClampMax = "5.0"))
+	float TieSpacingM = 1.00f;
+
+	UPROPERTY(EditAnywhere, Category = "Style", meta = (ClampMin = "0.02", ClampMax = "0.2"))
+	float TieDiameterM = 0.05f;
+};
+
+// The shipped styles. Named for what they ARE.
+enum class ETUTrackStyleName : uint8
+{
+	// Slim rails, a deep box-ish spine, ties every metre. What most modern steel
+	// track looks like at a distance.
+	SteelModern UMETA(DisplayName = "Steel - modern"),
+
+	// Fatter rails, a shallower and heavier spine, ties closer together. Reads as
+	// older ironwork without being anybody's in particular.
+	SteelClassic UMETA(DisplayName = "Steel - classic tubular"),
+
+	// Narrow gauge, small section, tight tie spacing. For the small-batch
+	// vehicles the preset already ships.
+	SteelCompact UMETA(DisplayName = "Steel - compact / family"),
+};
+
 enum class ETUProfileChannel : uint8
 {
 	VerticalG UMETA(DisplayName = "Vertical G"),
