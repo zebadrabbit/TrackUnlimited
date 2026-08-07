@@ -12,6 +12,9 @@ public class TrackUnlimited : ModuleRules
 		// under Prototypes/ test exactly the code that ships in the game.
 		PublicIncludePaths.Add(System.IO.Path.Combine(ModuleDirectory, "..", "..", "Prototypes"));
 
-		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "EnhancedInput" });
+		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "EnhancedInput",
+			// Phase 4: the swept track mesh. A built-in engine plugin, enabled in
+			// the .uproject — nothing is downloaded and removing both lines reverts it.
+			"ProceduralMeshComponent" });
 	}
 }

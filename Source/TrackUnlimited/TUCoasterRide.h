@@ -19,6 +19,7 @@
 #include "BlockSignal/SignalWatch.h"
 #include "BlockSignal/Evacuation.h"
 #include "BlockSignal/PlcUnit.h"
+#include "TrackMesh/TrackMesh.h"
 #include "BlockSignal/ShowBus.h"
 #include "BlockSignal/SimDigest.h"
 #include "BlockSignal/StationProcess.h"
@@ -133,7 +134,9 @@ public:
 		EditCondition = "CameraMode == ETUCameraMode::Chase", EditConditionHides))
 	float ChaseHeightM = 6.f;
 
-	/** Draw the heartline and rail centreline, since there is no track mesh yet. */
+	/** The heartline and the device colours, as wireframe. Not made redundant by
+	 *  the Phase 4 mesh: the heartline is not a physical part of the track, and
+	 *  which block a stretch belongs to is invisible on a solid rail. */
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited")
 	bool bDrawTrack = true;
 
@@ -404,7 +407,63 @@ private:
 
 	/** Prototype metres/right-handed -> Unreal centimetres/left-handed. */
 	FVector ToWorld(const FVec3& V) const;
+	// The same conversion without the actor's own location, for anything that
+	// lives in a COMPONENT rather than being drawn into the world: mesh vertices
+	// are actor-local and get the actor transform applied for free.
+	FVector ToLocal(const FVec3& V) const;
+	// Direction only: mirrored, not scaled and not offset. A normal converted
+	// with ToLocal would be a point near the origin rather than a direction.
+	FVector ToLocalDirection(const FVec3& V) const;
 	FQuat ToWorldRotation(const FTrackFrame& Frame) const;
+
+	/**
+	 * PHASE 4: THE TRACK, AS SOMETHING YOU CAN SEE.
+	 *
+	 * Three components because rails, spine and ties are three materials, and
+	 * because a track style may want to replace one of them without touching the
+	 * others.
+	 *
+	 * The geometry comes from `Prototypes/TrackMesh/`, which is engine-free and
+	 * assert-tested — this is only the port. That means unit conversion,
+	 * mirroring Y, AND REVERSING TRIANGLE WINDING, which is the part neither
+	 * CLAUDE.md nor PHASE0_FINDINGS previously said: M(x,y,z) = (x,-y,z) is a
+	 * REFLECTION with determinant -1, so it flips triangle orientation. Mirror
+	 * the positions and normals alone and every surface on the ride is inside
+	 * out — invisible under backface culling, with every vertex position
+	 * correct. Asserted as a property in test_trackmesh.cpp.
+	 */
+	UPROPERTY(VisibleAnywhere, Category = "TrackUnlimited|Mesh")
+	TObjectPtr<class UProceduralMeshComponent> RailMesh;
+
+	UPROPERTY(VisibleAnywhere, Category = "TrackUnlimited|Mesh")
+	TObjectPtr<class UProceduralMeshComponent> SpineMesh;
+
+	UPROPERTY(VisibleAnywhere, Category = "TrackUnlimited|Mesh")
+	TObjectPtr<class UProceduralMeshComponent> TieMesh;
+
+	/**
+	 * Off leaves the wireframe as the only view, which is what every screenshot
+	 * before Phase 4 was taken with. Measured: a 1288 m circuit at these defaults
+	 * is 14 ms to sweep, so a rebuild is one hitch rather than something needing
+	 * a button.
+	 */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Mesh")
+	bool bBuildTrackMesh = true;
+
+	/** Metres between rings. THE quality/cost knob, and a distance rather than a
+	 *  count so a long track does not come out coarser than a short one. */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Mesh",
+		meta = (ClampMin = "0.1", ClampMax = "5.0", EditCondition = "bBuildTrackMesh"))
+	float MeshSampleSpacingM = 0.5f;
+
+	/** Segments around a tube. Eight is a visible octagon close up; twelve is the
+	 *  sensible shipping figure. */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Mesh",
+		meta = (ClampMin = "3", ClampMax = "24", EditCondition = "bBuildTrackMesh"))
+	int32 MeshSides = 12;
+
+	void RebuildTrackMesh();
+	void PushMeshSection(class UProceduralMeshComponent* Target, const FMeshBuffer& M) const;
 
 	UPROPERTY(VisibleAnywhere, Category = "TrackUnlimited")
 	TObjectPtr<USceneComponent> Root;

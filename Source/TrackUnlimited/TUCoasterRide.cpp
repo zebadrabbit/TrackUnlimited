@@ -1,5 +1,7 @@
 #include "TUCoasterRide.h"
 
+#include "ProceduralMeshComponent.h"
+
 #include "TrackSpline/TrackClose.h"
 #include "TrackSpline/TrackValidate.h"
 
@@ -61,6 +63,27 @@ ATUCoasterRide::ATUCoasterRide()
 
 	Camera = CreateDefaultSubobject<UCameraComponent>(TEXT("Camera"));
 	Camera->SetupAttachment(Root);
+
+	// PHASE 4. Three components rather than one: rails, spine and ties are three
+	// materials — running rail is polished where the wheels touch it, spine is
+	// painted structure, ties are neither — and a track style may want to replace
+	// one of them without touching the others.
+	//
+	// COLLISION OFF on all three. A quarter of a million triangles of collision
+	// geometry costs a great deal and buys nothing: the train is constrained to
+	// the spline analytically and does not collide with anything, which is the
+	// whole reason FTrain is 1D rather than a rigid body.
+	auto MakeTrackMesh = [this](const TCHAR* Name)
+	{
+		UProceduralMeshComponent* C = CreateDefaultSubobject<UProceduralMeshComponent>(Name);
+		C->SetupAttachment(Root);
+		C->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		C->bUseAsyncCooking = true;
+		return C;
+	};
+	RailMesh = MakeTrackMesh(TEXT("RailMesh"));
+	SpineMesh = MakeTrackMesh(TEXT("SpineMesh"));
+	TieMesh = MakeTrackMesh(TEXT("TieMesh"));
 
 	// Seeded so a freshly placed actor has a ride in it. Everything about that
 	// ride is data in the Details panel rather than code, which is the whole
@@ -1389,6 +1412,12 @@ void ATUCoasterRide::RebuildFromSegments()
 		Clear.ClosestApproach,
 		Clear.bStructureOverlaps ? TEXT(" (TRACK PASSES THROUGH ITSELF)") : TEXT(""),
 		GroundOffsetM);
+
+	// AFTER GroundOffsetM is known, because the port lifts every vertex by it —
+	// the heartline origin is RIDER height and z = 0 in track space is about
+	// 1.7 m above the bottom of the spine. Built here rather than beside
+	// DrawTrack so both the editor preview and BeginPlay get it from one place.
+	RebuildTrackMesh();
 }
 
 #if WITH_EDITOR
@@ -1412,13 +1441,26 @@ void ATUCoasterRide::PostEditChangeProperty(FPropertyChangedEvent& Event)
 }
 #endif
 
-FVector ATUCoasterRide::ToWorld(const FVec3& V) const
+FVector ATUCoasterRide::ToLocal(const FVec3& V) const
 {
 	// Mirror Y: the prototype frame is right-handed, Unreal is left-handed.
 	// Lift by GroundOffsetM: the heartline origin is RIDER height, not track
 	// height, so z = 0 in track space is about 1.7 m above the bottom of the
 	// spine. See RebuildFromSegments for why this is computed rather than typed.
-	return GetActorLocation() + FVector(V.X, -V.Y, V.Z + GroundOffsetM) * MetresToUU;
+	return FVector(V.X, -V.Y, V.Z + GroundOffsetM) * MetresToUU;
+}
+
+FVector ATUCoasterRide::ToLocalDirection(const FVec3& V) const
+{
+	// The same mirror and NOTHING ELSE. A normal put through ToLocal would come
+	// back as a point a metre and a half above the origin rather than a
+	// direction, which reads as lighting that is subtly wrong everywhere.
+	return FVector(V.X, -V.Y, V.Z);
+}
+
+FVector ATUCoasterRide::ToWorld(const FVec3& V) const
+{
+	return GetActorLocation() + ToLocal(V);
 }
 
 FQuat ATUCoasterRide::ToWorldRotation(const FTrackFrame& Frame) const
@@ -3051,12 +3093,108 @@ FColor ATUCoasterRide::RailColourAt(double S) const
 	return FColor(235, 235, 235);   // plain track
 }
 
+// One buffer, ported. Everything geometric already happened in TrackMesh.h; this
+// converts units and handedness and nothing else, which is the whole job of this
+// file.
+void ATUCoasterRide::PushMeshSection(UProceduralMeshComponent* Target, const FMeshBuffer& M) const
+{
+	if (Target == nullptr)
+	{
+		return;
+	}
+	Target->ClearAllMeshSections();
+	if (M.NumTriangles() == 0)
+	{
+		return;
+	}
+
+	TArray<FVector> Pos;
+	TArray<FVector> Nrm;
+	TArray<FVector2D> UV;
+	TArray<int32> Tri;
+	Pos.Reserve(static_cast<int32>(M.NumVertices()));
+	Nrm.Reserve(static_cast<int32>(M.NumVertices()));
+	UV.Reserve(static_cast<int32>(M.NumVertices()));
+	Tri.Reserve(static_cast<int32>(M.Index.size()));
+
+	for (std::size_t v = 0; v < M.NumVertices(); ++v)
+	{
+		Pos.Add(ToLocal(M.Position[v]));
+		Nrm.Add(ToLocalDirection(M.Normal[v]));
+		UV.Add(FVector2D(M.UV[v].U, M.UV[v].V));
+	}
+
+	// THE PART THAT IS NOT UNIT CONVERSION, and the one neither CLAUDE.md nor
+	// PHASE0_FINDINGS said until now: M(x,y,z) = (x,-y,z) is a REFLECTION with
+	// determinant -1, so it reverses triangle orientation. Mirror the positions
+	// and normals and change nothing else and every surface on this ride is
+	// inside out — invisible under backface culling, black under a light, with
+	// every vertex position perfectly correct.
+	//
+	// So two indices of every triangle swap. Asserted as a property in
+	// test_trackmesh.cpp, where it can be, rather than trusted here where it
+	// cannot.
+	for (std::size_t t = 0; t + 2 < M.Index.size(); t += 3)
+	{
+		Tri.Add(static_cast<int32>(M.Index[t]));
+		Tri.Add(static_cast<int32>(M.Index[t + 2]));
+		Tri.Add(static_cast<int32>(M.Index[t + 1]));
+	}
+
+	Target->CreateMeshSection_LinearColor(0, Pos, Tri, Nrm, UV,
+		TArray<FLinearColor>(), TArray<FProcMeshTangent>(), /*bCreateCollision*/ false);
+}
+
+void ATUCoasterRide::RebuildTrackMesh()
+{
+	if (!bBuildTrackMesh || Track.TotalLength() <= 0.0)
+	{
+		if (RailMesh) { RailMesh->ClearAllMeshSections(); }
+		if (SpineMesh) { SpineMesh->ClearAllMeshSections(); }
+		if (TieMesh) { TieMesh->ClearAllMeshSections(); }
+		return;
+	}
+
+	FMeshSettings Settings;
+	Settings.SampleSpacing = MeshSampleSpacingM;
+	Settings.Sides = MeshSides;
+
+	// The walk is the ONLY thing that touches the track, and it walks with
+	// AdvanceFrom. The sweep below has no FTrack at all, which is what makes the
+	// O(n^2) trap unreachable rather than merely discouraged — see TrackMesh.h.
+	std::vector<FMeshFinding> Findings;
+	const FTrackMesh Mesh = BuildTrackMesh(WalkTrack(Track, Settings.SampleSpacing),
+		Track.GetHeartlineHeight(), Profile, Settings, &Findings);
+
+	PushMeshSection(RailMesh, Mesh.Rails);
+	PushMeshSection(SpineMesh, Mesh.Spine);
+	PushMeshSection(TieMesh, Mesh.Ties);
+
+	// REPORTED, NEVER REPAIRED. A curve tighter than half the gauge folds the
+	// inner rail through its own axis, and the fix is a wider curve — geometry
+	// quietly straightened to fit would read as a layout that works.
+	for (const FMeshFinding& F : Findings)
+	{
+		UE_LOG(LogTUEvents, Warning,
+			TEXT("track mesh at %.1f m: %s (curvature %.4f 1/m, inner rail radius %.3f m)"),
+			F.S, UTF8_TO_TCHAR(F.What.c_str()), F.Curvature, F.MinRadius);
+	}
+	UE_LOG(LogTemp, Log, TEXT("TrackUnlimited: track mesh %d vertices, %d triangles at %.2f m / %d sides"),
+		static_cast<int32>(Mesh.NumVertices()), static_cast<int32>(Mesh.NumTriangles()),
+		MeshSampleSpacingM, MeshSides);
+}
+
 void ATUCoasterRide::DrawTrack() const
 {
-	// No track mesh yet — that is Phase 4. This draws the actual cross-section
-	// as wireframe instead: two running rails at gauge, the spine below them,
-	// and cross-ties. Enough to model a track style against, and enough to see
-	// that the heartline and the rails really are different curves.
+	// THE WIREFRAME SURVIVED PHASE 4, and is not redundant beside the mesh.
+	// It draws two things the swept geometry structurally cannot: the HEARTLINE,
+	// which is not a physical part of the track at all, and the DEVICE COLOURS,
+	// which say which block and which brake each stretch belongs to. A solid
+	// track hides both — so this stays on by default and the mesh grows over it.
+	//
+	// The rails and spine drawn here are inside their own tubes and will be
+	// hidden. Left in rather than trimmed, because turning the mesh off has to
+	// give back the view every screenshot before Phase 4 was taken with.
 	//
 	// Everything comes off the frame the walk already has. The previous version
 	// called Track.RailCentreAt(S) in here, which re-runs EvaluateAt — O(track
