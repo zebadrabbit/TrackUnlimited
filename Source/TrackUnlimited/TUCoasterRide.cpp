@@ -1540,6 +1540,14 @@ void ATUCoasterRide::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 	// distance at 10 m and at 1000 m.
 	PlayerInputComponent->BindKey(EKeys::F, IE_Pressed, this,
 		&ATUCoasterRide::FrameWholeTrack);
+
+	// THE RIDE PROFILE, as a graph you can read a number off. [G] cycles the
+	// channel and [H] hides it — one at a time rather than four overlaid, because
+	// four traces on one axis is a picture rather than a reading.
+	PlayerInputComponent->BindKey(EKeys::G, IE_Pressed, this,
+		&ATUCoasterRide::CycleProfileChannel);
+	PlayerInputComponent->BindKey(EKeys::H, IE_Pressed, this,
+		&ATUCoasterRide::ToggleProfileGraph);
 	PlayerInputComponent->BindKey(EKeys::MouseScrollUp, IE_Pressed, this,
 		&ATUCoasterRide::OrbitZoomIn);
 	PlayerInputComponent->BindKey(EKeys::MouseScrollDown, IE_Pressed, this,
@@ -1563,6 +1571,20 @@ void ATUCoasterRide::CycleCameraMode()
 	// Re-seed on the way in, so the free camera starts from wherever you were
 	// just looking rather than teleporting you somewhere unrecognisable.
 	bFreeInitialised = false;
+}
+
+void ATUCoasterRide::CycleProfileChannel()
+{
+	switch (ProfileChannel)
+	{
+	case ETUProfileChannel::VerticalG: ProfileChannel = ETUProfileChannel::LateralG; break;
+	case ETUProfileChannel::LateralG:  ProfileChannel = ETUProfileChannel::Speed; break;
+	case ETUProfileChannel::Speed:     ProfileChannel = ETUProfileChannel::RollRate; break;
+	default:                           ProfileChannel = ETUProfileChannel::VerticalG; break;
+	}
+	// Showing the graph is implied by asking to change its channel. A key that
+	// silently changed something invisible would be a key nobody trusts.
+	bShowProfileGraph = true;
 }
 
 void ATUCoasterRide::FrameWholeTrack()
@@ -1728,8 +1750,169 @@ namespace
 	}
 }
 
+// ===================== THE RIDE PROFILE, AS A GRAPH =====================
+//
+// The view that makes a spike DIAGNOSABLE. The in-world traces show WHERE
+// something happens; this shows WHAT, against a labelled axis you can read a
+// number off — and they are different questions, which is why both exist.
+//
+// Drawn on the debug canvas, exactly as the control panel is, and for the same
+// reason: it needs no asset, so it works the moment somebody presses the key
+// rather than after somebody authors a widget. `UI_CONVENTIONS.md` picked UMG
+// for composed panels and custom Slate for DRAWN ones, and this is a drawn one —
+// the canvas is the same OnPaint in a cheaper coat.
+//
+// Every number comes from `GraphAxis.h`, which is tested: nice-number ticks, a
+// range grown to a multiple of the step, zero kept on screen for signed
+// channels, and a scrubber that round-trips.
+void ATUCoasterRide::DrawProfileGraph(UCanvas* Canvas)
+{
+	if (!bShowProfileGraph || !Canvas || !GEngine) { return; }
+
+	const std::vector<FRideSample>& Sample = Profile_.Samples;
+	const float Wx = 560.f;
+	const float Hy = 150.f;
+	const float Ox = 20.f;
+	const float Oy = Canvas->SizeY - Hy - 96.f;
+
+	PanelTile(Canvas, Ox - 8.f, Oy - 24.f, Wx + 16.f, Hy + 58.f, PanelGround);
+
+	// A STALLED RIDE SHOWS THE STALL AND NOTHING ELSE. The envelope suite already
+	// had this failure — "within envelope, zero findings" over a train that
+	// stalled at 46 m — and a trace drawn from a run that did not happen reads as
+	// a result. Same rule the diagnostics model runs on.
+	if (!Profile_.bCompleted)
+	{
+		PanelLabel(Canvas, Ox, Oy - 20.f, TEXT("RIDE PROFILE"), PanelDim);
+		PanelLabel(Canvas, Ox, Oy + 8.f,
+			FString::Printf(TEXT("the train does not complete: it stalls at %.1f m, %.1f m up"),
+				Profile_.StalledAtS, Profile_.StalledHeight), PanelRed);
+		PanelLabel(Canvas, Ox, Oy + 26.f,
+			TEXT("no speed or G is shown, because there was no ride to measure"), PanelDim);
+		return;
+	}
+	if (Sample.size() < 2)
+	{
+		PanelLabel(Canvas, Ox, Oy - 20.f, TEXT("RIDE PROFILE"), PanelDim);
+		PanelLabel(Canvas, Ox, Oy + 8.f,
+			TEXT("no ride to measure yet"), PanelDim);
+		return;
+	}
+
+	// The channel on show. One at a time rather than four overlaid, because four
+	// traces on one axis is a picture rather than a reading — and the per-channel
+	// scale is exactly what the Phase 1 legibility card asked for.
+	std::vector<double> Values;
+	Values.reserve(Sample.size());
+	const TCHAR* ChannelName = TEXT("");
+	const TCHAR* ChannelUnit = TEXT("");
+	bool bSigned = true;
+	FLinearColor Ink = PanelCyan;
+
+	switch (ProfileChannel)
+	{
+	case ETUProfileChannel::Speed:
+		for (const FRideSample& S : Sample) { Values.push_back(S.Speed * 3.6); }
+		ChannelName = TEXT("SPEED"); ChannelUnit = TEXT("km/h");
+		bSigned = false; Ink = PanelCyan;
+		break;
+	case ETUProfileChannel::LateralG:
+		for (const FRideSample& S : Sample) { Values.push_back(S.LateralG); }
+		ChannelName = TEXT("LATERAL G"); ChannelUnit = TEXT("g");
+		Ink = PanelAmber;
+		break;
+	case ETUProfileChannel::RollRate:
+		// FIRST-CLASS, WITH ITS OWN AXIS. The one thing no G trace can ever show:
+		// felt G models the rider as a point at the heartline, so spinning that
+		// point costs exactly nothing.
+		for (const FRideSample& S : Sample) { Values.push_back(S.RollRateDegPerSec); }
+		ChannelName = TEXT("ROLL RATE"); ChannelUnit = TEXT("deg/s");
+		Ink = PanelGreen;
+		break;
+	default:
+		for (const FRideSample& S : Sample) { Values.push_back(S.VerticalG); }
+		ChannelName = TEXT("VERTICAL G"); ChannelUnit = TEXT("g");
+		Ink = PanelCyan;
+		break;
+	}
+
+	const double Total = Sample.back().S;
+	double Lo = Values[0], Hi = Values[0];
+	for (double V : Values) { Lo = FMath::Min(Lo, V); Hi = FMath::Max(Hi, V); }
+	const FAxis Axis = MakeAxis(Lo, Hi, 5, bSigned);
+
+	// ---- Gridlines, at the nice numbers, LABELLED. An unlabelled gridline is
+	// decoration; the whole reason for snapping the step is that each one has a
+	// number you can read.
+	for (std::size_t t = 0; t < Axis.TickCount(); ++t)
+	{
+		const double V = Axis.TickAt(t);
+		const float Y = Oy + Hy - static_cast<float>(Axis.Fraction(V)) * Hy;
+		// ZERO IS DRAWN BRIGHTER, because on a signed channel it is the line the
+		// trace means anything against.
+		const bool bZero = FMath::Abs(V) < Axis.Step * 0.001;
+		PanelTile(Canvas, Ox, Y, Wx, 1.f, bZero ? PanelRule : FLinearColor(
+			PanelRule.R * 0.6f, PanelRule.G * 0.6f, PanelRule.B * 0.6f, 1.f));
+		PanelLabel(Canvas, Ox + Wx + 4.f, Y - 7.f,
+			FString::Printf(TEXT("%.2f"), V), PanelDim);
+	}
+
+	// ---- The trace. One line segment per sample pair, clamped into the box.
+	for (std::size_t i = 0; i + 1 < Values.size(); ++i)
+	{
+		const float X0 = Ox + static_cast<float>(Sample[i].S / Total) * Wx;
+		const float X1 = Ox + static_cast<float>(Sample[i + 1].S / Total) * Wx;
+		const float Y0 = Oy + Hy - static_cast<float>(Axis.Fraction(Values[i])) * Hy;
+		const float Y1 = Oy + Hy - static_cast<float>(Axis.Fraction(Values[i + 1])) * Hy;
+		FCanvasLineItem Line(FVector2D(X0, Y0), FVector2D(X1, Y1));
+		Line.SetColor(Ink);
+		Line.LineThickness = 1.6f;
+		Canvas->DrawItem(Line);
+	}
+
+	// ---- The scrubber, and the train's own position on it.
+	//
+	// THE TRAIN IS ALWAYS DRAWN, because the most useful thing this panel does is
+	// let you watch the trace and the ride at the same time and see which bit of
+	// the graph is the bit you are on.
+	if (!Trains.IsEmpty() && Trains[0])
+	{
+		const double S = Trains[0]->GetDistance();
+		const float X = Ox + static_cast<float>(FMath::Clamp(S / Total, 0.0, 1.0)) * Wx;
+		PanelTile(Canvas, X, Oy, 1.f, Hy, PanelAmber);
+		PanelLabel(Canvas, X + 3.f, Oy + Hy - 12.f,
+			FString::Printf(TEXT("%.0f m"), S), PanelAmber);
+	}
+
+	// ---- The heading, the extremes, and WHERE they happened.
+	//
+	// "4.25 g at 310 m" is somewhere to go and look; "4.25 g" is trivia. Same rule
+	// the diagnostics model runs on, and the reason both say it.
+	const FChannelExtremes E = ExtremesOf(Values, Total);
+	PanelLabel(Canvas, Ox, Oy - 20.f,
+		FString::Printf(TEXT("%s  (%s)   [G] channel   [H] hide"), ChannelName, ChannelUnit),
+		PanelDim);
+	PanelLabel(Canvas, Ox + 240.f, Oy - 20.f,
+		FString::Printf(TEXT("peak %.2f at %.0f m      min %.2f at %.0f m"),
+			E.Max, E.MaxAtS, E.Min, E.MinAtS), PanelText);
+	PanelLabel(Canvas, Ox, Oy + Hy + 6.f, TEXT("0 m"), PanelDim);
+	PanelLabel(Canvas, Ox + Wx - 46.f, Oy + Hy + 6.f,
+		FString::Printf(TEXT("%.0f m"), Total), PanelDim);
+}
+
+
 void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/)
 {
+	// THE GRAPH RIDES ON THE SAME CALLBACK rather than registering a second
+	// delegate. Two registrations can be added, removed and ordered
+	// independently, and the failure — one panel drawing over the other
+	// depending on which was registered first — is the kind that only appears
+	// on somebody else's machine.
+	//
+	// Drawn FIRST so the control panel, which is the operator's, is never
+	// obscured by the author's graph.
+	DrawProfileGraph(Canvas);
+
 	if (PanelView == ETUPanelView::Off || !Canvas || !Signals || !Drives || !GEngine)
 	{
 		return;

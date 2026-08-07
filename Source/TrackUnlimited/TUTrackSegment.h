@@ -203,6 +203,20 @@ enum class ETUPanelView : uint8
 };
 
 UENUM(BlueprintType)
+// Which trace the ride-profile graph is showing. ONE AT A TIME rather than four
+// overlaid, because four traces on one axis is a picture rather than a reading —
+// and per-channel scale is exactly what the Phase 1 legibility card asked for.
+enum class ETUProfileChannel : uint8
+{
+	VerticalG UMETA(DisplayName = "Vertical G"),
+	LateralG UMETA(DisplayName = "Lateral G"),
+	Speed UMETA(DisplayName = "Speed"),
+
+	// The one felt G structurally cannot contain: it models the rider as a point
+	// at the heartline, so spinning that point costs exactly nothing.
+	RollRate UMETA(DisplayName = "Roll rate"),
+};
+
 enum class ETUCameraMode : uint8
 {
 	// At the chosen seat, in the rider's own frame — so it inverts through the

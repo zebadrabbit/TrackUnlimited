@@ -21,6 +21,7 @@
 #include "BlockSignal/PlcUnit.h"
 #include "TrackMesh/TrackMesh.h"
 #include "Shell/CameraRig.h"
+#include "Shell/GraphAxis.h"
 #include "BlockSignal/ShowBus.h"
 #include "BlockSignal/SimDigest.h"
 #include "BlockSignal/StationProcess.h"
@@ -915,6 +916,28 @@ private:
 	 */
 	FOrbitState Orbit;
 	bool bOrbitFramed = false;
+
+	/**
+	 * THE RIDE PROFILE AS A GRAPH — the view that makes a spike diagnosable.
+	 *
+	 * The in-world traces show WHERE something happens; this shows WHAT, against
+	 * a labelled axis you can read a number off. Different questions, which is
+	 * why both exist rather than one replacing the other.
+	 *
+	 * Drawn on the debug canvas exactly as the control panel is, and for the same
+	 * reason: it needs no asset, so it works the moment somebody presses the key.
+	 * Every number in it comes from the tested `GraphAxis.h`.
+	 */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Ride profile")
+	bool bShowProfileGraph = false;
+
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Ride profile",
+		meta = (EditCondition = "bShowProfileGraph"))
+	ETUProfileChannel ProfileChannel = ETUProfileChannel::VerticalG;
+
+	void DrawProfileGraph(class UCanvas* Canvas);
+	void CycleProfileChannel();
+	void ToggleProfileGraph() { bShowProfileGraph = !bShowProfileGraph; }
 
 	/** [F] — frame the whole track. The thing you press constantly when a
 	 *  validation warning points somewhere and you have no idea where. */
