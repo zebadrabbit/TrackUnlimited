@@ -5,7 +5,7 @@
 <p align="center">
   <a href="LICENSE"><img alt="Licence: MIT" src="https://img.shields.io/badge/licence-MIT-7FD8FF?style=flat-square"></a>
   <img alt="Unreal Engine 5.8" src="https://img.shields.io/badge/Unreal%20Engine-5.8-E8F2F8?style=flat-square">
-  <img alt="Phase 2" src="https://img.shields.io/badge/phase-2%20%C2%B7%20physics%20%26%20ride%20feel-FFB020?style=flat-square">
+  <img alt="Phase 4" src="https://img.shields.io/badge/phase-4%20%C2%B7%20track%20meshing%20%26%20supports-FFB020?style=flat-square">
   <img alt="C++17" src="https://img.shields.io/badge/prototypes-C%2B%2B17%2C%20no%20engine%20needed-4ADE80?style=flat-square">
 </p>
 
@@ -139,7 +139,9 @@ fail to crest it.
 
 ## Status
 
-**Phase 2 — Physics & Ride Feel.** Phases 0 and 1 are complete.
+**Phase 4 — Track Meshing & Supports.** Phases 0 through 3.75 are complete, and the whole of it now
+**compiles and runs in the engine** — the track is solid geometry rather than wireframe, and the control
+system drives it.
 
 What exists today, all of it engine-free and assert-tested under `Prototypes/`, with a thin Unreal
 actor over the top:
@@ -167,7 +169,11 @@ actor over the top:
 | Fault injection | stuck restraints and gates, dead/stuck/chattering sensors — with a detection matrix |
 | Event log | every state transition, timestamped, to the panel and to disk |
 | Starter layouts | five worked examples of the vocabulary, each measured before shipping — two of them closed circuits |
-| In-engine slice | builds against UE 5.8, rides, reads out speed, G and block state |
+| Track meshing | rails, spine and ties swept from the same curvature profile — 309k triangles on the reference circuit, capped ends, asserted watertight |
+| Supports | placed where the rules allow and REFUSED with a reason where they do not — through an inversion, under grade, or fouling the track |
+| Device audit | what a layout's devices will actually do, judged against the ride it produces, with the numbers in the sentence |
+| Application shell | boot, main menu, Build / Operate / Ride, segment editor, diagnostics, graphs, autosave and crash recovery |
+| In-engine | builds against UE 5.8.1 with zero warnings; rides, meshes, signals, and reads out speed, G and block state |
 
 → [`Docs/ROADMAP.md`](Docs/ROADMAP.md) for what each phase ships and what is left.
 
@@ -199,8 +205,10 @@ For the full engine build, see [`CONTRIBUTING.md`](CONTRIBUTING.md).
 | [`Docs/ARCHITECTURE.md`](Docs/ARCHITECTURE.md) | Track representation, physics model, meshing, rendering, save format — and the constraints that are not up for negotiation |
 | [`Docs/AUTHORING.md`](Docs/AUTHORING.md) | The segment vocabulary, roll vs bank, validation, closure, undo, the file format |
 | [`Docs/SIGNALLING.md`](Docs/SIGNALLING.md) | Block states, buffer/overlap, dispatch permissives, the generated control panel |
-| [`Docs/CONTROL_ARCHITECTURE.md`](Docs/CONTROL_ARCHITECTURE.md) | **Design only, nothing built:** how a scriptable control and show layer could be shaped, and the real standards it would follow |
-| [`Docs/PROTOTYPES.md`](Docs/PROTOTYPES.md) | The five standalone prototypes: what each proves, how to build and run them |
+| [`Docs/CONTROL_ARCHITECTURE.md`](Docs/CONTROL_ARCHITECTURE.md) | The three tiers and the rule that requests never travel down — safety in C++ and not scriptable, for the same reason it is not in a real park |
+| [`Docs/TIER2_OVERRIDES.md`](Docs/TIER2_OVERRIDES.md) | The expression language for per-block overrides. Strict IEC 61131-3 spelling, and an override can only ever make a permissive MORE restrictive |
+| [`Docs/DIRECTION_AND_ROUTES.md`](Docs/DIRECTION_AND_ROUTES.md) | **Design only:** what a reverse section and a track merge actually cost — direction as two signs, and route interlocking instead of a block list |
+| [`Docs/PROTOTYPES.md`](Docs/PROTOTYPES.md) | The seven standalone prototypes and 33 assert suites: what each proves, how to build and run them |
 | [`Docs/ROADMAP.md`](Docs/ROADMAP.md) | Phases, shippable artifacts, current status |
 | [`Docs/REFERENCE_LAYOUT.md`](Docs/REFERENCE_LAYOUT.md) | The canonical measured figures for the reference layout |
 | [`Docs/PROJECT_PLAN.md`](Docs/PROJECT_PLAN.md) | The full plan: vision, market context, all five pillars, risks |
