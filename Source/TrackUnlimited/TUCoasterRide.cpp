@@ -5565,6 +5565,30 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 		SimAccumulator = 0.0;
 		return;
 	}
+
+	// THE FIRST FRAME'S DELTA IS NOT RIDE TIME, and counting it reported an
+	// overrun on every single run before anything had moved.
+	//
+	// BeginPlay sweeps a quarter-million-triangle mesh, runs the whole ride
+	// profile, derives the blocks and lays down the persistent debug lines — and
+	// UE's first Tick delta includes all of it plus the level load. Roughly 0.3 s
+	// on this layout, which is thirty times the cap, so the accumulator opened
+	// owing more than it could ever work off.
+	//
+	// A CONTROLLER DOES NOT OWE SCANS FOR THE TIME BEFORE IT WAS POWERED ON.
+	// That is the actual argument, not that the number is inconvenient: the ride
+	// starts when it starts, and there is no backlog to drop because there was
+	// no ride yet to fall behind.
+	//
+	// ONLY THE FIRST FRAME. A hitch mid-run is a real overrun and still reports
+	// one — this must not become a general "clamp the delta", which would quietly
+	// disable the detector that alt-tabbing already showed is worth having.
+	if (!bSimClockStarted)
+	{
+		bSimClockStarted = true;
+		SimAccumulator = 0.0;
+		return;
+	}
 	SimAccumulator += DeltaSeconds * static_cast<double>(TimeScale);
 
 	int32 Ran = 0;

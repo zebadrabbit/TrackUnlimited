@@ -774,6 +774,11 @@ private:
 	double SimAccumulator = 0.0;
 	int32 ScanOverruns = 0;
 
+	/** False until the first tick after BeginPlay has been discarded. That frame's
+	 *  delta is level load and the actor's own build, not ride time — a controller
+	 *  does not owe scans for the time before it was powered on. */
+	bool bSimClockStarted = false;
+
 	/**
 	 * HOW MUCH RIDE WENT MISSING, which the count alone does not say.
 	 *
