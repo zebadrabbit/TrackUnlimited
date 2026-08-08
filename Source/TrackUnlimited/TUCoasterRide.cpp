@@ -1954,6 +1954,15 @@ void ATUCoasterRide::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 	PlayerInputComponent->BindKey(EKeys::L, IE_Pressed, this,
 		&ATUCoasterRide::RedoEdit);
 
+	// [I] INSERT and [R] REMOVE. Unlike every other letter here these two guard on
+	// IsTypingInField -- not because a letter could be part of a number, but
+	// because they change the LIST somebody is typing into, and inserting a row
+	// under a focused field is where "a letter is safe" stops being true.
+	PlayerInputComponent->BindKey(EKeys::I, IE_Pressed, this,
+		&ATUCoasterRide::InsertSegment);
+	PlayerInputComponent->BindKey(EKeys::R, IE_Pressed, this,
+		&ATUCoasterRide::RemoveSegment);
+
 	// THE SEGMENT EDITOR. Numeric entry only — constraint 1 holds absolutely, and
 	// a digit key IS typed entry rather than a stepper wearing its name.
 	PlayerInputComponent->BindKey(EKeys::B, IE_Pressed, this,
@@ -2408,6 +2417,65 @@ void ATUCoasterRide::CommitField()
 	// row cannot disagree about what a thing is called.
 	PushHistory(FString::Printf(TEXT("%s on segment %d"),
 		UTF8_TO_TCHAR(FieldName(Was)), SelectedSegment));
+}
+
+void ATUCoasterRide::InsertSegment()
+{
+	// ===================== AN EDITOR THAT CANNOT ADD A SEGMENT =====================
+	//
+	// The runtime editor could change numbers on segments that already existed and
+	// nothing else, which makes it a tuning panel rather than an editor. The model
+	// has had Insert, Remove and Duplicate since Phase 0.
+	if (!Session.EditsAllowed() || IsTypingInField())
+	{
+		// NOT WHILE TYPING. A letter key is not part of a number, which is why the
+		// others do not guard — but these two change the LIST somebody is typing
+		// into, and inserting a row under a focused field is the one case where
+		// "a letter is safe" stops being true.
+		return;
+	}
+
+	// ONE KEY, AND IT COPIES RATHER THAN INSERTING A BLANK. Building track is
+	// almost always "another one like that" — the new piece inherits the zone, the
+	// roll and the kind, which is what somebody was about to type back in by hand.
+	// A default straight is only what you get when there is nothing to copy, which
+	// is the empty track and the first segment.
+	FTUTrackSegment New;
+	int32 At = Segments.Num();
+	if (SelectedSegment >= 0 && SelectedSegment < Segments.Num())
+	{
+		New = Segments[SelectedSegment];
+		At = SelectedSegment + 1;
+	}
+	Segments.Insert(New, At);
+
+	// The new one becomes the selection, because the next thing anybody does is
+	// edit it — and leaving the selection on the original means the first field
+	// typed changes the wrong segment.
+	SelectedSegment = At;
+	RebuildFromSegments();
+	PushHistory(FString::Printf(TEXT("insert segment %d"), At));
+}
+
+void ATUCoasterRide::RemoveSegment()
+{
+	if (!Session.EditsAllowed() || IsTypingInField()
+		|| SelectedSegment < 0 || SelectedSegment >= Segments.Num())
+	{
+		return;
+	}
+
+	// DESTRUCTIVE AND UNCONFIRMED, which is only defensible because [J] undoes it.
+	// A confirm on every delete is the dialog people learn to click through, and
+	// the honest alternative to it is an undo that works — which landed first
+	// deliberately, rather than this shipping with a prompt standing in for one.
+	const int32 At = SelectedSegment;
+	Segments.RemoveAt(At);
+	// The segment that took its place, or the last one, or nothing on an empty
+	// track. A selection past the end is an editor drawing a row that is not there.
+	SelectedSegment = FMath::Clamp(At, -1, Segments.Num() - 1);
+	RebuildFromSegments();
+	PushHistory(FString::Printf(TEXT("remove segment %d"), At));
 }
 
 void ATUCoasterRide::CancelField()
@@ -3635,6 +3703,36 @@ void ATUCoasterRide::RunDocumentSmokeTest()
 			UE_LOG(LogTUEvents, Log,
 				TEXT("smoke: an edit undoes and redoes exactly; %d steps deep"),
 				static_cast<int32>(History ? History->Depth() : 0));
+		}
+	}
+
+	// ===================== INSERT AND REMOVE, WHICH UNDO HAS TO COVER =====================
+	//
+	// Remove is unconfirmed, and that is only defensible if undo genuinely brings
+	// the segment back — so it is asserted rather than assumed. Insert then remove
+	// is the pair that also proves the selection does not end up past the end.
+	{
+		const int32 CountBefore = Segments.Num();
+		SelectedSegment = 0;
+		InsertSegment();
+		const bool bGrew = Segments.Num() == CountBefore + 1;
+		RemoveSegment();
+		const bool bShrank = Segments.Num() == CountBefore;
+		UndoEdit();   // the remove
+		const bool bCameBack = Segments.Num() == CountBefore + 1;
+		UndoEdit();   // the insert
+		const bool bGone = Segments.Num() == CountBefore;
+
+		if (!bGrew || !bShrank || !bCameBack || !bGone)
+		{
+			UE_LOG(LogTUEvents, Error,
+				TEXT("smoke: insert/remove/undo is wrong (grew %d, shrank %d, back %d, gone %d)"),
+				bGrew, bShrank, bCameBack, bGone);
+		}
+		else
+		{
+			UE_LOG(LogTUEvents, Log,
+				TEXT("smoke: a segment inserts, removes, and undo brings it back"));
 		}
 	}
 

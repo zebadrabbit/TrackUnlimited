@@ -1274,6 +1274,19 @@ private:
 	void SaveDocumentFromKey() { SaveDocument(); }
 
 	/**
+	 * [I] AND [R] — the two things that make it an editor rather than a tuning
+	 * panel. The runtime editor could change numbers on segments that already
+	 * existed and could not add or remove one.
+	 *
+	 * Insert COPIES the selection rather than inserting a blank, because building
+	 * track is almost always "another one like that" — and a default straight is
+	 * what you get only when there is nothing to copy. Remove is unconfirmed,
+	 * which is defensible only because undo landed first.
+	 */
+	void InsertSegment();
+	void RemoveSegment();
+
+	/**
 	 * WAITING FOR AN ANSWER ABOUT UNSAVED WORK.
 	 *
 	 * A state rather than a modal call, because the panels are drawn immediate-mode

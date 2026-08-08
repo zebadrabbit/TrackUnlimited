@@ -264,6 +264,8 @@ inline std::vector<FSettingEntry> SettingsSchema()
             // editor's undo is live in PIE and would step back through the LEVEL.
             {"key.undo",        "Undo",                 "J"},
             {"key.redo",        "Redo",                 "L"},
+            {"key.insert",      "Insert a segment",     "I"},
+            {"key.remove",      "Remove the segment",   "R"},
             {"key.dispatch",    "Dispatch",             "SpaceBar"},
             {"key.estop",       "Emergency stop",       "BackSpace"},
             {"key.reset",       "Reset E-stop",         "End"},
