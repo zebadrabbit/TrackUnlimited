@@ -1300,6 +1300,23 @@ private:
 	void DrawLeaveConfirm(class UCanvas* Canvas);
 	void ClickLeaveConfirm();
 
+	// ===================== THE DRAG QUESTION, ANSWERED WHERE IT IS ASKED =====================
+	//
+	// `FirstRun.h`'s answer to "why can't I drag the track" was written, reviewed,
+	// and shown to nobody. A help menu files it where only somebody who has already
+	// accepted the answer would look; the person who needs it is mid-gesture,
+	// dragging the viewport and getting nothing.
+	//
+	// So the trigger is the gesture: a LEFT-DRAG that started on no panel, in
+	// BUILD, past a twelve-pixel threshold. A click is not enough — clicking empty
+	// space is how you deselect, and a wall of text on every one would be the most
+	// annoying thing in the application.
+	FVector2D LeftPressPos = FVector2D::ZeroVector;
+	bool bLeftPressHitPanel = true;
+	double DragAnswerSeconds = 0.0;
+	void ReleasePrimary();
+	void DrawDragAnswer(class UCanvas* Canvas);
+
 	/**
 	 * THE SEGMENT EDITOR, AS A RUNTIME PANEL.
 	 *

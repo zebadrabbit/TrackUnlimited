@@ -1884,6 +1884,9 @@ void ATUCoasterRide::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 	// repository as that test would be poor form.
 	PlayerInputComponent->BindKey(EKeys::LeftMouseButton, IE_Pressed, this,
 		&ATUCoasterRide::ClickPrimary);
+	// The RELEASE, which is where a drag can be told from a click.
+	PlayerInputComponent->BindKey(EKeys::LeftMouseButton, IE_Released, this,
+		&ATUCoasterRide::ReleasePrimary);
 	// BUILD / OPERATE / RIDE. The mode decides the camera, the panels and whether
 	// edits are accepted at all — which is what makes it a mode rather than a
 	// label on a screen.
@@ -2566,6 +2569,60 @@ void ATUCoasterRide::DrawMainMenu(UCanvas* Canvas)
 		PanelDim);
 }
 
+void ATUCoasterRide::DrawDragAnswer(UCanvas* Canvas)
+{
+	if (!Canvas || !GEngine || DragAnswerSeconds <= 0.0)
+	{
+		return;
+	}
+
+	// GREEDY WRAP AT A COLUMN, because the answer is written as paragraphs to be
+	// READ and the canvas draws one line at a time. Not a general text layout
+	// engine — this is the only prose in the application, and the day there is a
+	// second one is the day it earns a helper.
+	const int32 Columns = 78;
+	TArray<FString> Lines;
+	FString Source(UTF8_TO_TCHAR(WhyCannotIDragTheTrack()));
+	Source.ReplaceInline(TEXT("\r"), TEXT(""));
+	TArray<FString> Paragraphs;
+	Source.ParseIntoArray(Paragraphs, TEXT("\n"), false);
+	for (const FString& P : Paragraphs)
+	{
+		if (P.IsEmpty()) { Lines.Add(FString()); continue; }
+		FString Line;
+		TArray<FString> Words;
+		P.ParseIntoArray(Words, TEXT(" "), true);
+		for (const FString& Word : Words)
+		{
+			if (!Line.IsEmpty() && Line.Len() + 1 + Word.Len() > Columns)
+			{
+				Lines.Add(Line);
+				Line.Empty();
+			}
+			if (!Line.IsEmpty()) { Line += TEXT(" "); }
+			Line += Word;
+		}
+		if (!Line.IsEmpty()) { Lines.Add(Line); }
+	}
+
+	const float Ox = 70.f;
+	const float RowH = 15.f;
+	float Y = 120.f;
+	PanelTile(Canvas, Ox - 18.f, Y - 16.f, 620.f, RowH * Lines.Num() + 62.f, PanelGround);
+	PanelLabel(Canvas, Ox, Y, TEXT("WHY CAN'T I DRAG THE TRACK?"), PanelCyan);
+	Y += 22.f;
+	for (const FString& L : Lines)
+	{
+		PanelLabel(Canvas, Ox, Y, *L, PanelText);
+		Y += RowH;
+	}
+	Y += 8.f;
+	// WHAT TO DO INSTEAD, not just why not. An explanation that ends without a
+	// next step is a refusal with paragraphs.
+	PanelLabel(Canvas, Ox, Y,
+		TEXT("[B] opens the segment list.  Click a number and type."), PanelAmber);
+}
+
 void ATUCoasterRide::DrawLeaveConfirm(UCanvas* Canvas)
 {
 	if (!Canvas || !GEngine || !bConfirmingMenu)
@@ -2650,6 +2707,18 @@ void ATUCoasterRide::StartFromTemplate(int32 Index)
 
 void ATUCoasterRide::ClickPrimary()
 {
+	// WHERE THE PRESS STARTED, so a RELEASE can tell a click from a drag. The
+	// difference is the whole trigger for the drag answer below: somebody asking
+	// "why can't I drag the track" asks it by trying, and that is the moment to
+	// answer rather than a paragraph in a menu they will never open.
+	if (APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr)
+	{
+		float Mx = 0.f, My = 0.f;
+		PC->GetMousePosition(Mx, My);
+		LeftPressPos = FVector2D(Mx, My);
+	}
+	bLeftPressHitPanel = true;   // assume a hit; the fall-through below says otherwise
+
 	// THE CONFIRM OWNS THE CLICK ABOVE EVERYTHING, because a question about losing
 	// work must not be dismissable by clicking past it into the thing underneath.
 	if (bConfirmingMenu) { ClickLeaveConfirm(); return; }
@@ -2659,11 +2728,56 @@ void ATUCoasterRide::ClickPrimary()
 	// in; a click that misses every one of its rows falls through to the
 	// diagnostics list, which is the other clickable thing on screen.
 	const int32 Before = SelectedSegment;
+	const int32 DiagBefore = SelectedSegment;
 	ClickSegmentEditor();
 	if (SelectedSegment == Before && FocusedField == EEditField::Count)
 	{
 		ClickDiagnostics();
+		// NOTHING ON SCREEN WANTED IT, so this press was in the viewport. Recorded
+		// rather than acted on: a click there is legitimately nothing, and only a
+		// DRAG is the question worth answering.
+		bLeftPressHitPanel = SelectedSegment != DiagBefore;
 	}
+}
+
+void ATUCoasterRide::ReleasePrimary()
+{
+	// ===================== THE QUESTION IS ASKED BY THE GESTURE =====================
+	//
+	// `WhyCannotIDragTheTrack()` has been written, reviewed and shown to nobody
+	// since the day it landed. Putting it in a help menu would file it where only
+	// somebody who already accepted the answer would look; showing it when
+	// somebody TRIES TO DRAG THE TRACK puts it exactly where the question is.
+	//
+	// A drag, not a click. A click in the viewport is legitimately nothing — it is
+	// how you deselect — and a wall of text every time somebody clicked empty
+	// space would be the most annoying feature in the application.
+	if (bLeftPressHitPanel || Session.Mode() != EAppMode::Build || !GetWorld())
+	{
+		return;
+	}
+	APlayerController* PC = GetWorld()->GetFirstPlayerController();
+	if (!PC)
+	{
+		return;
+	}
+	float Mx = 0.f, My = 0.f;
+	if (!PC->GetMousePosition(Mx, My))
+	{
+		return;
+	}
+	// Twelve pixels: past a hand tremor on a click, well short of a deliberate
+	// drag. The same threshold every drag-versus-click test in every toolkit uses,
+	// and it does not need to be tunable to be right.
+	if (FVector2D::Distance(FVector2D(Mx, My), LeftPressPos) < 12.0)
+	{
+		return;
+	}
+	// TIMED OUT RATHER THAN DISMISSED. It is an answer, not a dialog: nothing is
+	// blocked, nothing needs acknowledging, and somebody who has read it should not
+	// have to do anything to carry on.
+	DragAnswerSeconds = 14.0;
+	UE_LOG(LogTUEvents, Log, TEXT("viewport: answered the drag question"));
 }
 
 void ATUCoasterRide::ClickLeaveConfirm()
@@ -2962,6 +3076,23 @@ void ATUCoasterRide::DrawModeBanner(UCanvas* Canvas)
 
 	PanelTile(Canvas, 10.f, 6.f, 8.f + Line.Len() * 6.2f, 18.f, PanelGround);
 	PanelLabel(Canvas, 12.f, 8.f, Line, Ink);
+
+	// ===================== THE ONE-LINE VERSION, IN BUILD ONLY =====================
+	//
+	// `ViewportHint()` says what the view IS before anybody has to discover it by
+	// trying to drag. In Build only, because it is an answer about EDITING — in
+	// Operate and Ride the viewport is not pretending to be anything else, and a
+	// permanent line explaining a constraint that is not currently biting is the
+	// kind of chrome people stop seeing and then never see when it matters.
+	//
+	// It goes away once there is a selection: somebody who has clicked a segment
+	// has found the panel, and the hint has done its job.
+	if (Session.Mode() == EAppMode::Build && SelectedSegment < 0 && !bHideOverlays)
+	{
+		const FString Hint(UTF8_TO_TCHAR(ViewportHint()));
+		PanelTile(Canvas, 10.f, 28.f, 8.f + Hint.Len() * 6.2f, 16.f, PanelGround);
+		PanelLabel(Canvas, 12.f, 29.f, Hint, PanelDim);
+	}
 }
 
 void ATUCoasterRide::ClickDiagnostics()
@@ -4318,6 +4449,7 @@ void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/
 	// THE MENU IS NOT AN OVERLAY, so [F2] leaves it alone — hiding it would strand
 	// somebody on a screen whose only controls are the ones just hidden.
 	DrawMainMenu(Canvas);
+	DrawDragAnswer(Canvas);
 	// LAST, so it is on top of whatever it is asking about — and it rebuilds the
 	// row list, so a click while it is up can only hit its own three answers.
 	DrawLeaveConfirm(Canvas);
@@ -6592,6 +6724,14 @@ void ATUCoasterRide::ToggleOverlays()
 void ATUCoasterRide::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+
+	// WALL CLOCK, NOT THE SIM CLOCK. A paused ride still counts this down, because
+	// the person reading it is not paused -- and it sits above the early returns
+	// below for the same reason: it is not part of the ride.
+	if (DragAnswerSeconds > 0.0)
+	{
+		DragAnswerSeconds -= static_cast<double>(DeltaSeconds);
+	}
 
 	if (Trains.Num() == 0 || !Trains[0].IsValid())
 	{
