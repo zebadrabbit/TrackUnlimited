@@ -565,6 +565,123 @@ void TestTheCounterIsFORWARDONLYAndThisIsWhereItBreaks()
 
 }
 
+// ===================== TWO HEADS, AND DIRECTION FALLS OUT =====================
+
+namespace
+{
+
+// Four boundaries, each a PAIR 0.2 m apart. The gap is what carries the
+// direction, and it is small for the reason a real one is: occupancy lags the
+// crossing by however long the train takes to cover it.
+std::vector<double> PairedHeads()
+{
+    std::vector<double> At;
+    for (double B : {0.0, 150.0, 300.0, 450.0})
+    {
+        At.push_back(B);
+        At.push_back(B + 0.2);
+    }
+    return At;
+}
+
+std::vector<FBoundaryHeads> Pairs()
+{
+    return {{0, 1}, {2, 3}, {4, 5}, {6, 7}};
+}
+
+} // namespace
+
+void TestTwoHeadsCountBOTHDirections()
+{
+    FTrackSensors S(PairedHeads());
+    FDirectionalCounter C(S, Pairs());
+    C.Seed(0);
+
+    const double Half = 10.0;
+    auto At = [&](double Centre)
+    {
+        S.BeginScan();
+        S.Cover(Centre - Half, Centre + Half, false, 600.0);
+        S.EndScan();
+        C.Scan();
+    };
+
+    // ---- Forwards, in steps small enough that the two heads are never crossed
+    // in the same scan — which is the one thing that genuinely destroys the
+    // information, and the counter drops it rather than guessing.
+    for (double c = 100.0; c <= 200.0; c += 0.1) { At(c); }
+    std::printf("  two heads, forwards:  block 0 = %d, block 1 = %d\n",
+                C.TrainsIn(0), C.TrainsIn(1));
+    assert(C.TrainsIn(0) == 0 && C.TrainsIn(1) == 1);
+    assert(!C.IsInconsistent());
+
+    // ---- And back again over the same boundary. THE CASE THE SINGLE-HEAD
+    // COUNTER GETS WRONG: it leaves -1 and 2 here.
+    for (double c = 200.0; c >= 100.0; c -= 0.1) { At(c); }
+    std::printf("  two heads, backwards: block 0 = %d, block 1 = %d\n",
+                C.TrainsIn(0), C.TrainsIn(1));
+    assert(C.TrainsIn(0) == 1 && C.TrainsIn(1) == 0);
+    assert(!C.IsInconsistent());
+}
+
+// EVERY EVENT HAS AN EXACT OPPOSITE, which is the property that makes this safe
+// to run on a shuttle rather than merely correct on the two cases above. A train
+// that oscillates across a boundary must return to exactly its starting state,
+// or a reverse section slowly poisons the occupancy over a day's operation.
+void TestOscillatingAcrossABoundaryIsExactlyReversible()
+{
+    FTrackSensors S(PairedHeads());
+    FDirectionalCounter C(S, Pairs());
+    C.Seed(0);
+
+    const double Half = 10.0;
+    auto At = [&](double Centre)
+    {
+        S.BeginScan();
+        S.Cover(Centre - Half, Centre + Half, false, 600.0);
+        S.EndScan();
+        C.Scan();
+    };
+
+    for (int Lap = 0; Lap < 5; ++Lap)
+    {
+        for (double c = 100.0; c <= 200.0; c += 0.1) { At(c); }
+        for (double c = 200.0; c >= 100.0; c -= 0.1) { At(c); }
+        assert(!C.IsInconsistent());
+    }
+    std::printf("  five crossings each way: block 0 = %d, block 1 = %d (started 1, 0)\n",
+                C.TrainsIn(0), C.TrainsIn(1));
+    assert(C.TrainsIn(0) == 1 && C.TrainsIn(1) == 0);
+}
+
+// A DEAD HEAD MUST NOT INVENT A CROSSING. Half a pair is no direction at all,
+// and a counter that guessed would be worse than one that missed — it would
+// report occupancy the interlocking then trusts.
+void TestOneDeadHeadCountsNOTHINGRatherThanGuessing()
+{
+    FTrackSensors S(PairedHeads());
+    // The SECOND head of boundary 1, which is the one at 150 m that this train
+    // actually crosses. Killing boundary 0's head would leave the crossing under
+    // test fully instrumented and the assertion would pass for no reason.
+    S.Fail(3, FTrackSensors::ESensorFault::Dead);
+
+    FDirectionalCounter C(S, Pairs());
+    C.Seed(0);
+
+    const double Half = 10.0;
+    for (double c = 100.0; c <= 200.0; c += 0.1)
+    {
+        S.BeginScan();
+        S.Cover(c - Half, c + Half, false, 600.0);
+        S.EndScan();
+        C.Scan();
+    }
+    std::printf("  one head dead: block 0 = %d, block 1 = %d (no phantom crossing)\n",
+                C.TrainsIn(0), C.TrainsIn(1));
+    assert(C.TrainsIn(1) == 0);
+    assert(!C.IsInconsistent());
+}
+
 int main()
 {
     TestASensorIsAPointAndABoolean();
@@ -583,6 +700,9 @@ int main()
     TestATrainThatSTOPSBetweenTheSwitchesDisarmsTheTrap();
     TestWhatATrapIsFOR();
     TestTheCounterIsFORWARDONLYAndThisIsWhereItBreaks();
+    TestTwoHeadsCountBOTHDirections();
+    TestOscillatingAcrossABoundaryIsExactlyReversible();
+    TestOneDeadHeadCountsNOTHINGRatherThanGuessing();
 
     std::printf("test_tracksensors: all assertions passed\n");
     return 0;

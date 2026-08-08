@@ -478,6 +478,161 @@ private:
     long long ScanCount = 0;
 };
 
+// ===================== A BOUNDARY THAT KNOWS WHICH WAY =====================
+//
+// `FBlockCounter` is right forwards and wrong backwards, and it is wrong for a
+// reason no rule can patch: a rising edge means "metal arrived over me" and
+// nothing more. Reading it as "a nose entered the block ahead" is true only
+// while trains go one way. `test_tracksensors.cpp` measures exactly what that
+// costs — a boundary crossed in reverse leaves one block at -1 and the other at
+// 2, where the truth is 1 and 0.
+//
+// THE FIX IS A SECOND HEAD, NOT A CLEVERER RULE, and that is how real axle
+// counters do it: two heads a surveyed gap apart, and the ORDER of their edges
+// says which way the metal went. Same shape as FSpeedTraps — two switches and a
+// distance read once at commissioning — because it is the same idea used for a
+// different question.
+//
+// THE RULE, AND IT IS SYMMETRIC:
+//
+//   rise in order (First, Second)  -> something entered the block AFTER  the boundary
+//   rise in order (Second, First)  -> something entered the block BEFORE the boundary
+//   fall in order (First, Second)  -> something fully left  the block BEFORE the boundary
+//   fall in order (Second, First)  -> something fully left  the block AFTER  the boundary
+//
+// Forwards that is +1 after and -1 before; in reverse it is +1 before and -1
+// after. Neither direction is a special case, which is the property to keep: a
+// train that rolls back and comes forward again returns to exactly the state it
+// started in, because every event has an exact opposite.
+//
+// LATENCY IS ONE GAP, and it is real rather than hidden. The block is credited
+// when the SECOND head rises, because that is the first moment direction is
+// known — so occupancy lags the true crossing by however long the train takes to
+// cover the gap. On real hardware the heads are centimetres apart and it does not
+// matter; author them metres apart and it will.
+struct FBoundaryHeads
+{
+    std::size_t First = 0;    // the head a forward-travelling train reaches first
+    std::size_t Second = 0;
+};
+
+class FDirectionalCounter
+{
+public:
+    // One entry per block, in travel order. Boundary i sits at the start of
+    // block i, so its "after" is block i and its "before" is block i-1 — the
+    // same convention FBlockCounter uses, so the two are directly comparable.
+    FDirectionalCounter(const FTrackSensors& InSensors,
+                        const std::vector<FBoundaryHeads>& InBoundaries)
+        : Sensors(InSensors)
+        , Boundaries(InBoundaries)
+        , Count(InBoundaries.size(), 0)
+        , Pending(InBoundaries.size())
+    {
+        for (std::size_t i = 0; i < Boundaries.size(); ++i)
+        {
+            Pending[i].SeenFirstRising = Read(Boundaries[i].First).Rising;
+            Pending[i].SeenSecondRising = Read(Boundaries[i].Second).Rising;
+            Pending[i].SeenFirstFalling = Read(Boundaries[i].First).Falling;
+            Pending[i].SeenSecondFalling = Read(Boundaries[i].Second).Falling;
+        }
+    }
+
+    std::size_t NumBlocks() const { return Count.size(); }
+    void Seed(std::size_t Block) { if (Block < Count.size()) { ++Count[Block]; } }
+
+    void Scan()
+    {
+        const std::size_t N = Count.size();
+        for (std::size_t i = 0; i < N; ++i)
+        {
+            FPending& P = Pending[i];
+            const FSensorReading& A = Read(Boundaries[i].First);
+            const FSensorReading& B = Read(Boundaries[i].Second);
+
+            const bool bARose = A.Rising > P.SeenFirstRising;
+            const bool bBRose = B.Rising > P.SeenSecondRising;
+            const bool bAFell = A.Falling > P.SeenFirstFalling;
+            const bool bBFell = B.Falling > P.SeenSecondFalling;
+            P.SeenFirstRising = A.Rising;
+            P.SeenSecondRising = B.Rising;
+            P.SeenFirstFalling = A.Falling;
+            P.SeenSecondFalling = B.Falling;
+
+            // BOTH IN ONE SCAN IS NOT A DIRECTION. The heads are a surveyed gap
+            // apart, so a train crossing both between two scans is moving faster
+            // than the gap per scan — and there is genuinely no information about
+            // order left to read. Dropped rather than guessed, and the same
+            // failure the single-scan sensor limit already documents.
+            if (bARose && bBRose) { P.RisingFirst = ENone; }
+            else if (bARose) { Apply(i, P.RisingFirst, EFirst, /*bRising*/ true); }
+            else if (bBRose) { Apply(i, P.RisingFirst, ESecond, /*bRising*/ true); }
+
+            if (bAFell && bBFell) { P.FallingFirst = ENone; }
+            else if (bAFell) { Apply(i, P.FallingFirst, EFirst, /*bRising*/ false); }
+            else if (bBFell) { Apply(i, P.FallingFirst, ESecond, /*bRising*/ false); }
+        }
+    }
+
+    int TrainsIn(std::size_t Block) const { return Count[Block]; }
+    bool IsOccupied(std::size_t Block) const { return Count[Block] > 0; }
+    bool IsOverOccupied(std::size_t Block) const { return Count[Block] > 1; }
+    bool IsInconsistent() const
+    {
+        for (int C : Count) { if (C < 0) { return true; } }
+        return false;
+    }
+
+private:
+    enum EWhich { ENone, EFirst, ESecond };
+
+    struct FPending
+    {
+        int SeenFirstRising = 0;
+        int SeenSecondRising = 0;
+        int SeenFirstFalling = 0;
+        int SeenSecondFalling = 0;
+        EWhich RisingFirst = ENone;
+        EWhich FallingFirst = ENone;
+    };
+
+    const FSensorReading& Read(std::size_t S) const { return Sensors.Read(S); }
+
+    // One head changed. If it is the first of a pair, remember it; if it
+    // completes one, the order says the direction and the pair is consumed.
+    void Apply(std::size_t Boundary, EWhich& Latch, EWhich Now, bool bRising)
+    {
+        if (Latch == ENone) { Latch = Now; return; }
+        if (Latch == Now)
+        {
+            // The same head twice with no partner. Something bounced, or the
+            // other head is dead. Re-latch rather than invent a crossing:
+            // a counter that guesses is worse than one that misses.
+            return;
+        }
+        const bool bForward = (Latch == EFirst);
+        Latch = ENone;
+
+        const std::size_t N = Count.size();
+        const std::size_t After = Boundary;
+        const std::size_t Before = (Boundary + N - 1) % N;
+
+        if (bRising)
+        {
+            ++Count[bForward ? After : Before];
+        }
+        else
+        {
+            --Count[bForward ? Before : After];
+        }
+    }
+
+    const FTrackSensors& Sensors;
+    std::vector<FBoundaryHeads> Boundaries;
+    std::vector<int> Count;
+    std::vector<FPending> Pending;
+};
+
 // How much track it takes to stop from this speed at this deceleration. The
 // arithmetic the build-time check already does against every holding device; the
 // only new thing a trap brings is a MEASURED speed instead of a predicted one.
