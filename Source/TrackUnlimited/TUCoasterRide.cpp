@@ -1842,11 +1842,23 @@ void ATUCoasterRide::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 	PlayerInputComponent->BindKey(EKeys::Tab, IE_Pressed, this,
 		&ATUCoasterRide::CycleAppMode);
 
-	// [F2] — every overlay off, for a screenshot. Not routed through
-	// IsTypingInField: F2 is not a character, so it cannot be part of a number
-	// somebody is entering, and a function key that stopped working inside the
-	// segment editor would be a worse surprise than one that always works.
-	PlayerInputComponent->BindKey(EKeys::F2, IE_Pressed, this,
+	// ===================== NO FUNCTION KEYS. THE EDITOR OWNS THEM. =====================
+	//
+	// [U] — every overlay off, for a screenshot. It was F2, and F2 is the
+	// editor's Unlit view mode; the settings key was F1, which is Wireframe.
+	// Both fired BOTH bindings in PIE, so the overlay toggled and the world
+	// changed rendering mode at the same time — which reads as the UI being
+	// broken rather than as a key collision.
+	//
+	// The rule is not "those two were unlucky": UE binds F1-F8 to viewport view
+	// modes, F8 to eject, F11 to immersive. In PIE the editor's bindings are live
+	// alongside ours, so a function key is never ours to take. Every binding in
+	// this file is now a letter, a bracket or a named key.
+	//
+	// [U] for UI, and it is not routed through IsTypingInField for the same
+	// reason the others are not: a letter bound here is not part of a number the
+	// segment editor accepts.
+	PlayerInputComponent->BindKey(EKeys::U, IE_Pressed, this,
 		&ATUCoasterRide::ToggleOverlays);
 
 	// [O] — options, in the frame's content slot. A key rather than a button so
@@ -5490,7 +5502,7 @@ static void SetNearPlaneMetres(double Metres)
 	}
 }
 
-// [F2] — EVERY OVERLAY OFF, AND BACK EXACTLY AS IT WAS.
+// [U] — EVERY OVERLAY OFF, AND BACK EXACTLY AS IT WAS.
 //
 // A MASTER GATE RATHER THAN A SNAPSHOT. Saving the eight toggles, clearing them
 // and putting them back is the obvious version and it is wrong: anything that
@@ -5548,7 +5560,7 @@ void ATUCoasterRide::ToggleOverlays()
 	// SAID ONCE, IN THE LOG, because the banner that would normally carry a hint
 	// is one of the things just hidden — and a screenshot mode that printed a
 	// caption over the screenshot would defeat itself.
-	UE_LOG(LogTUEvents, Log, TEXT("overlays %s  [F2]"),
+	UE_LOG(LogTUEvents, Log, TEXT("overlays %s  [U]"),
 		bHideOverlays ? TEXT("hidden") : TEXT("shown"));
 }
 

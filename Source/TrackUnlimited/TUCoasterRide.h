@@ -1424,7 +1424,7 @@ private:
 	void ToggleProfileGraph() { bShowProfileGraph = !bShowProfileGraph; bHideOverlays = false; }
 
 	/**
-	 * [F2] — EVERY OVERLAY OFF, AND BACK EXACTLY AS IT WAS.
+	 * [U] — EVERY OVERLAY OFF, AND BACK EXACTLY AS IT WAS.
 	 *
 	 * A MASTER GATE, NOT A SAVE-AND-RESTORE. The obvious version snapshots the
 	 * eight toggles, clears them, and puts them back — and it is wrong the moment
@@ -1443,7 +1443,7 @@ private:
 	bool bHideOverlays = false;
 	void ToggleOverlays();
 
-	/** [F1] — the settings screen, hosted by the frame. */
+	/** [O] — the settings screen, hosted by the frame. */
 	void ToggleSettings();
 
 	/** [F] — frame the whole track. The thing you press constantly when a
