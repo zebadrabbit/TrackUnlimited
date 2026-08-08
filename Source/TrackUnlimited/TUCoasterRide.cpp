@@ -810,6 +810,8 @@ void ATUCoasterRide::RebuildFromSegments()
 		ETUSegmentZone Open = ETUSegmentZone::None;
 		double OpenS = 0.0;
 		float OpenSpeed = 0.f;
+		float OpenAccel = 6.f;
+		float OpenDecel = 6.f;
 		double AccS = 0.0;
 
 		// Block boundaries fall out of this SAME walk, because they are the same
@@ -836,17 +838,25 @@ void ATUCoasterRide::RebuildFromSegments()
 		// in the same order as ZoneReleaseSpeed, so the index is the zone's own.
 		std::vector<double> StopMarkS;
 
-		auto Close = [this, &Zones, &Open, &OpenS, &OpenSpeed, &StopMarkS](double EndS)
+		auto Close = [this, &Zones, &Open, &OpenS, &OpenSpeed, &OpenAccel, &OpenDecel,
+			&StopMarkS](double EndS)
 		{
 			if (Open == ETUSegmentZone::None || !(EndS > OpenS))
 			{
 				return;
 			}
-			// ponytail: grip fixed at 6 m/s^2 of tractive authority for every
-			// zone. It is the one number a real VFD panel would expose per
-			// drive; give it a field when something needs a weak chain or a
-			// hard launch, not before.
-			const double Grip = 6.0;
+			// AUTHORED NOW, not one 6.0 for every device on every ride. That was
+			// the same defect as the merged zone speeds before it: a number
+			// nobody typed standing in for one they should have. NL2 exposes
+			// exactly these two per device and it is right to — a chain hauling
+			// at 0.61 g is nothing like a real chain.
+			//
+			// The kind still decides WHICH authority exists; these give the
+			// magnitude of the ones it has.
+			const double Accel = FMath::IsFinite(OpenAccel) && OpenAccel > 0.f
+				? static_cast<double>(OpenAccel) : 6.0;
+			const double Decel = FMath::IsFinite(OpenDecel) && OpenDecel > 0.f
+				? static_cast<double>(OpenDecel) : 6.0;
 
 			// Sanitised HERE rather than trusted, because AddZone REFUSES a
 			// malformed zone instead of storing it — and a refusal would leave the
@@ -861,13 +871,19 @@ void ATUCoasterRide::RebuildFromSegments()
 			switch (Open)
 			{
 			case ETUSegmentZone::Lift:
-				Zones.Add(MakeLift(OpenS, EndS, Speed, Grip));
+				Zones.Add(FTrackZone{OpenS, EndS, Speed, Accel, Decel});
 				break;
 			case ETUSegmentZone::Launch:
-				Zones.Add(MakeLaunch(OpenS, EndS, Speed, Grip));
+				// NO BRAKING AUTHORITY, whatever was typed. That is what the
+				// enumerator MEANS, and a number must not grant an authority the
+				// device does not have -- a launch that could stop a train is a
+				// different machine, and the dispatcher would park trains on it.
+				Zones.Add(FTrackZone{OpenS, EndS, Speed, Accel, 0.0});
 				break;
 			case ETUSegmentZone::Brake:
-				Zones.Add(MakeBrake(OpenS, EndS, Speed, Grip));
+				// And no tractive authority, for the same reason: a trim cannot
+				// start a train, which is the whole distinction from a block brake.
+				Zones.Add(FTrackZone{OpenS, EndS, Speed, 0.0, Decel});
 				break;
 			case ETUSegmentZone::BlockBrake:
 			case ETUSegmentZone::Station:
@@ -878,7 +894,7 @@ void ATUCoasterRide::RebuildFromSegments()
 				// the Details panel, not for the physics — what makes them hold a
 				// train is having BOTH authorities, which is exactly what
 				// FTrain::FindHoldZoneAt looks for.
-				Zones.Add(MakeLift(OpenS, EndS, Speed, Grip));
+				Zones.Add(FTrackZone{OpenS, EndS, Speed, Accel, Decel});
 				break;
 			default:
 				return;
@@ -973,8 +989,15 @@ void ATUCoasterRide::RebuildFromSegments()
 			//
 			// No preset changes: every run in all four is a single speed already.
 			const bool bKindChanged = Segments[i].Zone != Open;
+			// AND ITS RATES, by exactly the argument that added speed. A brake
+			// biting at 8 m/s^2 and one at 2 are two different machines, and
+			// merging them discards a typed number to target whichever was
+			// authored first -- which this project treats as a defect everywhere
+			// else it appears.
 			const bool bSpeedChanged = Open != ETUSegmentZone::None
-				&& !FMath::IsNearlyEqual(Segments[i].ZoneSpeed, OpenSpeed);
+				&& (!FMath::IsNearlyEqual(Segments[i].ZoneSpeed, OpenSpeed)
+					|| !FMath::IsNearlyEqual(Segments[i].ZoneAccel, OpenAccel)
+					|| !FMath::IsNearlyEqual(Segments[i].ZoneDecel, OpenDecel));
 			// And the author saying so outright, for devices that are identical in
 			// every respect the walk can see and are still separate machines —
 			// three loading positions on one platform, a queue of brake sections.
@@ -987,6 +1010,8 @@ void ATUCoasterRide::RebuildFromSegments()
 				Open = Segments[i].Zone;
 				OpenS = AccS;
 				OpenSpeed = Segments[i].ZoneSpeed;
+				OpenAccel = Segments[i].ZoneAccel;
+				OpenDecel = Segments[i].ZoneDecel;
 			}
 			AccS += SegLength;
 		}

@@ -412,6 +412,32 @@ struct FTUTrackSegment
 	 * matters the day a hill is too tall, and then it is the difference between a
 	 * train held on the lift and a train loose on the track going the wrong way.
 	 */
+	/**
+	 * WHAT THIS DEVICE CAN PUSH AND PULL WITH, m/s². Authored, because it is a
+	 * property of the hardware somebody specified.
+	 *
+	 * These were one hardcoded 6.0 for every device on every ride — the same
+	 * defect as the merged zone speeds before them, a number nobody typed
+	 * standing in for one they should have. A chain hauling at 0.61 g is nothing
+	 * like a real chain; a friction brake at 0.61 g is weaker than the 0.8 g a
+	 * real one is specified at.
+	 *
+	 * WHICH ONE APPLIES IS STILL THE KIND'S DECISION. A trim has no tractive
+	 * authority whatever is typed here and a launch has no braking authority —
+	 * those are what the enumerators MEAN, and a number cannot grant an authority
+	 * the device does not have. This sets the magnitude of the ones it does.
+	 *
+	 * 6.0 is the default on both, so every measured figure in the docs is
+	 * unmoved until somebody types something.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Zone", meta = (ClampMin = "0.1", UIMax = "15.0",
+		EditCondition = "Zone != ETUSegmentZone::None", EditConditionHides))
+	float ZoneAccel = 6.f;
+
+	UPROPERTY(EditAnywhere, Category = "Zone", meta = (ClampMin = "0.1", UIMax = "15.0",
+		EditCondition = "Zone != ETUSegmentZone::None", EditConditionHides))
+	float ZoneDecel = 6.f;
+
 	UPROPERTY(EditAnywhere, Category = "Zone")
 	bool bAntiRollback = false;
 
