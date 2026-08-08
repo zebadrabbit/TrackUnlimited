@@ -1,8 +1,9 @@
 # The prototypes
 
-Five standalone prototypes under `Prototypes/`, all plain C++17 with **no engine dependency**. They
-build and run without an Unreal install, which makes them the lowest-friction way into this codebase —
-and keeps the maths honest by preventing it from quietly depending on engine behaviour.
+Seven standalone prototypes under `Prototypes/`, all plain C++17 with **no engine dependency**, and 33
+assert suites between them. They build and run without an Unreal install, which makes them the
+lowest-friction way into this codebase — and keeps the maths honest by preventing it from quietly
+depending on engine behaviour.
 
 They are not throwaways. `TrackSpline.h`, `TrainPhysics.h` and `BlockSignal.h` are the **canonical
 designs**, compiled *into* the engine by `TrackUnlimited.Build.cs` rather than copied — so the
@@ -60,7 +61,13 @@ produces sensible felt G; the round trip through the save format is exact.
 force, so a frictionless circuit conserves energy at any timestep — a deliberately bad 1/30 s tick and
 a fine 1/300 s one agree on final speed to 1e-6 around a full loop, where a force-integrating model
 drifts. Rolling resistance follows the actual normal load; air
-drag is lumped; one zone type covers lift, launch, brake and station.
+drag is lumped; one zone type covers lift, launch, brake and station — and a zone now carries **two
+devices**, because a real block brake is a friction pad that can only remove energy and drive tyres that
+push and hold. The pad is a **ceiling**, never a setpoint: a train already under its limit is untouched,
+which is the guarantee that makes it a brake and the reason a trim cannot start a train. Asserted with a
+hostile value — a bare pad whose "limit" is 40 m/s holds a 10 m/s train at exactly 10.000000, where a
+setpoint would have hauled it up. Negative means *no pad*, which is every zone built before it existed,
+asserted bit-identical over 900 steps.
 
 | File | What it holds |
 |---|---|
@@ -163,6 +170,7 @@ tests. See [`SIGNALLING.md`](SIGNALLING.md) for what the states mean and why the
 | `TrackSensors.h` | The sensors a PLC actually reads, and a train counter that derives occupancy from their trips alone |
 | `TrackDrives.h` | The motors it commands, on the output side: ramp, feedback, torque, and a fault that stays quiet on a healthy ride |
 | `StationProcess.h` | What has to happen at a platform before a train may leave it. One position, gated by contacts rather than a clock |
+| `DeviceAudit.h` | What a layout's devices will actually DO, judged against the ride it produces — with the numbers in the sentence |
 | `PlcUnit.h` | The controller as a MACHINE: key switch, watchdog, program identity, power. The standard PLC, not the safety chain |
 | `Cia402.h` | The drive state machine, as specified. Eight states, one of which produces torque |
 | `SignalWatch.h` | Change detection over named channels — edge, not level, with a seeding rule |
@@ -252,6 +260,36 @@ reports a negative count separately from a collision, because the fix is differe
 rise, no fall, no trace. Real hardware latches the switch so a brief trip survives until the controller
 reads it, and that latch is the fix if it ever matters, not a faster scan.
 
+**And one measured boundary: the counter is FORWARD-ONLY, and it fails safe.** A 20 m train crossing a
+boundary forwards is right at every step — block 0, straddling both, block 1. Reverse it over the same
+boundary and it leaves `block 0 = −1, block 1 = 2` where the truth is 1 and 0, because a rising edge
+means *"metal arrived over me"* and reading it as *"a nose entered the block ahead"* is only true while
+trains go one way. The saving grace is that −1 is what the counter already calls a **lie** and 2 is the
+collision condition — both E-stop conditions the ride acts on — so a reversing train stops the ride
+loudly rather than running on an interlocking that quietly believes the wrong thing.
+
+**`FDirectionalCounter` is the answer, and it is a second head rather than a cleverer rule.** Two heads
+a surveyed gap apart, and the *order* of their edges says which way the metal went — the same idiom
+`FSpeedTraps` already uses, asked of a different question. The rule is symmetric:
+
+| edge order | meaning |
+|---|---|
+| rise (First, Second) | entered the block **after** the boundary |
+| rise (Second, First) | entered the block **before** it |
+| fall (First, Second) | fully left the block **before** it |
+| fall (Second, First) | fully left the block **after** it |
+
+Neither direction is a special case, so every event has an exact opposite — asserted by oscillating a
+train across a boundary five times and requiring the counts to land back exactly where they started.
+Without that property a reverse section poisons the occupancy slowly over a day's operation. A **dead
+head counts nothing** rather than guessing, because half a pair carries no direction and a counter that
+invented one would be worse than one that missed. Both heads crossed in a single scan is **dropped**,
+not guessed: there is no order left to read. Latency is one gap, since the block is credited when the
+*second* head rises — the first moment direction is known.
+
+Nothing consumes it yet; `FBlockCounter` is untouched and still passes its three-lap agreement test.
+See [`DIRECTION_AND_ROUTES.md`](DIRECTION_AND_ROUTES.md).
+
 **The first switch actually wired in is the stop mark.** One per zone, at
 `deviceEnd − HoldNoseClearanceM`, and it turns the dispatcher's parking rule from arithmetic into
 geometry: *truck forward until the mark trips.* `ServeHolds` used to compute
@@ -270,6 +308,42 @@ first rather than against a track the first has already moved along.
 built and proven equivalent, so the switch-over has a net to fall into, but it has not happened. See
 [`SIGNALLING.md#what-the-system-actually-knows`](SIGNALLING.md#what-the-system-actually-knows) for the
 full ledger of what still cheats.
+
+### `DeviceAudit.h` — what the devices will actually do
+
+`TrackValidate.h` reads the *authored* values and says whether they are self-consistent: a negative
+radius, a clothoid that does not meet its neighbour. It can do that with the numbers alone. **Nothing
+here can be answered that way.** Whether a brake is long enough depends on the train's length; whether
+it can stop what arrives depends on the speed at that point, which depends on every metre of track
+before it. Those are properties of the *ride* rather than the segment, so they can only be checked once
+the profile exists — a separate pass, not more rules in the validator.
+
+**The point is the sentence, not the detection.**
+
+> *block brake at 400 m: a train arrives at 30.4 m/s and needs 154 m to stop at 3.0 m/s², but only
+> 129 m is usable. It leaves the block at 12.3 m/s. Lengthen it by 25 m, brake harder, or slow the
+> train upstream.*
+
+"Too short" is a rule somebody has to go and look up and then work out whether they care about. That
+is the failure — and it happens to say what to change and by how much, without choosing which of the
+three answers is right. Report, never repair, with enough detail to be worth reporting.
+
+Four checks: a device shorter than its train (with *where the stop mark lands*), one that cannot stop
+what arrives (with *the speed it leaves at*), a trim used as a block boundary, and a launch used as
+one. **It reads each device's own deceleration**, not a global figure — a single number for every
+brake on a ride is a second source of truth and disagrees with the physics in whichever direction the
+guess was wrong. On a section with a friction pad it judges with the harder of the two devices.
+
+**Proves:** each check fires on the right thing *and stays silent otherwise*, which is the half that
+matters. A healthy brake reports nothing — the assertion that stops all the others from firing
+constantly while every test still passes. A trim that is **not** a block boundary reports nothing,
+because trimming is what a trim is for and a checker that complained about every trim on every ride
+would be switched off within a day. The exit speed is asserted against a hand-computed value, since a
+number this pass *invents* is the one somebody will act on.
+
+**Not here:** capacity and deadlock. "Is there still a holding block between these two trains" is a
+property of the block *graph* and the dispatch policy, and it wants the interlocking's own walk rather
+than a second one that could disagree with it.
 
 ### `TrackDrives.h` — the output side, and what a motor can disagree about
 

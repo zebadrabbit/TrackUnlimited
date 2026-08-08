@@ -59,6 +59,19 @@ limit switches do the same job less commonly. Two kinds of switch exist in the m
 - **Stop marks**, one per zone, at `deviceEnd − HoldNoseClearanceM` — see
   [holding a train](#holding-a-train-and-where-you-are-allowed-to).
 
+**A single head cannot tell you which way.** A rising edge means *"metal arrived over me"*, and the
+counter reads it as *"a nose entered the block ahead"* — true only while trains go one way. Measured:
+reverse a 20 m train over a boundary and it leaves `block 0 = −1, block 1 = 2` where the truth is 1 and
+0. That fails **safe** — −1 is what the counter already calls a lie and 2 is the collision condition,
+both E-stop conditions — so a reversing train stops the ride loudly rather than running on an
+interlocking that quietly believes the wrong thing.
+
+`FDirectionalCounter` is the answer, and it is a **second head rather than a cleverer rule**: two heads
+a surveyed gap apart, and the *order* of their edges gives the direction, exactly as a real axle counter
+does and exactly the idiom the speed trap already uses. A dead head counts nothing rather than guessing;
+both heads inside one scan is dropped, because there is no order left to read. Built and tested, nothing
+consumes it yet — see [`DIRECTION_AND_ROUTES.md`](DIRECTION_AND_ROUTES.md).
+
 **`FBlockCounter` derives occupancy from trips alone.** Given a sensor at each block boundary,
 
 > trains in block *i* = (times sensor *i* was **entered**) − (times sensor *i+1* was **fully cleared**)
@@ -239,6 +252,27 @@ would need 66.2 m to stop it inside a 45 m block, so it is authored as a trim an
 authoring it as a block brake would build a device that closes and is then run straight through, which
 is worse than a trim because it *looks* like an interlock. The three pre-station devices pass the same
 test with room to spare (4.8, 1.5 and 0.9 m needed) and are the ones that hold.
+
+**And the editor now says so, with the numbers.** `DeviceAudit.h` runs on every rebuild and puts its
+findings in the diagnostics panel — a device shorter than its train, one that cannot stop what arrives,
+a trim used as a block boundary, a launch used as one. The point is the *sentence* rather than the
+detection:
+
+> *block brake at 400 m: a train arrives at 30.4 m/s and needs 154 m to stop at 3.0 m/s², but only
+> 129 m is usable. It leaves the block at 12.3 m/s. Lengthen it by 25 m, brake harder, or slow the
+> train upstream.*
+
+"Too short" is a rule somebody has to go and look up and then decide whether they care about. The
+second version *is* the failure, and it happens to say what to change and by how much — without
+choosing which of the three answers is right, because that is a design decision with three defensible
+outcomes and a tool that picked one would be choosing on the author's behalf.
+
+It could not have been a rule in `TrackValidate`, and that is structural rather than an omission: the
+validator reads *authored* values and can judge them with the numbers alone. Whether a brake is long
+enough depends on the train's length, and whether it can stop what arrives depends on the speed there,
+which depends on every metre of track before it. Properties of the **ride**, not the segment — so they
+only exist once the profile does. It reads each device's own deceleration rather than a global figure,
+and on a section with a pad it judges with the harder of the two devices.
 
 **A run ends where the device changes, and the device is its kind *and* its speed.** Kind alone was the
 original rule, and it meant a brake run at 6 m/s followed immediately by one at 2 m/s became a single
@@ -430,6 +464,33 @@ conflating them makes a layout look like it should carry far more trains than it
 | **Block brake** | Interlocking. Stop a train, hold it, release it on a permissive. | **Yes** — this is the only one that does |
 | **Evacuation zone** | Getting *riders off*. Needs walkway, access, egress route — not just a way to stop. | No |
 | **Safety catch** | Rollback, or a defect. Passive, and fails closed. | No |
+
+### And a block brake is itself two machines
+
+A friction or magnetic **pad** that can only ever remove energy, and drive **tyres** that push and
+hold. Separate hardware, specified separately, and either can fail without the other — which is why
+NL2 exposes them as two devices with their own speeds and rates, and why this model now does too.
+
+The distinction that carries it is **a ceiling versus a setpoint**. The tyres are a setpoint, driven
+toward from either side. The pad is a ceiling: a train already under its limit is untouched, so it can
+never add energy however it is authored — the guarantee lives in a `std::min(0.0, …)` rather than in a
+comment asking callers to pass sensible numbers. It is also, retroactively, *why* a trim cannot start a
+train. A ceiling can only reduce.
+
+Collapsed into one number, this page's own description of holding a train — *"commanding a crawl speed
+says both stages in one number"* — gets the sequence right and cannot express an ordinary
+specification: a pad biting at 8 m/s² feeding tyres that convey at 0.5. Whichever rate is chosen is
+wrong for the other machine.
+
+**The pad tracks the same command rather than taking a second one.** A block brake is commanded to a
+*speed*; the pad and the tyres are two ways of reaching it. Above the commanded speed the pad removes
+the energy at whatever it was specified at; below it the tyres push. So the four-state sequence — bite,
+stop, release, convey — falls out of one number instead of needing a state machine, because *release*
+is simply the train no longer being above the limit. The PLC's authority stays what it always was:
+write a command, and how the hardware gets there is the hardware's business.
+
+A **trim already is a pad** and does not get a second one — its whole definition is a ceiling with no
+tractive authority, and giving it another would be one device braking at the sum of its own two rates.
 
 A large ride can have on the order of **25 evacuation zones** and a handful of catch brakes while
 running far fewer trains than that, because those counts answer *"can everyone get off safely"* and

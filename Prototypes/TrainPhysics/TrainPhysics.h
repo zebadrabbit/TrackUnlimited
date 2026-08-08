@@ -468,7 +468,22 @@ public:
     /** Metres, nose to tail. Zero for a point mass. */
     double GetLength() const { return Config.TrainLength; }
 
-    /** Centre of the train. Front and rear are half a length either side. */
+    /**
+     * Centre of the train. Front and rear are half a length either side.
+     *
+     * "FRONT" MEANS THE +S END, NOT THE LEADING EDGE, and the names read as
+     * though they promise otherwise. On a train running backwards the leading
+     * edge is GetRearS().
+     *
+     * Nothing above is currently wrong because of it: every consumer takes the
+     * PAIR and treats it as a span — FTrackSensors::Cover is a symmetric
+     * interval test and FRideSignals::Update is a range diff, both deliberately.
+     * So the trap is not a bug, it is the next person writing
+     * `if (Train.GetFrontS() > Mark)` and being right for a year.
+     *
+     * If a leading-edge rule is ever genuinely needed, it wants asking for by
+     * that name rather than inferring here — see Docs/DIRECTION_AND_ROUTES.md.
+     */
     double GetDistance() const { return DistanceAlong; }
     double GetFrontS() const { return ClampS(DistanceAlong + Config.TrainLength * 0.5); }
     double GetRearS() const { return ClampS(DistanceAlong - Config.TrainLength * 0.5); }
