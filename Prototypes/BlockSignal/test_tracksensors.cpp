@@ -493,6 +493,78 @@ void TestWhatATrapIsFOR()
 
 } // namespace
 
+// ===================== WHERE THE COUNTER STOPS BEING TRUE =====================
+//
+// `SIGNALLING.md` and `CLAUDE.md` both say the counter is proven equal to
+// perfect knowledge over three laps, and it is — FORWARDS. This measures the
+// other direction rather than assuming it, because "we think it is forward-only"
+// and "here is the metre at which it goes wrong" are different kinds of claim
+// and only one of them can be checked later.
+//
+// It is a LATENT limit, not a live defect: rollback is off by default and the
+// block layer has never been given a reversing train. It becomes live the day
+// FTrainConfig::bAllowRollback is turned on for a layout with sensors.
+void TestTheCounterIsFORWARDONLYAndThisIsWhereItBreaks()
+{
+    FTrackSensors S(Boundaries());
+    FBlockCounter C(S);
+
+    // Train of 20 m, seeded honestly in block 0 by the operator's sweep.
+    C.Seed(0);
+    const double Half = 10.0;
+
+    auto At = [&](double Centre) { Scan(S, Centre - Half, Centre + Half); C.Scan(); };
+
+    // ---- Forwards over the boundary at 150 m: block 0 empties, block 1 fills.
+    At(100.0);
+    assert(C.TrainsIn(0) == 1 && C.TrainsIn(1) == 0);
+    At(155.0);                       // nose past 150, tail still short of it
+    assert(C.TrainsIn(0) == 1 && C.TrainsIn(1) == 1);   // straddling: holds both
+    At(200.0);                       // fully into block 1
+    assert(C.TrainsIn(0) == 0 && C.TrainsIn(1) == 1);
+    std::printf("  forwards over a boundary: 0 -> straddle -> 1, correct\n");
+
+    // ---- And now backwards over the same boundary. The train really is
+    // returning to block 0, and the counter says something else.
+    At(155.0);
+    At(100.0);
+
+    const int InZero = C.TrainsIn(0);
+    const int InOne = C.TrainsIn(1);
+    std::printf("  backwards over the same boundary: block 0 = %d, block 1 = %d"
+                " (truth is 1 and 0)\n", InZero, InOne);
+
+    // A rising edge means "metal arrived over me" and nothing more. The counter
+    // reads it as "a nose entered the block ahead", which is true only while
+    // trains go one way — reversing, the same edge is a train LEAVING that
+    // block. So the crossing is counted the wrong way round twice over: block 1
+    // is credited with a train that left it and block 0 debited for one that
+    // arrived.
+    assert(InZero != 1 || InOne != 0);   // it does NOT agree with the truth
+    assert(InOne == 2 && InZero == -1);  // measured, so a change to it is visible
+
+    // AND THE GOOD NEWS, WHICH IS THE REASON THIS TEST IS WORTH MORE THAN A
+    // COMMENT: it fails toward being DETECTED rather than toward a plausible
+    // wrong answer.
+    //
+    // Block 0 at -1 is below zero, which the counter already calls a LIE — "told
+    // a train left somewhere it was never told one arrived" — and block 1 at 2
+    // trips over-occupancy, which is the collision condition. Both are E-stop
+    // conditions the ride already acts on. A reversing train therefore stops the
+    // ride loudly instead of running with an interlocking that quietly believes
+    // the wrong thing, which is the correct direction for this to be wrong in.
+    assert(C.IsInconsistent());
+    assert(C.IsOverOccupied(1));
+
+    // THE FIX IS HARDWARE, and it is the reason this test measures the defect
+    // rather than working around it: a real axle counter uses TWO heads a few
+    // centimetres apart and reads the order of their edges. That is the same
+    // idiom FSpeedTraps already uses — two switches and a surveyed gap — and it
+    // belongs in the sensor layer, not as a rule bolted onto the counter.
+    // See Docs/DIRECTION_AND_ROUTES.md.
+
+}
+
 int main()
 {
     TestASensorIsAPointAndABoolean();
@@ -510,6 +582,7 @@ int main()
     TestABackwardsPassIsCOUNTEDAndIsNotASpeed();
     TestATrainThatSTOPSBetweenTheSwitchesDisarmsTheTrap();
     TestWhatATrapIsFOR();
+    TestTheCounterIsFORWARDONLYAndThisIsWhereItBreaks();
 
     std::printf("test_tracksensors: all assertions passed\n");
     return 0;

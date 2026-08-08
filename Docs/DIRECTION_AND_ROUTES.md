@@ -102,10 +102,36 @@ rolling backwards, the leading edge is the tail. The rule becomes "leading edge 
 travel". One line, and one very easy silent failure: a train that never trips its mark keeps
 crawling.
 
-**The block counter double-counts.** `FBlockCounter` is entries at sensor *i* minus full clearances
-at sensor *i+1*, rising in and falling out. That assumes monotone travel. A train that backs off a
-sensor and re-trips it counts twice, and the cross-check against the interlocking then trips the
-E-stop on a ride doing nothing wrong.
+**The block counter is the only layer that actually breaks, and it fails SAFE.** Measured rather
+than assumed — `test_tracksensors.cpp`, "the counter is forward-only and this is where it breaks".
+
+A 20 m train crosses a boundary forwards and the counter is right at every step: block 0, straddling
+both, block 1. Reverse it over the same boundary and:
+
+```
+block 0 = -1,  block 1 = 2      (the truth is 1 and 0)
+```
+
+A rising edge means "metal arrived over me" and nothing more. The counter reads it as *"a nose
+entered the block ahead"*, which is true only while trains go one way; reversing, that same edge is
+a train **leaving**. So the crossing is counted the wrong way round twice over.
+
+**And that is the good news.** Block 0 at −1 is what the counter already calls a *lie* — told a train
+left somewhere it was never told one arrived — and block 1 at 2 is the collision condition. Both are
+E-stop conditions the ride already acts on, so a reversing train stops the ride loudly instead of
+running with an interlocking that quietly believes the wrong thing. That is the correct direction to
+be wrong in, and it means this can be fixed on its own schedule rather than as a prerequisite.
+
+**The rest of the system is already direction-agnostic, and deliberately so.** Worth knowing before
+anyone sets out to "add direction support" broadly:
+
+- **`FTrackSensors::Cover(Rear, Front)` is a span test** that never mentions a nose, so a sensor
+  trips on whichever end arrives first. The stop mark is presence rather than an edge, so *"truck
+  forward until the mark trips"* already means the leading edge whichever way that is.
+- **`FRideSignals::Update` is a range diff**, and its own comment says why: *"a rollback (symmetric,
+  so no direction logic at all)"*. Entries and exits fall out of old-range versus new-range.
+- **`FTrain::GetFrontS()` means the +S end, not the leading edge.** That name is the one real trap
+  left in this area — it is correct today and reads as though it guarantees something it does not.
 
 **The real answer is hardware, not software.** A directional axle counter is two heads a few
 centimetres apart; the phase between them says which way the axle went. That is an addition to
