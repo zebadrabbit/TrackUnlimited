@@ -48,6 +48,8 @@ class TRACKUNLIMITED_API UTUFrameWidget : public UUserWidget
 	GENERATED_BODY()
 
 public:
+	UTUFrameWidget(const FObjectInitializer& Init);
+
 	/**
 	 * The ride this frame is a shell around.
 	 *
@@ -59,6 +61,24 @@ public:
 	TWeakObjectPtr<ATUCoasterRide> Ride;
 
 	void AttachTo(ATUCoasterRide* InRide);
+
+	/**
+	 * Show or hide the settings screen IN THE CONTENT SLOT.
+	 *
+	 * Not a separate full-screen widget stacked on top: the frame's whole job is
+	 * that each mode's UI is composed into it, and a settings screen that floated
+	 * over the chrome would be the first exception to that — after which there
+	 * would be others.
+	 *
+	 * The main menu will call this same method when it exists. Wiring it to a key
+	 * first means the screen is testable before the menu is written, rather than
+	 * the two having to land together.
+	 */
+	void ToggleSettings();
+
+	/** Found by path, like the frame itself. Null is a valid state. */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|UI")
+	TSubclassOf<class UTUSettingsWidget> SettingsWidgetClass;
 
 protected:
 	virtual void NativeConstruct() override;
@@ -138,4 +158,7 @@ private:
 	FString LastMode;
 	FString LastDocument;
 	FString LastStatus;
+
+	UPROPERTY(Transient)
+	TObjectPtr<class UTUSettingsWidget> SettingsWidget;
 };

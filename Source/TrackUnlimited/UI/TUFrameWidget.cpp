@@ -8,6 +8,21 @@
 #include "Components/TextBlock.h"
 #include "Components/Button.h"
 #include "Components/NamedSlot.h"
+#include "TUSettingsWidget.h"
+#include "UObject/ConstructorHelpers.h"
+
+UTUFrameWidget::UTUFrameWidget(const FObjectInitializer& Init)
+	: Super(Init)
+{
+	// By path, the same way the frame itself is found. Constructor rather than
+	// BeginPlay so the Details panel shows what it will use.
+	static ConstructorHelpers::FClassFinder<UTUSettingsWidget> SettingsBP(
+		TEXT("/Game/UI/WBP_TUSettings"));
+	if (SettingsBP.Succeeded())
+	{
+		SettingsWidgetClass = SettingsBP.Class;
+	}
+}
 
 void UTUFrameWidget::AttachTo(ATUCoasterRide* InRide)
 {
@@ -99,6 +114,33 @@ void UTUFrameWidget::NativeTick(const FGeometry& Geometry, float DeltaSeconds)
 			StatusLabel->SetColorAndOpacity(FSlateColor(
 				R->GetScanOverruns() > 0 ? FTUStyle::LampOccupied : FTUStyle::TextSecondary));
 		}
+	}
+}
+
+void UTUFrameWidget::ToggleSettings()
+{
+	if (!ContentSlot)
+	{
+		return;
+	}
+	if (SettingsWidget)
+	{
+		// REMOVED, NOT HIDDEN. A hidden settings screen keeps ticking and keeps
+		// its generated rows alive behind whatever is in front of it.
+		ContentSlot->ClearChildren();
+		SettingsWidget = nullptr;
+		return;
+	}
+	if (!SettingsWidgetClass)
+	{
+		UE_LOG(LogTUEvents, Warning, TEXT("settings: no widget class"));
+		return;
+	}
+	SettingsWidget = CreateWidget<UTUSettingsWidget>(GetOwningPlayer(), SettingsWidgetClass);
+	if (SettingsWidget)
+	{
+		SettingsWidget->AttachTo(Ride.Get());
+		ContentSlot->SetContent(SettingsWidget);
 	}
 }
 

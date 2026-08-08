@@ -1443,6 +1443,9 @@ private:
 	bool bHideOverlays = false;
 	void ToggleOverlays();
 
+	/** [F1] — the settings screen, hosted by the frame. */
+	void ToggleSettings();
+
 	/** [F] — frame the whole track. The thing you press constantly when a
 	 *  validation warning points somewhere and you have no idea where. */
 	void FrameWholeTrack();

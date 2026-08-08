@@ -1849,6 +1849,11 @@ void ATUCoasterRide::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 	PlayerInputComponent->BindKey(EKeys::F2, IE_Pressed, this,
 		&ATUCoasterRide::ToggleOverlays);
 
+	// [F1] — settings, in the frame's content slot. A key rather than a button
+	// so the screen is reachable before the main menu that will own it exists.
+	PlayerInputComponent->BindKey(EKeys::F1, IE_Pressed, this,
+		&ATUCoasterRide::ToggleSettings);
+
 	// [T] — which train you are on. Not guarded against typing: a letter is not
 	// part of a number the segment editor accepts, and the same is true of every
 	// other letter bound here.
@@ -5508,6 +5513,14 @@ void ATUCoasterRide::NextRiderTrain()
 	// circuit is a long sweep across the whole layout rather than a cut.
 	bFreeInitialised = false;
 	UE_LOG(LogTUEvents, Log, TEXT("riding train %d of %d"), RiderTrain + 1, Trains.Num());
+}
+
+void ATUCoasterRide::ToggleSettings()
+{
+	if (FrameWidget)
+	{
+		FrameWidget->ToggleSettings();
+	}
 }
 
 void ATUCoasterRide::ToggleOverlays()
