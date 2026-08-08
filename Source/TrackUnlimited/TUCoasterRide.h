@@ -600,6 +600,11 @@ private:
 	// this is the only remaining record of what it should release at.
 	TArray<double> ZoneReleaseSpeed;
 
+	/** The friction pad's rate for each zone, or 0 where there is none. Parallel
+	 *  to ZoneReleaseSpeed and built in the same walk, for the same reason: two
+	 *  lists derived together cannot slide against each other. */
+	TArray<double> ZoneBrakeDecel;
+
 	// Where each zone is and WHAT KIND it was authored as. FTrackZone deliberately
 	// drops the kind — a station, a block brake and a lift chain are the same
 	// physics, which is the point — so this keeps it for the things that need to

@@ -799,6 +799,7 @@ void ATUCoasterRide::RebuildFromSegments()
 	// with the first about where the brakes are.
 	TArray<FTrackZone> Zones;
 	ZoneReleaseSpeed.Reset();
+	ZoneBrakeDecel.Reset();
 	ZoneSpans.Reset();
 
 	// Zones come from contiguous runs of segments carrying the same kind, so a
@@ -812,6 +813,7 @@ void ATUCoasterRide::RebuildFromSegments()
 		float OpenSpeed = 0.f;
 		float OpenAccel = 6.f;
 		float OpenDecel = 6.f;
+		float OpenPad = 0.f;
 		double AccS = 0.0;
 
 		// Block boundaries fall out of this SAME walk, because they are the same
@@ -839,7 +841,7 @@ void ATUCoasterRide::RebuildFromSegments()
 		std::vector<double> StopMarkS;
 
 		auto Close = [this, &Zones, &Open, &OpenS, &OpenSpeed, &OpenAccel, &OpenDecel,
-			&StopMarkS](double EndS)
+			&OpenPad, &StopMarkS](double EndS)
 		{
 			if (Open == ETUSegmentZone::None || !(EndS > OpenS))
 			{
@@ -857,6 +859,12 @@ void ATUCoasterRide::RebuildFromSegments()
 				? static_cast<double>(OpenAccel) : 6.0;
 			const double Decel = FMath::IsFinite(OpenDecel) && OpenDecel > 0.f
 				? static_cast<double>(OpenDecel) : 6.0;
+
+			// THE PAD, if this device has one. Zero is "no pad", which is every
+			// preset until somebody authors a rate -- and the zone then keeps the
+			// negative BrakeLimit that means the second device is simply absent.
+			const double Pad = FMath::IsFinite(OpenPad) && OpenPad > 0.f
+				? static_cast<double>(OpenPad) : 0.0;
 
 			// Sanitised HERE rather than trusted, because AddZone REFUSES a
 			// malformed zone instead of storing it — and a refusal would leave the
@@ -899,6 +907,17 @@ void ATUCoasterRide::RebuildFromSegments()
 			default:
 				return;
 			}
+			// A TRIM ALREADY IS A PAD, so it does not get a second one. Its whole
+			// definition is a ceiling with no tractive authority, which is what
+			// BrakeLimit means -- giving it another would be one device counted
+			// twice and braking at the sum of its own two rates.
+			if (Pad > 0.0 && Open != ETUSegmentZone::Brake && Zones.Num() > 0)
+			{
+				Zones.Last().BrakeLimit = Speed;
+				Zones.Last().BrakeDecel = Pad;
+			}
+			ZoneBrakeDecel.Add(Open == ETUSegmentZone::Brake ? 0.0 : Pad);
+
 			// The authored number is the RELEASE speed. A holding device spends
 			// most of its life commanded to zero, so this is the only surviving
 			// record of what it should open to.
@@ -997,7 +1016,8 @@ void ATUCoasterRide::RebuildFromSegments()
 			const bool bSpeedChanged = Open != ETUSegmentZone::None
 				&& (!FMath::IsNearlyEqual(Segments[i].ZoneSpeed, OpenSpeed)
 					|| !FMath::IsNearlyEqual(Segments[i].ZoneAccel, OpenAccel)
-					|| !FMath::IsNearlyEqual(Segments[i].ZoneDecel, OpenDecel));
+					|| !FMath::IsNearlyEqual(Segments[i].ZoneDecel, OpenDecel)
+					|| !FMath::IsNearlyEqual(Segments[i].ZoneBrakeDecel, OpenPad));
 			// And the author saying so outright, for devices that are identical in
 			// every respect the walk can see and are still separate machines —
 			// three loading positions on one platform, a queue of brake sections.
@@ -1012,6 +1032,7 @@ void ATUCoasterRide::RebuildFromSegments()
 				OpenSpeed = Segments[i].ZoneSpeed;
 				OpenAccel = Segments[i].ZoneAccel;
 				OpenDecel = Segments[i].ZoneDecel;
+				OpenPad = Segments[i].ZoneBrakeDecel;
 			}
 			AccS += SegLength;
 		}
@@ -1468,7 +1489,10 @@ void ATUCoasterRide::RebuildFromSegments()
 			// THE ZONE'S OWN RATE. The audit had a global service deceleration and
 			// it did not match the Grip these are built with, so it was predicting
 			// stopping distances the physics would never produce.
-			D.DecelMs2 = Z.MaxDecel;
+			// WHAT ACTUALLY STOPS THE TRAIN is the harder of the two devices, and
+			// on a section with a pad that is the pad. Reading MaxDecel alone
+			// would report a brake as too short that stops comfortably.
+			D.DecelMs2 = FMath::Max(Z.MaxDecel, Z.BrakeDecel);
 			D.bIsBlockBoundary = D.bCanHold && D.bCanRelease;
 
 			// The name is only for the message. FTrackZone drops the kind on
@@ -5197,6 +5221,25 @@ void ATUCoasterRide::SimStep(double DeltaSeconds)
 			for (std::size_t z = 0; z < Drives->Num(); ++z)
 			{
 				Trains[t]->SetZoneTargetSpeed(z, Drives->Output(z));
+
+				// THE PAD TRACKS THE SAME COMMAND, and bites at its own rate.
+				//
+				// Not a second command from the PLC, and that is deliberate: a
+				// block brake is commanded to a SPEED, and the pad and the tyres
+				// are two ways of getting there. Above the commanded speed the
+				// pad is what removes the energy, at whatever the hardware was
+				// specified at; below it the tyres push. The four-state sequence
+				// ServeHolds describes — bite, stop, release, convey — then falls
+				// out of one number instead of needing a state machine, because
+				// "release" is just the train no longer being above the limit.
+				//
+				// A ZONE WITH NO PAD KEEPS ITS NEGATIVE LIMIT and is untouched,
+				// which is every zone on every preset until somebody authors one.
+				if (z < static_cast<std::size_t>(ZoneBrakeDecel.Num())
+					&& ZoneBrakeDecel[static_cast<int32>(z)] > 0.0)
+				{
+					Trains[t]->SetZoneBrakeLimit(z, Drives->Output(z));
+				}
 				// And how much of that the hardware is actually producing, for the
 				// same reason and by the same route: one device, one number, every
 				// train's copy hearing the same thing about it. 1.0 unless

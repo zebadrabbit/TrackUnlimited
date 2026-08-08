@@ -438,6 +438,27 @@ struct FTUTrackSegment
 		EditCondition = "Zone != ETUSegmentZone::None", EditConditionHides))
 	float ZoneDecel = 6.f;
 
+	/**
+	 * THE FRICTION PAD, WHICH IS A SECOND DEVICE, m/s². Zero means it has none.
+	 *
+	 * A real block brake is two machines on one stretch of track: a pad that can
+	 * only ever remove energy, and drive tyres that push and hold. They are
+	 * separate hardware, specified separately, and one can fail without the
+	 * other — so a pad that bites at 8 m/s² feeding tyres that convey at 0.5 is
+	 * an ordinary specification and was previously inexpressible, because a
+	 * single rate has to be wrong for one of them.
+	 *
+	 * ZERO BY DEFAULT, so every preset builds the zones it always did and every
+	 * canonical figure is unmoved. Author a rate and the pad appears.
+	 *
+	 * It is a CEILING, never a setpoint: below the commanded speed it does
+	 * nothing at all, which is what makes it a brake. There is no way to author
+	 * one that pushes.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Zone", meta = (ClampMin = "0.0", UIMax = "15.0",
+		EditCondition = "Zone != ETUSegmentZone::None", EditConditionHides))
+	float ZoneBrakeDecel = 0.f;
+
 	UPROPERTY(EditAnywhere, Category = "Zone")
 	bool bAntiRollback = false;
 
