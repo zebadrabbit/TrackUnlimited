@@ -19,6 +19,11 @@ public class TrackUnlimited : ModuleRules
 			// SetNearClipPlaneGlobals. UCameraComponent has no perspective near-plane
 			// setter — the near plane is one global, and this is the engine's own
 			// supported way to move it (r.SetNearClipPlane calls exactly this).
-			"RenderCore" });
+			"RenderCore",
+			// Phase 3.5's UI. UMG is the authoring layer per UI_CONVENTIONS.md and
+			// Slate is what it resolves to, so both are needed: the design language
+			// lives in an FSlateStyleSet, which UMG widgets consume through
+			// FButtonStyle/FTextBlockStyle exactly as Slate widgets do.
+			"Slate", "SlateCore", "UMG" });
 	}
 }
