@@ -81,6 +81,30 @@ enum class ESegmentKind
 // ponytail: no per-kind subtype and no field-presence tracking. Build() reads
 // only the fields its kind uses, and the writer only emits those, so an unused
 // field is invisible rather than wrong.
+// ===================== THE CONTROL LAYER IS AUTHORED TOO =====================
+//
+// A device is a property of a SEGMENT, exactly as a radius is: a lift is however
+// many segments in a row say "lift", and the runtime zone is a contiguous run of
+// them derived by a walk. So it belongs in the authored document, and until it
+// was here a saved track was geometry with no brakes, no station and no lift —
+// the ride's entire control layer dropped on the way to disc, silently, which is
+// the worst shape a data loss can take.
+//
+// STORED BY NAME, never by index. An enumerator's number changes the day somebody
+// inserts a value above it, and every stored track then means something different
+// with nothing to notice. The same rule the segment kinds already follow.
+enum class EAuthoredZone
+{
+    None,
+    Lift,
+    Launch,
+    Brake,          // trim only: can remove energy, can never hold a train
+    BlockBrake,     // friction pad AND drive tyres, so it can hold and release
+    Station,
+    StationUnload,
+    StationLoad,
+};
+
 struct FAuthoredSegment
 {
     ESegmentKind Kind = ESegmentKind::Straight;
@@ -102,6 +126,32 @@ struct FAuthoredSegment
     double RollStartDegrees = 0.0; // every kind
     double RollEndDegrees = 0.0;
     ERollMode RollMode = ERollMode::PathRelative;
+
+    // ---- The device on this segment, if any. Defaults match the editor's.
+    //
+    // A DEVICE IS ITS KIND AND ITS SPEED, and since a run ends where either
+    // changes, both are authored per segment rather than per run. Acceleration and
+    // deceleration are the device's own too — a chain hauling at 0.61 g is nothing
+    // like a real chain, and one global figure for every device on every ride was
+    // a number nobody typed standing in for one they should have.
+    EAuthoredZone Zone = EAuthoredZone::None;
+    double ZoneSpeed = 4.0;
+    double ZoneAccel = 6.0;
+    double ZoneDecel = 6.0;
+    // The friction pad's rate, which is a SECOND MACHINE rather than a mode of the
+    // first: a pad is a ceiling that can only remove energy, the tyres are a
+    // setpoint driven toward from either side. Kept separate because either can
+    // fail without the other.
+    double ZoneBrakeDecel = 0.0;
+
+    // NOT A ZONE, deliberately, and that is why it sits outside the block above: a
+    // catch has no speed and nothing commanding it, and it overlaps zones freely
+    // because a lift hill is both at once. It is written whatever the zone is.
+    bool bAntiRollback = false;
+
+    // Three loading positions are the same kind at the same speed, so nothing the
+    // derivation walk can see tells them apart. This is the author saying so.
+    bool bStartsNewDevice = false;
 
     FTrackSegment RawSegment; // Kind == Raw only. Its own fields stay radians.
 };
@@ -278,6 +328,42 @@ inline bool KindFromName(const std::string& S, ESegmentKind& Out)
     if (S == "clothoid") { Out = ESegmentKind::Clothoid; return true; }
     if (S == "helix") { Out = ESegmentKind::Helix; return true; }
     if (S == "raw") { Out = ESegmentKind::Raw; return true; }
+    return false;
+}
+
+// THESE STRINGS ARE AS PERMANENT AS THE KEYS ARE. They land in stored tracks, so
+// renaming one silently turns every ride that used that device into unpowered
+// track — which builds, runs, and simply never dispatches.
+inline const char* ZoneName(EAuthoredZone Z)
+{
+    switch (Z)
+    {
+    case EAuthoredZone::None: return "none";
+    case EAuthoredZone::Lift: return "lift";
+    case EAuthoredZone::Launch: return "launch";
+    case EAuthoredZone::Brake: return "brake";
+    case EAuthoredZone::BlockBrake: return "blockBrake";
+    case EAuthoredZone::Station: return "station";
+    case EAuthoredZone::StationUnload: return "stationUnload";
+    case EAuthoredZone::StationLoad: return "stationLoad";
+    }
+    return "none";
+}
+
+// REFUSED RATHER THAN DEFAULTED. An unrecognised device name is a file this build
+// cannot honour, and quietly reading it as unpowered track would open somebody's
+// ride with its brakes missing and no complaint — the exact silent loss this
+// whole block exists to end. The parser turns a false here into a stated error.
+inline bool ZoneFromName(const std::string& S, EAuthoredZone& Out)
+{
+    if (S == "none") { Out = EAuthoredZone::None; return true; }
+    if (S == "lift") { Out = EAuthoredZone::Lift; return true; }
+    if (S == "launch") { Out = EAuthoredZone::Launch; return true; }
+    if (S == "brake") { Out = EAuthoredZone::Brake; return true; }
+    if (S == "blockBrake") { Out = EAuthoredZone::BlockBrake; return true; }
+    if (S == "station") { Out = EAuthoredZone::Station; return true; }
+    if (S == "stationUnload") { Out = EAuthoredZone::StationUnload; return true; }
+    if (S == "stationLoad") { Out = EAuthoredZone::StationLoad; return true; }
     return false;
 }
 
@@ -624,6 +710,30 @@ inline bool WriteTrackJson(const FTrackDocument& Doc, std::string& Out, std::str
             Row += ", \"rollMode\": \"worldBank\"";
         }
 
+        // ---- THE DEVICE.
+        //
+        // OMITTED ONLY WHEN AT ITS DEFAULT, and never because the zone happens to
+        // be None. The editor hides a device's speed on unpowered track and
+        // HIDDEN IS NOT DELETED — flipping a segment to plain track and back keeps
+        // the number somebody typed. A writer that dropped those fields would undo
+        // that rule at the one moment it costs real work, which is the save.
+        if (A.Zone != EAuthoredZone::None)
+        {
+            Row += std::string(", \"zone\": \"") + ZoneName(A.Zone) + "\"";
+        }
+        if (!Check(A.ZoneSpeed, "zoneSpeed", i) || !Check(A.ZoneAccel, "zoneAccel", i)
+            || !Check(A.ZoneDecel, "zoneDecel", i)
+            || !Check(A.ZoneBrakeDecel, "zoneBrakeDecel", i))
+        {
+            return false;
+        }
+        if (A.ZoneSpeed != 4.0) { Add("zoneSpeed", A.ZoneSpeed); }
+        if (A.ZoneAccel != 6.0) { Add("zoneAccel", A.ZoneAccel); }
+        if (A.ZoneDecel != 6.0) { Add("zoneDecel", A.ZoneDecel); }
+        if (A.ZoneBrakeDecel != 0.0) { Add("zoneBrakeDecel", A.ZoneBrakeDecel); }
+        if (A.bAntiRollback) { Row += ", \"antiRollback\": true"; }
+        if (A.bStartsNewDevice) { Row += ", \"startsNewDevice\": true"; }
+
         Row += "}";
         if (i + 1 < Doc.Segments.size())
         {
@@ -850,6 +960,50 @@ inline bool ParseTrackJson(const std::string& Text, FTrackDocument& Out, std::st
                            + "\"; roll would be measured from the wrong reference";
                 return false;
             }
+        }
+
+        // ---- THE DEVICE. Every field optional, so a track stored before the
+        // control layer existed still loads as the unpowered geometry it was.
+        if (const std::string* Zone = Find(F, "zone"))
+        {
+            if (!ZoneFromName(*Zone, A.Zone))
+            {
+                // REFUSED, exactly as an unknown kind is. Reading it as unpowered
+                // would open somebody's ride with a brake missing from the middle
+                // of it — a file that loads, looks right, and cannot stop a train.
+                OutError = "segment " + std::to_string(i) + " has unknown zone \"" + *Zone
+                           + "\". Refusing: reading it as plain track would silently "
+                             "remove a device from the ride.";
+                return false;
+            }
+        }
+        bOk = ReadNumber(F, "zoneSpeed", A.ZoneSpeed, false, FieldError)
+              && ReadNumber(F, "zoneAccel", A.ZoneAccel, false, FieldError)
+              && ReadNumber(F, "zoneDecel", A.ZoneDecel, false, FieldError)
+              && ReadNumber(F, "zoneBrakeDecel", A.ZoneBrakeDecel, false, FieldError);
+        if (!bOk)
+        {
+            OutError = "segment " + std::to_string(i) + ": " + FieldError;
+            return false;
+        }
+
+        // A FLAG IS TRUE OR IT IS ABSENT. "false" never gets written, so anything
+        // other than "true" here is a file saying something this build does not
+        // understand — and a mistyped flag read as false is a catch that is not
+        // there, which is the one direction a safety device must not fail in.
+        auto ReadFlag = [&](const char* Key, bool& Field) {
+            const std::string* V = Find(F, Key);
+            if (V == nullptr) { return true; }
+            if (*V == "true") { Field = true; return true; }
+            if (*V == "false") { Field = false; return true; }
+            OutError = "segment " + std::to_string(i) + ": \"" + Key + "\" is \"" + *V
+                       + "\", which is not a flag";
+            return false;
+        };
+        if (!ReadFlag("antiRollback", A.bAntiRollback)
+            || !ReadFlag("startsNewDevice", A.bStartsNewDevice))
+        {
+            return false;
         }
 
         Out.Segments.push_back(A);

@@ -66,17 +66,31 @@ namespace
 // the screen with the entry it was made for, which is the whole reason it exists.
 void UTUSettingBinding::OnBool(bool bOn)
 {
-	if (Owner.IsValid()) { Owner->WriteValue(Entry, bOn ? TEXT("true") : TEXT("false")); }
+	if (Owner.IsValid())
+	{
+		Owner->WriteValue(Entry, bOn ? TEXT("true") : TEXT("false"));
+		Owner->PersistSettings();
+	}
 }
 
 void UTUSettingBinding::OnScalar(float Value)
 {
+	// APPLIED NOW, WRITTEN ON RELEASE. A drag fires this every frame.
 	if (Owner.IsValid()) { Owner->WriteValue(Entry, FString::SanitizeFloat(Value)); }
+}
+
+void UTUSettingBinding::OnScalarDone()
+{
+	if (Owner.IsValid()) { Owner->PersistSettings(); }
 }
 
 void UTUSettingBinding::OnChoice(FString Selected, ESelectInfo::Type)
 {
-	if (Owner.IsValid()) { Owner->WriteValue(Entry, Selected); }
+	if (Owner.IsValid())
+	{
+		Owner->WriteValue(Entry, Selected);
+		Owner->PersistSettings();
+	}
 }
 
 void UTUSettingBinding::OnPageClicked()
@@ -99,6 +113,16 @@ void UTUSettingsWidget::NativeConstruct()
 	}
 	BuildPageTabs();
 	ShowPage(ESettingPage::Video);
+}
+
+void UTUSettingsWidget::NativeDestruct()
+{
+	// The one path the per-control writes miss: a slider moved with the keyboard
+	// never sends a mouse-capture-end. Writing an unchanged file costs nothing —
+	// only explicit values are in it, so an untouched session writes the same two
+	// header lines it read.
+	PersistSettings();
+	Super::NativeDestruct();
 }
 
 void UTUSettingsWidget::BuildPageTabs()
@@ -238,7 +262,11 @@ void UTUSettingsWidget::BuildRow(const FSettingEntry& Entry)
 		S->SetStepSize(static_cast<float>(Entry.Step));
 		S->SetValue(FCString::Atof(*Value));
 		ControlBox->AddChild(S);
-		S->OnValueChanged.AddDynamic(Bind(Entry), &UTUSettingBinding::OnScalar);
+		// ONE BINDING, TWO EVENTS. The value tracks the drag; the file is written
+		// when the mouse is let go.
+		UTUSettingBinding* B = Bind(Entry);
+		S->OnValueChanged.AddDynamic(B, &UTUSettingBinding::OnScalar);
+		S->OnMouseCaptureEnd.AddDynamic(B, &UTUSettingBinding::OnScalarDone);
 		break;
 	}
 	case ESettingKind::Choice:
@@ -302,10 +330,29 @@ FString UTUSettingsWidget::ReadValue(const FSettingEntry& Entry) const
 			if (Entry.Key == "graphics.postProcess")  { return NameFromQuality(G->GetPostProcessingQuality()); }
 		}
 	}
-	// Ours and the input map both fall back to the declared default until those
-	// stores are wired to the actor, which keeps every control showing something
-	// real rather than blank.
-	return UTF8_TO_TCHAR(Entry.Default.c_str());
+	ATUCoasterRide* R = Ride.Get();
+	if (!R)
+	{
+		// No ride attached is a preview or a test, and the declared default is the
+		// honest thing to show — a blank control would read as a broken one.
+		return UTF8_TO_TCHAR(Entry.Default.c_str());
+	}
+
+	if (Entry.Owner == ESettingOwner::Input)
+	{
+		// THE INPUT MAP, AND NOT THE SETTINGS STORE. `test_settingsschema` asserts
+		// a binding belongs to one of them and not both, because two homes for one
+		// fact drift and the symptom is a page that shows a key the application
+		// does not answer to.
+		const std::string Bound = R->GetBindings().KeyFor(Entry.Key);
+		return Bound.empty() ? FString(UTF8_TO_TCHAR(Entry.Default.c_str()))
+							 : FString(UTF8_TO_TCHAR(Bound.c_str()));
+	}
+
+	// Ours. `Get` returns the explicit value if there is one and the CURRENT
+	// default otherwise, which is the whole of "a default is not a value" — so
+	// this reads correctly without knowing which case it is in.
+	return UTF8_TO_TCHAR(R->GetShellSettings().Get(Entry.Key).c_str());
 }
 
 void UTUSettingsWidget::WriteValue(const FSettingEntry& Entry, const FString& Value)
@@ -335,8 +382,60 @@ void UTUSettingsWidget::WriteValue(const FSettingEntry& Entry, const FString& Va
 		return;
 	}
 
-	UE_LOG(LogTUEvents, Log, TEXT("setting %s = %s"),
-		UTF8_TO_TCHAR(Entry.Key.c_str()), *Value);
+	ATUCoasterRide* R = Ride.Get();
+	if (!R)
+	{
+		return;
+	}
+
+	if (Entry.Owner == ESettingOwner::Input)
+	{
+		// NOT REBINDABLE YET, and the row is a label rather than a button for
+		// exactly that reason — so nothing can reach here. Refusing loudly rather
+		// than writing a `key.` line into the settings file, which is the one
+		// place a binding must never end up.
+		UE_LOG(LogTUEvents, Warning,
+			TEXT("settings: %s is a binding and rebinding is not built yet"),
+			UTF8_TO_TCHAR(Entry.Key.c_str()));
+		return;
+	}
+
+	R->GetShellSettings().Set(Entry.Key, TCHAR_TO_UTF8(*Value));
+	// APPLIED IMMEDIATELY, because a setting that waits for a restart it was not
+	// labelled as needing is the control-that-does-nothing failure again. The ones
+	// that genuinely cannot move mid-session say so on their own row, and
+	// ApplyShellSettings leaves those alone.
+	R->ApplyShellSettings();
+}
+
+void UTUSettingsWidget::ResetValue(const FSettingEntry& Entry)
+{
+	if (Entry.Owner == ESettingOwner::Engine)
+	{
+		// UE's file, and UGameUserSettings has no concept of "unset" — writing the
+		// default is the only move available. Stated rather than papered over.
+		WriteValue(Entry, UTF8_TO_TCHAR(Entry.Default.c_str()));
+		return;
+	}
+	if (Entry.Owner == ESettingOwner::Input)
+	{
+		return;   // nothing was ever written; there is nothing to erase
+	}
+	if (ATUCoasterRide* R = Ride.Get())
+	{
+		// THE DELETION. Not `Set(key, default)` — that records today's default as a
+		// choice and pins the one person who pressed reset to it for ever.
+		R->GetShellSettings().Reset(Entry.Key);
+		R->ApplyShellSettings();
+	}
+}
+
+void UTUSettingsWidget::PersistSettings() const
+{
+	if (const ATUCoasterRide* R = Ride.Get())
+	{
+		R->WriteShellSettings();
+	}
 }
 
 void UTUSettingsWidget::OnResetPage()
@@ -347,8 +446,9 @@ void UTUSettingsWidget::OnResetPage()
 	{
 		if (E.Page == Current)
 		{
-			WriteValue(E, UTF8_TO_TCHAR(E.Default.c_str()));
+			ResetValue(E);
 		}
 	}
+	PersistSettings();
 	ShowPage(Current);
 }

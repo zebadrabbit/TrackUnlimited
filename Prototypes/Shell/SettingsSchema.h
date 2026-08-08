@@ -209,7 +209,13 @@ inline std::vector<FSettingEntry> SettingsSchema()
         {
             FSettingEntry E;
             E.Page = ESettingPage::Audio;
-            E.Key = B[0]; E.Label = B[1]; E.Help = B[2];
+            E.Key = B[0]; E.Label = B[1];
+            // SAID, BECAUSE A CONTROL THAT APPEARS TO DO NOTHING IS WORSE THAN ONE
+            // LABELLED AS DEFERRED — the same rule bNeedsRestart exists for. There
+            // is no audio system yet, so these persist and change nothing you can
+            // hear, and the row says so rather than letting somebody conclude their
+            // speakers are broken.
+            E.Help = std::string(B[2]) + " Stored — there is no audio system yet.";
             E.Kind = ESettingKind::Scalar;
             E.Min = 0.0; E.Max = 1.0; E.Step = 0.05;
             E.Default = "0.8";
@@ -226,6 +232,13 @@ inline std::vector<FSettingEntry> SettingsSchema()
 
     // ---- CONTROLS. The bindings the ride already has. Owned by FInputMap, and
     // listed here so one walk builds this page like every other.
+    //
+    // THE NAMES ARE UE'S OWN FKey NAMES, and that is load-bearing rather than a
+    // convenience: the shell checks each one against what is actually bound on the
+    // input component at startup, so a page that promises a key nothing answers to
+    // is reported. This table drifted from the bindings for exactly one commit —
+    // it said F2 for the overlay toggle after F2 was given up to the editor's
+    // wireframe view — and nothing could see it. Now something can.
     {
         const char* Keys[][3] = {
             {"key.mode",        "Cycle mode",           "Tab"},
@@ -237,15 +250,24 @@ inline std::vector<FSettingEntry> SettingsSchema()
             {"key.segNext",     "Next segment",         "RightBracket"},
             {"key.editor",      "Segment editor",       "B"},
             {"key.diagnostics", "Diagnostics",          "V"},
-            {"key.graph",       "Ride profile graph",   "G"},
+            {"key.graph",       "Cycle profile channel","G"},
+            {"key.graphHide",   "Hide profile graph",   "H"},
             {"key.panel",       "Control panel",        "P"},
-            {"key.overlays",    "Hide all overlays",    "F2"},
+            {"key.overlays",    "Hide all overlays",    "U"},
+            {"key.settings",    "Settings screen",      "O"},
+            {"key.menu",        "Back to the menu",     "M"},
+            // NOT Ctrl+S. The editor owns that chord and its bindings are live in
+            // PIE, so the familiar one would save the level as well as the track.
+            // Every letter that spells save is taken, [S] most of all — it moves.
+            {"key.save",        "Save the track",       "K"},
             {"key.dispatch",    "Dispatch",             "SpaceBar"},
             {"key.estop",       "Emergency stop",       "BackSpace"},
             {"key.reset",       "Reset E-stop",         "End"},
             {"key.acknowledge", "Acknowledge faults",   "Home"},
             {"key.pause",       "Pause simulation",     "Pause"},
             {"key.step",        "Step one scan",        "Period"},
+            {"key.slower",      "Slow the sim clock",   "Comma"},
+            {"key.faster",      "Speed the sim clock",  "Slash"},
         };
         for (const auto& K : Keys)
         {

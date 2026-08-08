@@ -32,6 +32,7 @@
 #include "Shell/DiagnosticsModel.h"
 #include "Shell/FirstRun.h"
 #include "Shell/SessionState.h"
+#include "Shell/Settings.h"
 #include "Shell/TrackBrowser.h"
 #include "TrackMesh/TrackSupports.h"
 #include "BlockSignal/ShowBus.h"
@@ -1216,6 +1217,23 @@ private:
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Simulation")
 	bool bSimPaused = false;
 
+	/**
+	 * PAUSE WHEN ANOTHER WINDOW HAS FOCUS. `sim.pauseUnfocused`, cached from the
+	 * settings store because Tick is not the place for a map lookup on a string.
+	 *
+	 * NOT THE SAME AS bSimPaused, and kept separate deliberately: that one is the
+	 * operator's deliberate pause and shows in the mode banner. This is the
+	 * application being sensible about a window nobody is looking at, and having
+	 * it flip the operator's own control would leave the ride paused after an
+	 * alt-tab with the banner saying somebody paused it.
+	 *
+	 * A ride left running behind another window does not run WRONG — the fixed
+	 * step means an unfocused window scans slowly and bit-identically — it drops
+	 * the time it could not simulate and reports overruns, and a run with a
+	 * hundred overruns in it cannot be judged afterwards.
+	 */
+	bool bPauseWhenUnfocused = true;
+
 	/** Scans still owed to a [.] press. Stepping is counted rather than timed, so
 	 *  one press is exactly one scan whatever the frame rate. */
 	int32 StepsOwed = 0;
@@ -1244,7 +1262,29 @@ private:
 	/** Where each menu row was drawn, so a click can find it. Immediate mode:
 	 *  rebuilt every frame, nothing to keep in sync. */
 	TArray<FVector4> MenuRowRects;
-	TArray<int32> MenuRowAction;   // >=0 template, -1000-n recent index, -1 open
+	TArray<int32> MenuRowAction;   // >=0 template, -1000-n recent index, -1 open, -2 save
+
+	/** [M] — back to the menu. The one navigation this shell was missing, and the
+	 *  one transition that can discard work. */
+	void OpenMainMenu();
+
+	/** [K] — save. A void wrapper because BindKey wants one, and because whether
+	 *  the save succeeded is the log's business rather than the key's. */
+	void SaveDocumentFromKey() { SaveDocument(); }
+
+	/**
+	 * WAITING FOR AN ANSWER ABOUT UNSAVED WORK.
+	 *
+	 * A state rather than a modal call, because the panels are drawn immediate-mode
+	 * on the debug canvas and there is nothing to block on. It also happens to be
+	 * the honest shape: the session RETURNS the question and the shell puts it on
+	 * screen, so the answer arrives as a separate event exactly as it would from a
+	 * real dialog.
+	 */
+	bool bConfirmingMenu = false;
+	void ConfirmLeaveToMenu(bool bDiscard);
+	void DrawLeaveConfirm(class UCanvas* Canvas);
+	void ClickLeaveConfirm();
 
 	/**
 	 * THE SEGMENT EDITOR, AS A RUNTIME PANEL.
@@ -1410,7 +1450,162 @@ public:
 	int32 GetScanOverruns() const { return ScanOverruns; }
 	double GetScanTimeDroppedS() const { return ScanTimeDroppedS; }
 
+	/**
+	 * WHERE OUR HALF OF THE SETTINGS ACTUALLY LIVES.
+	 *
+	 * Mutable, unlike Session, and the reason is that this one IS the store: the
+	 * settings screen's job is to change values, and routing every write through a
+	 * per-key method on the actor would be a second copy of the schema written as
+	 * a switch statement.
+	 *
+	 * What keeps it honest instead is that the screen writes and then calls
+	 * WriteShellSettings — so the file is the only place a preference survives, and
+	 * there is no in-memory-but-unsaved state to get out of step with it.
+	 */
+	FSettings& GetShellSettings() { return ShellSettings; }
+	const FSettings& GetShellSettings() const { return ShellSettings; }
+
+	/**
+	 * THE BINDINGS, WHICH ARE NOT IN THAT STORE AND MUST NOT BE.
+	 *
+	 * `test_settingsschema` asserts a key binding belongs to the input map and
+	 * nowhere else: held in both, they are two homes for one fact and they drift.
+	 * So the Controls page reads THIS, and nothing writes a `key.` line into the
+	 * settings file.
+	 *
+	 * Read-only in practice today, because rebinding needs a capture widget that
+	 * does not exist. Seeded from the schema at startup, and every seeded key is
+	 * checked against what is genuinely bound on the input component.
+	 */
+	const FInputMap& GetBindings() const { return Bindings; }
+
+	/** Write the settings file. Called by the screen after every change, because a
+	 *  preference that survives only until the process exits is worse than one
+	 *  that was never offered. */
+	void WriteShellSettings() const;
+
+	/**
+	 * THE DOCUMENT, AS THE TEXT THAT WOULD BE SAVED.
+	 *
+	 * `FSession::IsDirty` is a COMPARISON against the last saved text rather than
+	 * a flag, which is what makes undo-back-to-where-you-started come out clean.
+	 * That only works if somebody hands it the current text, and until now nobody
+	 * did — so `IsDirty` was false for ever, the frame's unsaved marker could
+	 * never appear, and `TickAutosave` returned early on every single call.
+	 *
+	 * The save format is the identity, so this is the serialiser and not a second
+	 * one written for comparison. A failed write returns the empty string, which
+	 * compares unequal to anything real and therefore reads as dirty — the safe
+	 * direction, since the alternative is a document that cannot be serialised
+	 * quietly reporting that it has nothing worth saving.
+	 */
+	FString SerialiseDocument() const;
+
+	/**
+	 * SAVE. To the document's own path if it has one, otherwise to a fresh
+	 * Untitled in the tracks folder.
+	 *
+	 * NO NAME PROMPT, and that is a deferral rather than a design: naming a file
+	 * needs TEXT entry, and the segment editor's typed entry is numeric — digits,
+	 * a point, a minus. Auto-naming means save works today and nobody loses work
+	 * waiting for a text field; renaming is something the operating system already
+	 * does well, and the folder opens.
+	 *
+	 * NEVER CLOBBERS. An unnamed save picks the first Untitled-N that does not
+	 * exist, because silently overwriting the last unnamed track is the one
+	 * outcome a save button must not have.
+	 */
+	bool SaveDocument();
+	bool SaveDocumentTo(const FString& InPath);
+
+	/** Open, replacing the segment list. Refused with a stated reason rather than
+	 *  half-applied: a parse that failed after clearing the list would leave an
+	 *  empty editor and a document that never existed. */
+	bool OpenDocumentFrom(const FString& InPath);
+
+	/** Where tracks live. One folder that works in the editor and in a packaged
+	 *  build, which is why the browser list is the primary path and the OS file
+	 *  dialog is a convenience on top of it. */
+	FString TracksDir() const;
+
 private:
+	/** The first Untitled-N in the tracks folder that is not already taken. */
+	FString NextUntitledPath() const;
+
+	FString RecentListPath() const;
+	void LoadRecentList();
+	void WriteRecentList() const;
+
+
+	/** Save, open, save again — and the two texts must match. The one part of the
+	 *  save path with no engine-free test, checked on the real preset at BeginPlay
+	 *  where it costs nothing. Reported, never repaired. */
+	void CheckDocumentRoundTrip() const;
+
+	/** `-TUSmokeTest`: boot, write a real file, read it back, prove the ride is
+	 *  the same one. Off unless asked for, and the first half of the packaged
+	 *  smoke test the build script's card is waiting on. */
+	void RunDocumentSmokeTest();
+
+public:
+
+	/** Push the settings that have a live consumer into the thing that consumes
+	 *  them. Called after a load and after any write. */
+	void ApplyShellSettings();
+
+private:
+
+	/**
+	 * ===================== SETTINGS, AND WHY THE ACTOR HOLDS THEM =====================
+	 *
+	 * A game instance subsystem is the textbook home for application-scoped state,
+	 * and this is not that — because the shell already lives here. `Session`, the
+	 * `Browser` and the frame widget are all on this actor for the same stated
+	 * reason: the frame is a view of THIS ride and there is exactly one of them.
+	 * A subsystem would be a class whose only job is to know about this actor.
+	 *
+	 * `Prototypes/Shell/Settings.h` holds the two rules that matter and is tested:
+	 * A DEFAULT IS NOT A VALUE, so only explicit choices are written and improving
+	 * a default reaches everybody who never touched it; and UNKNOWN KEYS SURVIVE,
+	 * so running an older build once does not silently reset what a newer one
+	 * added. Neither rule is restated here — this is the wiring, not a second copy.
+	 */
+	FSettings ShellSettings;
+	FInputMap Bindings;
+
+	/** Read the file, or start from defaults if there is none. Called once, at
+	 *  BeginPlay — before the first Tick, which is what lets a restart-flagged
+	 *  setting like the scan rate be applied at all. */
+	void LoadShellSettings();
+
+	/**
+	 * WHERE THE FILE IS.
+	 *
+	 * `ProjectSavedDir` resolves to the project's Saved folder in the editor and
+	 * to the per-user application data folder in a packaged build, which is the
+	 * one place a settings file may be written without asking anybody. A path of
+	 * our own would be right in exactly one of those two cases.
+	 *
+	 * Line format, not JSON — a settings file is one of the few things a person
+	 * hand-edits when something has gone wrong, and a stray comma should not cost
+	 * them the file. Hence `.cfg` rather than `.ini`, which would read as one of
+	 * the engine's.
+	 */
+	FString ShellSettingsPath() const;
+
+	/**
+	 * THE CONTROLS PAGE PROMISES A KEY; THIS CHECKS SOMETHING ANSWERS TO IT.
+	 *
+	 * The schema is a second list beside `SetupPlayerInputComponent`, and a second
+	 * list is a second thing to keep true. It has already drifted once: the page
+	 * said [F2] for the overlay toggle for exactly as long as it took somebody to
+	 * notice, after F2 was given back to the editor's wireframe view.
+	 *
+	 * REPORTED, NEVER REPAIRED, like everything else here — the table cannot know
+	 * which of the two is right, and quietly rewriting either would be a guess
+	 * wearing a fix's clothes.
+	 */
+	void CheckBindingsAgainstInput(const class UInputComponent* Input) const;
 
 	/** What the shell is showing, for the mode banner. */
 	void DrawModeBanner(class UCanvas* Canvas);

@@ -7,17 +7,22 @@
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 
+#include "Shell/SettingsSchema.h"
 #include "TrackSpline/TrackClose.h"
 #include "TrackSpline/TrackValidate.h"
 
 #include "Camera/CameraComponent.h"
 #include "CanvasItem.h"
+#include "Components/InputComponent.h"
 #include "Components/InstancedStaticMeshComponent.h"
 #include "Debug/DebugDrawService.h"
 #include "DrawDebugHelpers.h"
 #include "Engine/Canvas.h"
 #include "Engine/Engine.h"
 #include "Engine/Font.h"
+#include "Misc/App.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
 #include "UObject/ConstructorHelpers.h"
 
 // The ride's own event stream. Its own category so it can be filtered on its
@@ -245,7 +250,12 @@ void AddStraight(TArray<FTUTrackSegment>& Out, double Length,
 	S.Kind = ETUSegmentKind::Straight;
 	S.Length = static_cast<float>(Length);
 	S.Zone = Zone;
-	S.ZoneSpeed = ZoneSpeed;
+	// SET ONLY WHEN THERE IS A DEVICE. A speed on unpowered track is inert —
+	// the zone walk never reads it — but the SAVE FORMAT writes anything that is
+	// not at its default, so an unconditional 0 here put `"zoneSpeed": 0` on
+	// every plain segment of every preset: a number nobody typed, in a file whose
+	// whole claim is that it holds the author's decisions and nothing else.
+	if (Zone != ETUSegmentZone::None) { S.ZoneSpeed = ZoneSpeed; }
 	Out.Add(S);
 }
 
@@ -263,7 +273,7 @@ void AddEasedPitch(TArray<FTUTrackSegment>& Out, double PitchDelta, double PeakC
 	In.Length = static_cast<float>(L);
 	In.PitchCurvatureEnd = static_cast<float>(K);
 	In.Zone = Zone;
-	In.ZoneSpeed = ZoneSpeed;
+	if (Zone != ETUSegmentZone::None) { In.ZoneSpeed = ZoneSpeed; }
 	Out.Add(In);
 
 	FTUTrackSegment Tail;
@@ -271,7 +281,7 @@ void AddEasedPitch(TArray<FTUTrackSegment>& Out, double PitchDelta, double PeakC
 	Tail.Length = static_cast<float>(L);
 	Tail.PitchCurvatureStart = static_cast<float>(K);
 	Tail.Zone = Zone;
-	Tail.ZoneSpeed = ZoneSpeed;
+	if (Zone != ETUSegmentZone::None) { Tail.ZoneSpeed = ZoneSpeed; }
 	Out.Add(Tail);
 }
 
@@ -638,7 +648,7 @@ TArray<FTUTrackSegment> ATUCoasterRide::ReferenceLayout()
 		S.Kind = ETUSegmentKind::Straight;
 		S.Length = static_cast<float>(Length);
 		S.Zone = Zone;
-		S.ZoneSpeed = ZoneSpeed;
+		if (Zone != ETUSegmentZone::None) { S.ZoneSpeed = ZoneSpeed; }
 		return Out[Out.Add(S)];
 	};
 
@@ -657,7 +667,7 @@ TArray<FTUTrackSegment> ATUCoasterRide::ReferenceLayout()
 		In.Length = static_cast<float>(L);
 		In.PitchCurvatureEnd = static_cast<float>(K);
 		In.Zone = Zone;
-		In.ZoneSpeed = ZoneSpeed;
+		if (Zone != ETUSegmentZone::None) { In.ZoneSpeed = ZoneSpeed; }
 		Out.Add(In);
 
 		FTUTrackSegment Tail;
@@ -665,7 +675,7 @@ TArray<FTUTrackSegment> ATUCoasterRide::ReferenceLayout()
 		Tail.Length = static_cast<float>(L);
 		Tail.PitchCurvatureStart = static_cast<float>(K);
 		Tail.Zone = Zone;
-		Tail.ZoneSpeed = ZoneSpeed;
+		if (Zone != ETUSegmentZone::None) { Tail.ZoneSpeed = ZoneSpeed; }
 		Out.Add(Tail);
 	};
 
@@ -787,6 +797,19 @@ void ATUCoasterRide::RebuildFromSegments()
 	{
 		UE_LOG(LogTemp, Warning, TEXT("Track segment %d: %s"),
 			static_cast<int32>(D.SegmentIndex), UTF8_TO_TCHAR(D.Message.c_str()));
+	}
+
+	// THE SESSION SEES WHAT THE DOCUMENT NOW IS. Here rather than in each of the
+	// dozen callers that change a segment, because a rebuild is what every one of
+	// them ends with — an edit that did not rebuild changed nothing anybody can
+	// see. `IsDirty` is a comparison, so this one call is the whole of it.
+	//
+	// The text is built from `Doc`, which is the same list just walked, so this
+	// costs a serialisation of a few dozen segments per rebuild and no walk of its
+	// own. A rebuild is already the expensive operation on this actor.
+	{
+		std::string DocText, DocError;
+		Session.Observe(WriteTrackJson(Doc, DocText, DocError) ? DocText : std::string());
 	}
 
 	Track = ::BuildTrack(Doc);
@@ -1878,6 +1901,21 @@ void ATUCoasterRide::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 	PlayerInputComponent->BindKey(EKeys::T, IE_Pressed, this,
 		&ATUCoasterRide::NextRiderTrain);
 
+	// [M] — back to the MENU, and [K] saves.
+	//
+	// NOT Ctrl+S, and that is the F1 lesson rather than a preference. The editor
+	// binds Ctrl+S to Save Current Level and its bindings are live in PIE, so the
+	// familiar chord would save the level AND the track from one press — two
+	// different documents written by a keystroke aimed at one of them.
+	//
+	// [K] is a poor mnemonic and it is the honest one: every letter that spells
+	// save is taken, [S] most of all — it is the movement key. A rebindable
+	// control is the real answer and the Controls page already lists these.
+	PlayerInputComponent->BindKey(EKeys::M, IE_Pressed, this,
+		&ATUCoasterRide::OpenMainMenu);
+	PlayerInputComponent->BindKey(EKeys::K, IE_Pressed, this,
+		&ATUCoasterRide::SaveDocumentFromKey);
+
 	// THE SEGMENT EDITOR. Numeric entry only — constraint 1 holds absolutely, and
 	// a digit key IS typed entry rather than a stepper wearing its name.
 	PlayerInputComponent->BindKey(EKeys::B, IE_Pressed, this,
@@ -1938,6 +1976,12 @@ void ATUCoasterRide::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 		&ATUCoasterRide::BoostOn);
 	PlayerInputComponent->BindKey(EKeys::LeftShift, IE_Released, this,
 		&ATUCoasterRide::BoostOff);
+
+	// LAST, AND AGAINST THE LIST THAT WAS JUST BUILT. The settings page's Controls
+	// tab is a second list beside everything above it, and a second list is a
+	// second thing to keep true — it drifted once already, promising [F2] after F2
+	// was given back to the editor.
+	CheckBindingsAgainstInput(PlayerInputComponent);
 }
 
 void ATUCoasterRide::CycleCameraMode()
@@ -2397,7 +2441,52 @@ void ATUCoasterRide::DrawMainMenu(UCanvas* Canvas)
 	PanelLabel(Canvas, Ox + 12.f, Y, TEXT("Open a track file..."), PanelText);
 	Y += Row + 8.f;
 	PanelLabel(Canvas, Ox, Y,
-		TEXT("click to choose   ·   [Tab] once a track is open"), PanelDim);
+		TEXT("click to choose   ·   [Tab] once a track is open   ·   [M] back here"),
+		PanelDim);
+}
+
+void ATUCoasterRide::DrawLeaveConfirm(UCanvas* Canvas)
+{
+	if (!Canvas || !GEngine || !bConfirmingMenu)
+	{
+		return;
+	}
+
+	// THE QUESTION THE SESSION ASKED, PUT ON SCREEN. It is deliberately the only
+	// one in the shell: Build to Operate to Ride discards nothing and never asks,
+	// which is what keeps this one worth reading rather than clicked through.
+	const float W = 460.f;
+	const float Ox = 80.f;
+	float Y = 90.f;
+
+	PanelTile(Canvas, Ox - 16.f, Y - 14.f, W + 32.f, 118.f, PanelGround);
+	PanelLabel(Canvas, Ox, Y, TEXT("UNSAVED CHANGES"), PanelAmber);
+	Y += 24.f;
+	// WHAT WOULD BE LOST, named. "Are you sure?" is a question nobody can answer;
+	// the document's name and the fact that going back discards it can be.
+	PanelLabel(Canvas, Ox, Y,
+		Session.HasPath()
+			? *FString::Printf(TEXT("%s has changes that are not saved."),
+				*FPaths::GetCleanFilename(UTF8_TO_TCHAR(Session.Path().c_str())))
+			: TEXT("This track has never been saved."),
+		PanelText);
+	Y += 20.f;
+	PanelLabel(Canvas, Ox, Y, TEXT("Going back to the menu discards them."), PanelDim);
+	Y += 26.f;
+
+	// SAVE IS THE FIRST OPTION AND DISCARD IS NOT DEFAULTED. The destructive answer
+	// should never be the one nearest the pointer or the one a reflex picks.
+	MenuRowRects.Reset();
+	MenuRowAction.Reset();
+	MenuRowRects.Add(FVector4(Ox, Y, Ox + 150.f, Y + 20.f));
+	MenuRowAction.Add(-3);
+	PanelLabel(Canvas, Ox, Y, TEXT("[ Save and leave ]"), PanelCyan);
+	MenuRowRects.Add(FVector4(Ox + 170.f, Y, Ox + 300.f, Y + 20.f));
+	MenuRowAction.Add(-4);
+	PanelLabel(Canvas, Ox + 170.f, Y, TEXT("[ Discard ]"), PanelAmber);
+	MenuRowRects.Add(FVector4(Ox + 320.f, Y, Ox + 440.f, Y + 20.f));
+	MenuRowAction.Add(-5);
+	PanelLabel(Canvas, Ox + 320.f, Y, TEXT("[ Cancel ]"), PanelText);
 }
 
 void ATUCoasterRide::StartFromTemplate(int32 Index)
@@ -2439,6 +2528,9 @@ void ATUCoasterRide::StartFromTemplate(int32 Index)
 
 void ATUCoasterRide::ClickPrimary()
 {
+	// THE CONFIRM OWNS THE CLICK ABOVE EVERYTHING, because a question about losing
+	// work must not be dismissable by clicking past it into the thing underneath.
+	if (bConfirmingMenu) { ClickLeaveConfirm(); return; }
 	// The menu owns the click while it is up; everything else is the editor's.
 	if (Session.Mode() == EAppMode::MainMenu) { ClickMainMenu(); return; }
 	// The editor gets first refusal because it is the panel somebody is working
@@ -2449,6 +2541,37 @@ void ATUCoasterRide::ClickPrimary()
 	if (SelectedSegment == Before && FocusedField == EEditField::Count)
 	{
 		ClickDiagnostics();
+	}
+}
+
+void ATUCoasterRide::ClickLeaveConfirm()
+{
+	APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr;
+	if (!PC) { return; }
+
+	float Mx = 0.f, My = 0.f;
+	if (!PC->GetMousePosition(Mx, My)) { return; }
+
+	for (int32 i = 0; i < MenuRowRects.Num() && i < MenuRowAction.Num(); ++i)
+	{
+		const FVector4& R = MenuRowRects[i];
+		if (Mx < R.X || Mx > R.Z || My < R.Y || My > R.W) { continue; }
+
+		switch (MenuRowAction[i])
+		{
+		case -3:
+			// SAVED FIRST, AND ONLY THEN LEFT. A save that failed — a full disc, a
+			// read-only folder — must not be followed by discarding the work it
+			// failed to preserve, so the prompt stays up and says nothing changed.
+			if (SaveDocument())
+			{
+				ConfirmLeaveToMenu(true);
+			}
+			break;
+		case -4: ConfirmLeaveToMenu(true); break;
+		default: ConfirmLeaveToMenu(false); break;
+		}
+		return;
 	}
 }
 
@@ -2493,11 +2616,63 @@ void ATUCoasterRide::ClickMainMenu()
 			if (Which >= 0 && Which < static_cast<int32>(Browser.NumRecent()))
 			{
 				const std::string& Path = Browser.RecentAt(static_cast<std::size_t>(Which));
-				UE_LOG(LogTUEvents, Log, TEXT("open recent: %s"), UTF8_TO_TCHAR(Path.c_str()));
+				// A ROW THAT OPENS THE TRACK, rather than one that logs its name.
+				// A missing file is still listed and still clickable — the
+				// commonest cause is an unplugged drive — so this can fail, and it
+				// fails by SAYING SO and leaving the menu up rather than by
+				// dropping somebody into an empty editor.
+				const FString Wanted(UTF8_TO_TCHAR(Path.c_str()));
+				if (OpenDocumentFrom(Wanted))
+				{
+					// OPEN LANDS IN RIDE, per the program-flow decision: the ACTION
+					// picks the mode, and somebody opening a downloaded track wants
+					// a ride rather than an editor they did not ask for.
+					Session.Enter(EAppMode::Ride);
+					ApplyAppMode(EAppMode::Ride);
+				}
 			}
 		}
 		return;
 	}
+}
+
+void ATUCoasterRide::OpenMainMenu()
+{
+	if (Session.Mode() == EAppMode::MainMenu)
+	{
+		return;
+	}
+
+	// THE ONLY TRANSITION THAT ASKS, because it is the only one that discards the
+	// document. Build to Operate to Ride never asks and never should — nothing is
+	// lost — and a shell that asked there would train people to click straight
+	// through the dialog that matters.
+	//
+	// This became reachable at all on 2026-08-08, when the session first got told
+	// what the document is: before that `IsDirty` was false for ever, so
+	// `MayEnter` could never return NeedsConfirmation and the branch below was
+	// dead code that looked alive.
+	if (Session.MayEnter(EAppMode::MainMenu) == ELeaveRequest::NeedsConfirmation)
+	{
+		bConfirmingMenu = true;
+		return;
+	}
+	Session.Enter(EAppMode::MainMenu);
+	ApplyAppMode(EAppMode::MainMenu);
+}
+
+void ATUCoasterRide::ConfirmLeaveToMenu(bool bDiscard)
+{
+	bConfirmingMenu = false;
+	if (!bDiscard)
+	{
+		return;
+	}
+	// CONFIRMED HERE AND ONLY HERE, because the question was actually put on
+	// screen and answered. Passing bConfirmed without having asked is lying to a
+	// class that cannot tell, which is why MayEnter and Enter are two calls.
+	Session.Enter(EAppMode::MainMenu, true);
+	ApplyAppMode(EAppMode::MainMenu);
 }
 
 void ATUCoasterRide::FrameStation()
@@ -2898,10 +3073,460 @@ void ATUCoasterRide::OnConstruction(const FTransform& Transform)
 #endif
 }
 
+FString ATUCoasterRide::SerialiseDocument() const
+{
+	FTrackDocument Doc;
+	Doc.HeartlineHeight = 1.1;
+	Doc.Segments.reserve(static_cast<std::size_t>(Segments.Num()));
+	for (const FTUTrackSegment& S : Segments)
+	{
+		Doc.Segments.push_back(ToAuthored(S));
+	}
+
+	std::string Text, Error;
+	if (!WriteTrackJson(Doc, Text, Error))
+	{
+		// A NON-FINITE FIELD IS THE ONLY WAY HERE, and the writer refuses rather
+		// than putting "nan" on disc. Returning empty reads as dirty, which is the
+		// safe direction: a document that cannot be written must not be able to
+		// report that it has nothing worth saving.
+		UE_LOG(LogTUEvents, Warning, TEXT("document: cannot serialise — %s"),
+			UTF8_TO_TCHAR(Error.c_str()));
+		return FString();
+	}
+	return FString(UTF8_TO_TCHAR(Text.c_str()));
+}
+
+FString ATUCoasterRide::TracksDir() const
+{
+	// ABSOLUTE, because these paths are STORED. `ProjectSavedDir` comes back
+	// relative to whatever the working directory happened to be at launch, and a
+	// recent list full of `../../../../` entries is one launched-from-elsewhere
+	// away from every row in the menu being a file that cannot be found — the
+	// browser's "missing" state, arriving for a reason that is our fault.
+	return FPaths::ConvertRelativePathToFull(FPaths::ProjectSavedDir() / TEXT("Tracks"));
+}
+
+FString ATUCoasterRide::NextUntitledPath() const
+{
+	// NEVER THE SAME NAME TWICE. An unnamed save that overwrote the last unnamed
+	// save would destroy work by doing exactly what it was asked to do, which is
+	// the worst kind of data loss to explain afterwards.
+	IPlatformFile& Files = FPlatformFileManager::Get().GetPlatformFile();
+	for (int32 N = 1; N < 10000; ++N)
+	{
+		const FString Name = N == 1 ? FString(TEXT("Untitled"))
+									: FString::Printf(TEXT("Untitled-%d"), N);
+		const FString Path = TracksDir() / (Name + TEXT(".track"));
+		if (!Files.FileExists(*Path))
+		{
+			return Path;
+		}
+	}
+	// Ten thousand untitled tracks is not a case worth branching for, but silently
+	// returning the last one would clobber it.
+	return TracksDir() / TEXT("Untitled-overflow.track");
+}
+
+bool ATUCoasterRide::SaveDocumentTo(const FString& InPath)
+{
+	// Normalised once, here, so the recent list and the session agree about what
+	// this document is called however the caller spelled it.
+	const FString Path = FPaths::ConvertRelativePathToFull(InPath);
+	const FString Text = SerialiseDocument();
+	if (Text.IsEmpty())
+	{
+		return false;   // the serialiser has already said why
+	}
+
+	IPlatformFile& Files = FPlatformFileManager::Get().GetPlatformFile();
+	Files.CreateDirectoryTree(*FPaths::GetPath(Path));
+
+	// FORCED UTF-8, NEVER AUTO-DETECT. SaveStringToFile's default writes ANSI when
+	// the text happens to be representable and UTF-16 when it is not — so a track
+	// with a non-ASCII character in it silently changes encoding, and the loader,
+	// which reads the bytes as UTF-8, gets something else. The file format is
+	// text people are meant to diff and hand-edit; it has one encoding.
+	if (!FFileHelper::SaveStringToFile(Text, *Path,
+		FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
+	{
+		UE_LOG(LogTUEvents, Warning, TEXT("save: could not write %s"), *Path);
+		return false;
+	}
+
+	// MARKED CLEAN BY WHAT WAS WRITTEN, not by being told a save happened. A
+	// caller that serialised something other than what it displayed cannot
+	// accidentally mark the session clean.
+	Session.DidSave(TCHAR_TO_UTF8(*Path), TCHAR_TO_UTF8(*Text));
+	Browser.Touch(TCHAR_TO_UTF8(*Path));
+	WriteRecentList();
+
+	UE_LOG(LogTUEvents, Log, TEXT("saved %d segments to %s"), Segments.Num(), *Path);
+	return true;
+}
+
+bool ATUCoasterRide::SaveDocument()
+{
+	return SaveDocumentTo(Session.HasPath()
+		? FString(UTF8_TO_TCHAR(Session.Path().c_str()))
+		: NextUntitledPath());
+}
+
+bool ATUCoasterRide::OpenDocumentFrom(const FString& InPath)
+{
+	const FString Path = FPaths::ConvertRelativePathToFull(InPath);
+	FString Text;
+	if (!FFileHelper::LoadFileToString(Text, *Path))
+	{
+		// THE LOADER'S OWN REASON, which the browser is built to carry: "plug the
+		// drive back in" and "line 12 is wrong" are different problems.
+		UE_LOG(LogTUEvents, Warning, TEXT("open: cannot read %s"), *Path);
+		return false;
+	}
+
+	FTrackDocument Doc;
+	std::string Error;
+	if (!ParseTrackJson(TCHAR_TO_UTF8(*Text), Doc, Error))
+	{
+		UE_LOG(LogTUEvents, Warning, TEXT("open: %s — %s"), *Path,
+			UTF8_TO_TCHAR(Error.c_str()));
+		return false;
+	}
+
+	// PARSED FULLY BEFORE ANYTHING IS REPLACED. Clearing the list first and then
+	// failing leaves an empty editor and a document that never existed — and the
+	// parser refuses on an unknown kind or an unknown device precisely so that a
+	// partial read cannot happen quietly.
+	Segments.Reset(static_cast<int32>(Doc.Segments.size()));
+	for (const FAuthoredSegment& A : Doc.Segments)
+	{
+		Segments.Add(FromAuthored(A));
+	}
+
+	RebuildFromSegments();
+
+	// ===================== CLEAN AGAINST THE CANONICAL TEXT =====================
+	//
+	// `DidOpen` is given what this build would WRITE, not the bytes that were
+	// read. That looks like the wrong way round and is not: `IsDirty` compares the
+	// saved text against a re-serialisation, so storing the file's literal bytes
+	// would report a hand-edited-but-equivalent file as modified the moment it
+	// opened — different spacing, a field written in a different order, a number
+	// spelled 30.0 instead of 30.
+	//
+	// The consequence is stated rather than hidden: saving a non-canonical file
+	// normalises it. That is a diff somebody can read, once, instead of an unsaved
+	// marker they can never clear.
+	Session.DidOpen(TCHAR_TO_UTF8(*Path), TCHAR_TO_UTF8(*SerialiseDocument()));
+	Browser.Touch(TCHAR_TO_UTF8(*Path));
+	WriteRecentList();
+
+	UE_LOG(LogTUEvents, Log, TEXT("opened %d segments from %s"), Segments.Num(), *Path);
+	return true;
+}
+
+FString ATUCoasterRide::RecentListPath() const
+{
+	return FPaths::ProjectSavedDir() / TEXT("RecentTracks.txt");
+}
+
+void ATUCoasterRide::LoadRecentList()
+{
+	FString Text;
+	if (FFileHelper::LoadFileToString(Text, *RecentListPath()))
+	{
+		Browser.LoadRecent(TCHAR_TO_UTF8(*Text));
+	}
+	// Absent is a first run, not an error — the menu's empty state already says
+	// what to do about it.
+}
+
+void ATUCoasterRide::WriteRecentList() const
+{
+	const std::string Text = Browser.SaveRecent();
+	FFileHelper::SaveStringToFile(FString(UTF8_TO_TCHAR(Text.c_str())), *RecentListPath(),
+		FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+}
+
+void ATUCoasterRide::CheckDocumentRoundTrip() const
+{
+	// SAVE, OPEN, SAVE AGAIN — AND THE TWO FILES MUST BE THE SAME TEXT.
+	//
+	// The bridge between the editor struct and the authored model is the one part
+	// of the save path with no engine-free test: `FromAuthored` cannot be asserted
+	// in `Prototypes/`, because the type it produces is a UPROPERTY struct the
+	// reflection system owns. So the check runs here, on the real preset, at the
+	// only moment it costs nothing anybody notices.
+	//
+	// It is the same shape as the sensor layer's second means of detection: two
+	// routes to one answer, and a disagreement is reported rather than resolved.
+	//
+	// ponytail: this sees the two directions that are new — a field the parser
+	// drops and a field FromAuthored drops. It CANNOT see a field ToAuthored never
+	// carried, because then the file never had it and both texts agree. The guard
+	// for that one is the size static_assert in test_trackspline.cpp, which fires
+	// when FAuthoredSegment changes; a new UPROPERTY that nobody adds to the
+	// authored model at all is still only caught by review.
+	const FString First = SerialiseDocument();
+	if (First.IsEmpty())
+	{
+		return;   // already reported by the serialiser
+	}
+
+	FTrackDocument Back;
+	std::string Error;
+	if (!ParseTrackJson(TCHAR_TO_UTF8(*First), Back, Error))
+	{
+		UE_LOG(LogTUEvents, Warning,
+			TEXT("document: this build wrote a file it cannot read back — %s"),
+			UTF8_TO_TCHAR(Error.c_str()));
+		return;
+	}
+
+	FTrackDocument Again;
+	Again.HeartlineHeight = Back.HeartlineHeight;
+	Again.Segments.reserve(Back.Segments.size());
+	for (const FAuthoredSegment& A : Back.Segments)
+	{
+		// Through the editor struct and back, which is what an open actually does.
+		Again.Segments.push_back(ToAuthored(FromAuthored(A)));
+	}
+
+	std::string SecondText;
+	if (!WriteTrackJson(Again, SecondText, Error))
+	{
+		UE_LOG(LogTUEvents, Warning, TEXT("document: re-save refused — %s"),
+			UTF8_TO_TCHAR(Error.c_str()));
+		return;
+	}
+
+	if (FString(UTF8_TO_TCHAR(SecondText.c_str())) != First)
+	{
+		// LOUD, because the symptom otherwise is somebody's ride quietly opening
+		// with a device missing — a file that loads, looks right, and cannot stop
+		// a train.
+		UE_LOG(LogTUEvents, Error,
+			TEXT("document: OPENING AND RE-SAVING THIS TRACK WOULD CHANGE IT. "
+				 "A field is being lost between the editor struct and the file."));
+		return;
+	}
+
+	UE_LOG(LogTUEvents, Log, TEXT("document: %d segments survive a save and open unchanged"),
+		Segments.Num());
+}
+
+void ATUCoasterRide::RunDocumentSmokeTest()
+{
+	// THE SMOKE TEST THE PACKAGING CARD ASKS FOR, or its first half: boot, write a
+	// real file, read it back, and prove the ride on the other side is the same
+	// one. `-TUSmokeTest` on the command line, so it never runs for a player.
+	//
+	// It goes through `SaveDocumentTo` and `OpenDocumentFrom` rather than round
+	// -tripping the text in memory, because the parts it exists to cover are the
+	// ones that only exist on disc: the encoding, the folder, and whether opening
+	// really does replace the segment list with what was written.
+	const FString Path = FPaths::ProjectSavedDir() / TEXT("SmokeTest.track");
+	const int32 Before = Segments.Num();
+	const FString TextBefore = SerialiseDocument();
+
+	if (!SaveDocumentTo(Path))
+	{
+		UE_LOG(LogTUEvents, Error, TEXT("smoke: save failed"));
+		return;
+	}
+	if (!OpenDocumentFrom(Path))
+	{
+		UE_LOG(LogTUEvents, Error, TEXT("smoke: opening what we just wrote failed"));
+		return;
+	}
+
+	const FString TextAfter = SerialiseDocument();
+	if (Segments.Num() != Before || TextAfter != TextBefore)
+	{
+		UE_LOG(LogTUEvents, Error,
+			TEXT("smoke: the ride changed across a save and open — %d segments became %d"),
+			Before, Segments.Num());
+		return;
+	}
+	// AND THE SESSION AGREES IT IS SAVED. A file on disc that the shell still
+	// reports as unsaved is the dirty-marker bug arriving from the other side.
+	if (Session.IsDirty() || !Session.HasPath())
+	{
+		UE_LOG(LogTUEvents, Error,
+			TEXT("smoke: saved and opened, but the session does not think so"));
+		return;
+	}
+	UE_LOG(LogTUEvents, Log,
+		TEXT("smoke: %d segments saved, opened and unchanged; document is %s, clean"),
+		Segments.Num(), *FPaths::GetCleanFilename(UTF8_TO_TCHAR(Session.Path().c_str())));
+}
+
+FString ATUCoasterRide::ShellSettingsPath() const
+{
+	// Saved/ rather than Config/: the engine owns Config, and a file of ours in it
+	// is one `.ini` away from looking like something the engine will parse.
+	return FPaths::ProjectSavedDir() / TEXT("TrackUnlimited.cfg");
+}
+
+void ATUCoasterRide::LoadShellSettings()
+{
+	// DECLARED FIRST, ALWAYS. The store tells a declared key from an unknown one by
+	// whether it has a default, and that distinction is the whole of "unknown keys
+	// survive" — load before declaring and every setting we own is filed as
+	// somebody else's and written back to the bottom of the file.
+	DeclareSchemaDefaults(ShellSettings);
+
+	// ===================== AND THE LEVEL'S VALUE IS THE DEFAULT =====================
+	//
+	// Two of these live on the actor as authored UPROPERTYs, so the table's figure
+	// is not the truth about this ride — somebody who set the scan rate to 480 in
+	// the Details panel has said what they want, and applying the table's 240 over
+	// the top at BeginPlay would silently undo it. That is exactly the failure "a
+	// default is not a value" exists to prevent, arriving from the level instead of
+	// from an old config file.
+	//
+	// Re-declaring rather than special-casing the apply: the default becomes the
+	// authored value, so a settings screen that has never been touched displays
+	// what the ride is actually doing, applying it is a no-op, and an explicit
+	// choice still wins. One rule, no exception list.
+	ShellSettings.Declare("sim.scanHz", std::to_string(SimHz));
+	ShellSettings.Declare("input.invertLookY", bInvertLookY ? "true" : "false");
+
+	FString Text;
+	if (FFileHelper::LoadFileToString(Text, *ShellSettingsPath()))
+	{
+		ShellSettings.Load(TCHAR_TO_UTF8(*Text));
+		UE_LOG(LogTUEvents, Log, TEXT("settings: %d explicit, %d kept from a newer build"),
+			static_cast<int32>(ShellSettings.NumExplicit()),
+			static_cast<int32>(ShellSettings.NumUnknownKept()));
+	}
+	// NO FILE IS NOT AN ERROR. It is a first run, and it is also what the store is
+	// designed for: everything resolves to a default until somebody changes
+	// something, so there is nothing to write and nothing to warn about.
+
+	// The bindings, from the same table but into the OTHER store — the settings
+	// file must never contain a `key.` line, which is what keeps a binding from
+	// having two homes.
+	for (const FSettingEntry& E : SettingsSchema())
+	{
+		if (E.Kind == ESettingKind::Key)
+		{
+			Bindings.Bind(E.Key, E.Default);
+		}
+	}
+
+	ApplyShellSettings();
+}
+
+void ATUCoasterRide::WriteShellSettings() const
+{
+	const std::string Text = ShellSettings.Save();
+	if (!FFileHelper::SaveStringToFile(FString(UTF8_TO_TCHAR(Text.c_str())),
+		*ShellSettingsPath()))
+	{
+		// SAID, because the alternative is a settings screen that appears to work
+		// and loses everything at exit — the failure this whole file exists to
+		// prevent, arriving from the one direction the store cannot see.
+		UE_LOG(LogTUEvents, Warning, TEXT("settings: could not write %s"),
+			*ShellSettingsPath());
+	}
+}
+
+void ATUCoasterRide::ApplyShellSettings()
+{
+	// ONLY THE SETTINGS WITH A LIVE CONSUMER. The audio buses have nowhere to go
+	// yet and say so on their own rows; `sim.units` is a display concern nothing
+	// reads. Both are stored and neither is pretended about.
+
+	// THE SCAN RATE IS RESTART-FLAGGED AND THIS IS THE RESTART. Changing it while
+	// the ride is running would move every rate in the control system mid-lap —
+	// edge detection, restraint travel, drive ramps — and the run either side of
+	// the change would not be one run. So it is taken before the first scan and
+	// ignored after, and the row says restart.
+	if (!bScanStarted)
+	{
+		SimHz = FMath::Clamp(
+			static_cast<int32>(ShellSettings.GetNumber("sim.scanHz")), 30, 1000);
+	}
+
+	// The session owns WHEN an autosave happens; this is the interval it uses.
+	Session.SetAutosaveSeconds(ShellSettings.GetNumber("sim.autosaveSeconds"));
+
+	bPauseWhenUnfocused = ShellSettings.GetBool("sim.pauseUnfocused");
+	bInvertLookY = ShellSettings.GetBool("input.invertLookY");
+}
+
+void ATUCoasterRide::CheckBindingsAgainstInput(const UInputComponent* Input) const
+{
+	if (!Input)
+	{
+		return;
+	}
+
+	// What the input component genuinely answers to, gathered once. The axis
+	// bindings are deliberately not in here: the schema lists actions, and the two
+	// mouse axes are not actions anybody rebinds.
+	TSet<FName> Live;
+	for (const FInputKeyBinding& B : Input->KeyBindings)
+	{
+		Live.Add(B.Chord.Key.GetFName());
+	}
+
+	int32 Missing = 0;
+	for (const FSettingEntry& E : SettingsSchema())
+	{
+		if (E.Kind != ESettingKind::Key) { continue; }
+		const FName Named(UTF8_TO_TCHAR(E.Default.c_str()));
+		if (!Live.Contains(Named))
+		{
+			// THE PAGE IS THE THING THAT IS WRONG, whichever half moved. A row
+			// promising a key nothing answers to is a control somebody will press
+			// and conclude the application is broken — which is exactly what F2 did.
+			UE_LOG(LogTUEvents, Warning,
+				TEXT("controls: the settings page offers [%s] for \"%s\", and nothing is bound to it"),
+				*Named.ToString(), UTF8_TO_TCHAR(E.Label.c_str()));
+			++Missing;
+		}
+	}
+
+	// AND THE SILENCE IS THE RESULT. A checker that says nothing when all is well
+	// is one people leave switched on; this logs the agreement once, at Log level,
+	// because a cross-check never seen to pass is indistinguishable from one that
+	// is not running.
+	if (Missing == 0)
+	{
+		UE_LOG(LogTUEvents, Log,
+			TEXT("controls: every key the settings page offers is bound"));
+	}
+}
+
 void ATUCoasterRide::BeginPlay()
 {
 	Super::BeginPlay();
+
+	// BEFORE ANYTHING ELSE READS ONE. The scan rate is restart-flagged, and this
+	// is the only moment it can be applied — RebuildFromSegments and the first
+	// Tick are both downstream of it.
+	LoadShellSettings();
+	LoadRecentList();
+
 	RebuildFromSegments();
+
+	// THE BASELINE, so an untouched session is CLEAN rather than dirty from the
+	// first frame. `RebuildFromSegments` has just told the session what the
+	// document is; this says that is also what is saved.
+	//
+	// `DidCreateNew` rather than `DidOpen` because there is no path: the actor is
+	// placed in a level and THE LEVEL IS THE DOCUMENT, which is the same reason
+	// the session skips Boot here. Somebody who edits a segment now gets the
+	// unsaved marker in the frame, which is true — nothing on disc matches it.
+	Session.DidCreateNew(TCHAR_TO_UTF8(*SerialiseDocument()));
+	CheckDocumentRoundTrip();
+
+	if (FParse::Param(FCommandLine::Get(), TEXT("TUSmokeTest")))
+	{
+		RunDocumentSmokeTest();
+	}
 
 	// THE CABINET GETS POWER, and the ride opens the way a real one does: an
 	// operator walks the course, declares it clear, and turns the key.
@@ -3296,6 +3921,9 @@ void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/
 	// THE MENU IS NOT AN OVERLAY, so [F2] leaves it alone — hiding it would strand
 	// somebody on a screen whose only controls are the ones just hidden.
 	DrawMainMenu(Canvas);
+	// LAST, so it is on top of whatever it is asking about — and it rebuilds the
+	// row list, so a click while it is up can only hit its own three answers.
+	DrawLeaveConfirm(Canvas);
 	if (bHideOverlays) { return; }
 
 	DrawSegmentEditor(Canvas);
@@ -5630,6 +6258,24 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 			return;
 		}
 		bScanStarted = true;
+		SimAccumulator = 0.0;
+		return;
+	}
+
+	// ANOTHER WINDOW HAS FOCUS, AND THE RIDE WAITS. `sim.pauseUnfocused`.
+	//
+	// It is the SAME MECHANISM as every other clock control — no time arrives, and
+	// the step never changes — so an alt-tab is a gap in the wall clock rather than
+	// a different ride. What it avoids is the alternative: an unfocused window is
+	// throttled to a few frames a second, each carrying more time than the
+	// accumulator may work off, so the ride drops it and reports overruns. That run
+	// cannot be judged afterwards, and the seconds it lost are gone either way.
+	//
+	// Not folded into bSimPaused, which is the OPERATOR's pause and shows in the
+	// banner: coming back from a coffee to a ride that says somebody paused it is
+	// a different and worse lie than the one this fixes.
+	if (bPauseWhenUnfocused && !FApp::HasFocus())
+	{
 		SimAccumulator = 0.0;
 		return;
 	}

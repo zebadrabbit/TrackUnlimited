@@ -68,6 +68,20 @@ public:
 	UFUNCTION() void OnScalar(float Value);
 	UFUNCTION() void OnChoice(FString Selected, ESelectInfo::Type Info);
 	UFUNCTION() void OnPageClicked();
+
+	/**
+	 * A SLIDER IS RELEASED, AND ONLY THEN IS THE FILE WRITTEN.
+	 *
+	 * `OnValueChanged` fires every frame of a drag. Writing the settings file from
+	 * it is a whole file rewritten per frame for as long as somebody holds the
+	 * mouse down — which on a laptop is a disc kept awake by a volume slider, and
+	 * is the same mistake `TickAutosave` refuses to make one layer up.
+	 *
+	 * The VALUE still updates live, so the setting applies as you drag. Only the
+	 * write waits, which is the correct split: applying is cheap and immediate,
+	 * persisting is neither.
+	 */
+	UFUNCTION() void OnScalarDone();
 };
 
 UCLASS(Abstract)
@@ -83,6 +97,11 @@ public:
 
 protected:
 	virtual void NativeConstruct() override;
+
+	/** A BACKSTOP, not the main path. Every control persists its own change as it
+	 *  is made; this catches a slider moved with the keyboard, which never sends
+	 *  the mouse-capture-end that the drag path relies on. */
+	virtual void NativeDestruct() override;
 
 	/** Where the generated rows go. The asset provides an empty box; everything
 	 *  inside it is built here, so the asset never needs editing to add a row. */
@@ -126,10 +145,32 @@ public:
 	/** Read a setting's current value as a string, from whichever store owns it. */
 	FString ReadValue(const FSettingEntry& Entry) const;
 
-	/** Write it back to whichever store owns it, and apply it if the engine's.
-	 *  Public because the per-row bindings call it — they are the handler UMG
-	 *  insists on, not a second owner of the logic. */
+	/** Write it back to whichever store owns it, and apply it. Public because the
+	 *  per-row bindings call it — they are the handler UMG insists on, not a
+	 *  second owner of the logic. Does NOT write the file; see PersistSettings. */
 	void WriteValue(const FSettingEntry& Entry, const FString& Value);
+
+	/**
+	 * BACK TO THE DEFAULT, WHICH IS A DELETION AND NOT A WRITE.
+	 *
+	 * This existed as `WriteValue(E, E.Default)` and that was wrong in a way that
+	 * shows up a year later: writing the default's current TEXT records it in the
+	 * file as though the person had chosen it, so a better default shipped
+	 * afterwards reaches everybody EXCEPT the ones who pressed reset. They are
+	 * pinned to the value they were trying to get away from.
+	 *
+	 * `FSettings::Reset` erases the entry instead, and the read falls through to
+	 * whatever the current default is. The store has always done this properly;
+	 * the screen was going round it.
+	 *
+	 * UE-owned settings have no "unset", so those still write the default — which
+	 * is the honest limit rather than an inconsistency, and it is UE's file.
+	 */
+	void ResetValue(const FSettingEntry& Entry);
+
+	/** Write the settings file. Called when a change is FINISHED rather than as it
+	 *  is made, because a drag makes sixty of them a second. */
+	void PersistSettings() const;
 
 private:
 	/**

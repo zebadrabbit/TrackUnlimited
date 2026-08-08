@@ -171,6 +171,83 @@ void TestDeclaringLeavesNothingWritten()
     std::printf("  after changing one: it is written, and its neighbours are not\n");
 }
 
+// RESETTING A PAGE IS A DELETION, and this is the assertion the settings screen
+// turned out to need. Its first version reset a row by writing the default's TEXT
+// back through the same path an edit takes — which freezes today's default into
+// somebody's file and undoes "a default is not a value" one setting at a time,
+// silently, for the one person who pressed the button.
+//
+// The store has always known how to do this properly. The screen has to ask for
+// it, and the difference is invisible until the default changes a year later.
+void TestResettingAPageIsADeletion()
+{
+    std::printf("Resetting a page deletes rather than writes\n");
+    FSettings S;
+    DeclareSchemaDefaults(S);
+
+    for (const FSettingEntry& E : SettingsSchema())
+    {
+        if (E.Page == ESettingPage::Audio && E.Kind == ESettingKind::Scalar)
+        {
+            S.Set(E.Key, "0.25");
+        }
+    }
+    assert(S.NumExplicit() > 0);
+
+    for (const FSettingEntry& E : SettingsSchema())
+    {
+        if (E.Page == ESettingPage::Audio) { S.Reset(E.Key); }
+    }
+    assert(S.NumExplicit() == 0 && "a reset page must leave nothing written");
+
+    const std::string Text = S.Save();
+    for (const FSettingEntry& E : SettingsSchema())
+    {
+        if (E.Page == ESettingPage::Audio)
+        {
+            assert(Text.find(E.Key) == std::string::npos);
+        }
+    }
+
+    // AND THE POINT OF THE DELETION: a better default reaches somebody who has
+    // reset. Writing the text back would have pinned them to the old one for ever,
+    // which is precisely the state they were trying to leave.
+    S.Declare("audio.master", "0.6");
+    assert(S.Get("audio.master") == "0.6");
+    std::printf("  page reset writes nothing, and picks up a later default\n");
+}
+
+// SEEDING THE INPUT MAP FROM THIS TABLE MUST NOT PRODUCE A CONFLICT. Two rows
+// naming one key give a page that shows the same keystroke against two actions,
+// and the application binds whichever comes last — the exact ambiguity that has
+// already bitten this project twice, once with [Backspace] against the E-stop and
+// once with the editor's own function keys.
+//
+// FInputMap already reports conflicts and nothing was holding the table to it.
+void TestBindingsDoNotCollide()
+{
+    std::printf("No two actions claim one key\n");
+    FInputMap Map;
+    int Bound = 0;
+    for (const FSettingEntry& E : SettingsSchema())
+    {
+        if (E.Kind != ESettingKind::Key) { continue; }
+        assert(!E.Default.empty() && "a binding row with no key is a blank control");
+        // One context, because every binding this shell has is global today. That
+        // is what makes a duplicate a genuine collision rather than two contexts
+        // legitimately reusing a key.
+        Map.Bind(E.Key, E.Default);
+        ++Bound;
+    }
+    for (const FBindingConflict& C : Map.Conflicts())
+    {
+        std::printf("  COLLISION on [%s]: %s and %s\n",
+                    C.Key.c_str(), C.ActionA.c_str(), C.ActionB.c_str());
+    }
+    assert(!Map.HasConflicts());
+    std::printf("  %d bindings, no two on one key\n", Bound);
+}
+
 } // namespace
 
 int main()
@@ -182,6 +259,8 @@ int main()
     TestEveryPageIsPopulated();
     TestOwnershipIsCoherent();
     TestDeclaringLeavesNothingWritten();
+    TestResettingAPageIsADeletion();
+    TestBindingsDoNotCollide();
 
     std::printf("\ntest_settingsschema: all assertions passed.\n");
     return 0;

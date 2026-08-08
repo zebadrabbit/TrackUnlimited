@@ -586,7 +586,62 @@ static FTrackDocument SampleDocument()
     FAuthoredSegment Banked = AuthorArc(30.0, -40.0, 18.0);
     Banked.RollMode = ERollMode::WorldBank;
     Doc.Segments.push_back(Banked);
+
+    // A LIFT, so the control layer is in the sample rather than tested off to one
+    // side. Every round-trip assertion below already walks this document, and a
+    // device that only appeared in its own dedicated test would be a device the
+    // general checks never see.
+    FAuthoredSegment Lift = AuthorStraight(30.0);
+    Lift.Zone = EAuthoredZone::Lift;
+    Lift.ZoneSpeed = 3.5;
+    Lift.bAntiRollback = true;
+    Doc.Segments.push_back(Lift);
     return Doc;
+}
+
+// EVERY FIELD THIS SEGMENT'S KIND USES, AT A DISTINCT NON-DEFAULT VALUE. Anything
+// left at its default is a field the round trip cannot see fail: the writer omits
+// defaults, so a dropped field and a default field produce identical text.
+//
+// AN ARC, and the geometry fields the other kinds use are deliberately left alone.
+// The format emits only what the kind uses — a clothoid's curvature on an arc is
+// not an author's decision about this segment, it is a value the editor is holding
+// on to — so requiring them to survive would be asserting the opposite of the
+// design. The kinds that DO use them are covered by SampleDocument, which carries
+// one of each and is compared as exact geometry.
+static FAuthoredSegment EveryFieldSet()
+{
+    FAuthoredSegment A;
+    A.Kind = ESegmentKind::Arc;
+    A.Length = 41.5;
+    A.Radius = -27.25;
+    A.RollStartDegrees = 7.5;
+    A.RollEndDegrees = -12.25;
+    A.RollMode = ERollMode::WorldBank;
+    A.Zone = EAuthoredZone::BlockBrake;
+    A.ZoneSpeed = 2.5;
+    A.ZoneAccel = 1.75;
+    A.ZoneDecel = 3.25;
+    A.ZoneBrakeDecel = 4.5;
+    A.bAntiRollback = true;
+    A.bStartsNewDevice = true;
+    return A;
+}
+
+// The completeness list, and the only place a new authored field has to be added
+// twice on purpose. Compared field by field rather than by geometry, because the
+// device layer produces no geometry at all — a walk of the track cannot tell a
+// block brake from plain straight, which is exactly how it went unsaved.
+static bool SameAuthored(const FAuthoredSegment& A, const FAuthoredSegment& B)
+{
+    return A.Kind == B.Kind && A.Length == B.Length && A.Radius == B.Radius
+           && A.CurvatureStart == B.CurvatureStart && A.CurvatureEnd == B.CurvatureEnd
+           && A.ClimbAngleDegrees == B.ClimbAngleDegrees && A.Turns == B.Turns
+           && A.RollStartDegrees == B.RollStartDegrees && A.RollEndDegrees == B.RollEndDegrees
+           && A.RollMode == B.RollMode && A.Zone == B.Zone && A.ZoneSpeed == B.ZoneSpeed
+           && A.ZoneAccel == B.ZoneAccel && A.ZoneDecel == B.ZoneDecel
+           && A.ZoneBrakeDecel == B.ZoneBrakeDecel && A.bAntiRollback == B.bAntiRollback
+           && A.bStartsNewDevice == B.bStartsNewDevice;
 }
 
 static std::vector<std::string> SplitLines(const std::string& S)
@@ -655,6 +710,80 @@ static void TestTrackRoundTripsThroughJson()
 
     std::printf("  track I/O: %zu segments round-trip exactly; re-save is byte-identical\n",
                 Doc.Segments.size());
+}
+
+// THE DEVICE LAYER SURVIVES THE FILE, and it needs its own assertion because the
+// round-trip above compares GEOMETRY — and a block brake produces none. Saving
+// dropped every zone, speed, rate and flag for as long as the format existed, and
+// walking the track could never have noticed: the ride is the same shape with its
+// brakes missing.
+static void TestDeviceLayerSurvivesTheFile()
+{
+    FTrackDocument Doc;
+    Doc.Segments.push_back(EveryFieldSet());
+
+    std::string Text, Err;
+    assert(WriteTrackJson(Doc, Text, Err));
+    assert(Err.empty());
+
+    FTrackDocument Back;
+    assert(ParseTrackJson(Text, Back, Err));
+    assert(Err.empty());
+    assert(Back.Segments.size() == 1);
+
+    if (!SameAuthored(Doc.Segments[0], Back.Segments[0]))
+    {
+        std::printf("  A FIELD DID NOT SURVIVE. Written:\n%s", Text.c_str());
+    }
+    assert(SameAuthored(Doc.Segments[0], Back.Segments[0]));
+
+    // AND THE WRITER IS NOT SILENTLY OMITTING THEM. Comparing the structs alone
+    // would pass if both sides simply kept their defaults, so the text itself has
+    // to be shown to carry each key.
+    const char* MustAppear[] = {"\"zone\": \"blockBrake\"", "zoneSpeed", "zoneAccel",
+                                "zoneDecel", "zoneBrakeDecel", "antiRollback",
+                                "startsNewDevice"};
+    for (const char* Key : MustAppear)
+    {
+        if (Text.find(Key) == std::string::npos)
+        {
+            std::printf("  NOT WRITTEN: %s\n", Key);
+        }
+        assert(Text.find(Key) != std::string::npos);
+    }
+
+    // A file from before the control layer existed is still a valid track, and
+    // loads as the unpowered geometry it always was.
+    FTrackDocument Old;
+    assert(ParseTrackJson("{\"segments\": [{\"kind\": \"straight\", \"length\": 10}]}",
+                          Old, Err));
+    assert(Old.Segments.size() == 1);
+    assert(Old.Segments[0].Zone == EAuthoredZone::None);
+    assert(!Old.Segments[0].bAntiRollback);
+
+    // AN UNKNOWN DEVICE IS REFUSED, not read as plain track. That is the whole
+    // argument: a ride whose brake silently became straight track still loads,
+    // still looks right, and cannot stop a train.
+    FTrackDocument Bad;
+    assert(!ParseTrackJson(
+        "{\"segments\": [{\"kind\": \"straight\", \"length\": 10, \"zone\": \"magnetic\"}]}",
+        Bad, Err));
+    assert(!Err.empty());
+    std::printf("  device layer: every field survives, an old file still loads, "
+                "an unknown device is refused\n");
+
+    // A NEW AUTHORED FIELD MUST NOT BE ABLE TO GO UNSAVED IN SILENCE. Everything
+    // above tests the fields it knows about; nothing makes somebody adding the
+    // next one come here. This does: add a field and this fires, and the message
+    // is the checklist.
+    //
+    // In the test rather than the header on purpose — a padding difference on some
+    // future compiler should annoy whoever runs the suite, never break the build
+    // of the game.
+    static_assert(sizeof(FAuthoredSegment) == sizeof(FTrackSegment) + 120,
+                  "FAuthoredSegment changed size, which means a field was added or removed. "
+                  "Add it to WriteTrackJson, to ParseTrackJson, to SameAuthored and to "
+                  "EveryFieldSet, or it will not survive a save.");
 }
 
 static void TestOneEditIsOneLineOfDiff()
@@ -1838,6 +1967,7 @@ int main()
     TestResolvedRollRateSeesWhatTheAuthoredRateCannot();
     TestMixedRollModesAreReportedNotGuessed();
     TestTrackRoundTripsThroughJson();
+    TestDeviceLayerSurvivesTheFile();
     TestOneEditIsOneLineOfDiff();
     TestDefaultsAreOmittedSoNewFieldsCostNothing();
     TestUnknownFieldsLoadButUnknownGeometryDoesNot();

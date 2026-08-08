@@ -546,9 +546,52 @@ struct FTUWalkway
 	ETUWalkway Side = ETUWalkway::Both;
 };
 
-// Reflected editor struct -> the authored model the prototypes understand.
-// One direction only, matching BuildSegment: this is a view onto the data, not
-// a second copy of it.
+// ===================== THE EDITOR STRUCT AND THE AUTHORED MODEL =====================
+//
+// TWO DIRECTIONS NOW, AND THAT IS NOT A REVERSAL OF THE OLD RULE. What has no
+// inverse is `BuildSegment`: deriving "radius 20, 15 degrees, 2 turns" back out of
+// an integrated curvature profile is the recovery problem the authored model
+// exists to avoid needing to solve. These two are authored-to-authored — the same
+// typed numbers in two spellings — so the pair IS lossless, and it has to be,
+// because it is what a save and an open go through.
+//
+// The zone mapping is a THIRD list of device names, after the enum and the file's
+// strings. It cannot be generated from either: one is a UENUM the reflection
+// system owns and the other is text stored on disc for ever. What keeps it honest
+// is that both switches are exhaustive with no `default:`, so adding a device
+// fails to compile here rather than silently mapping to unpowered track.
+inline EAuthoredZone ToAuthoredZone(ETUSegmentZone Z)
+{
+	switch (Z)
+	{
+	case ETUSegmentZone::None: return EAuthoredZone::None;
+	case ETUSegmentZone::Lift: return EAuthoredZone::Lift;
+	case ETUSegmentZone::Launch: return EAuthoredZone::Launch;
+	case ETUSegmentZone::Brake: return EAuthoredZone::Brake;
+	case ETUSegmentZone::BlockBrake: return EAuthoredZone::BlockBrake;
+	case ETUSegmentZone::Station: return EAuthoredZone::Station;
+	case ETUSegmentZone::StationUnload: return EAuthoredZone::StationUnload;
+	case ETUSegmentZone::StationLoad: return EAuthoredZone::StationLoad;
+	}
+	return EAuthoredZone::None;
+}
+
+inline ETUSegmentZone FromAuthoredZone(EAuthoredZone Z)
+{
+	switch (Z)
+	{
+	case EAuthoredZone::None: return ETUSegmentZone::None;
+	case EAuthoredZone::Lift: return ETUSegmentZone::Lift;
+	case EAuthoredZone::Launch: return ETUSegmentZone::Launch;
+	case EAuthoredZone::Brake: return ETUSegmentZone::Brake;
+	case EAuthoredZone::BlockBrake: return ETUSegmentZone::BlockBrake;
+	case EAuthoredZone::Station: return ETUSegmentZone::Station;
+	case EAuthoredZone::StationUnload: return ETUSegmentZone::StationUnload;
+	case EAuthoredZone::StationLoad: return ETUSegmentZone::StationLoad;
+	}
+	return ETUSegmentZone::None;
+}
+
 inline FAuthoredSegment ToAuthored(const FTUTrackSegment& S)
 {
 	FAuthoredSegment A;
@@ -571,6 +614,17 @@ inline FAuthoredSegment ToAuthored(const FTUTrackSegment& S)
 	A.RollMode = S.RollMode == ETURollMode::WorldBank ? ERollMode::WorldBank
 													 : ERollMode::PathRelative;
 
+	// THE CONTROL LAYER. Absent here until 2026-08-08, which meant a saved track
+	// was geometry with no brakes, no station and no lift — and nothing could see
+	// it, because the ride is the same shape either way.
+	A.Zone = ToAuthoredZone(S.Zone);
+	A.ZoneSpeed = S.ZoneSpeed;
+	A.ZoneAccel = S.ZoneAccel;
+	A.ZoneDecel = S.ZoneDecel;
+	A.ZoneBrakeDecel = S.ZoneBrakeDecel;
+	A.bAntiRollback = S.bAntiRollback;
+	A.bStartsNewDevice = S.bStartsNewDevice;
+
 	A.RawSegment.Length = S.Length;
 	A.RawSegment.YawCurvatureStart = S.YawCurvatureStart;
 	A.RawSegment.YawCurvatureEnd = S.YawCurvatureEnd;
@@ -578,4 +632,48 @@ inline FAuthoredSegment ToAuthored(const FTUTrackSegment& S)
 	A.RawSegment.PitchCurvatureEnd = S.PitchCurvatureEnd;
 	A.RawSegment.Torsion = S.Torsion;
 	return A;
+}
+
+// The direction an OPEN goes. Everything `ToAuthored` reads is written back, and
+// the fields it does not carry keep the struct's own defaults — which is right:
+// they are editor state (selection, the derived StartS/EndS) rather than anything
+// somebody typed.
+inline FTUTrackSegment FromAuthored(const FAuthoredSegment& A)
+{
+	FTUTrackSegment S;
+	switch (A.Kind)
+	{
+	case ESegmentKind::Straight: S.Kind = ETUSegmentKind::Straight; break;
+	case ESegmentKind::Arc: S.Kind = ETUSegmentKind::Arc; break;
+	case ESegmentKind::Clothoid: S.Kind = ETUSegmentKind::Clothoid; break;
+	case ESegmentKind::Helix: S.Kind = ETUSegmentKind::Helix; break;
+	case ESegmentKind::Raw: S.Kind = ETUSegmentKind::Raw; break;
+	}
+	S.Length = static_cast<float>(A.Kind == ESegmentKind::Raw ? A.RawSegment.Length : A.Length);
+	S.Radius = static_cast<float>(A.Radius);
+	S.CurvatureStart = static_cast<float>(A.CurvatureStart);
+	S.CurvatureEnd = static_cast<float>(A.CurvatureEnd);
+	S.ClimbAngleDegrees = static_cast<float>(A.ClimbAngleDegrees);
+	S.Turns = static_cast<float>(A.Turns);
+	S.RollStartDegrees = static_cast<float>(A.RollStartDegrees);
+	S.RollEndDegrees = static_cast<float>(A.RollEndDegrees);
+	S.RollMode = A.RollMode == ERollMode::WorldBank ? ETURollMode::WorldBank
+													: ETURollMode::PathRelative;
+
+	S.Zone = FromAuthoredZone(A.Zone);
+	S.ZoneSpeed = static_cast<float>(A.ZoneSpeed);
+	S.ZoneAccel = static_cast<float>(A.ZoneAccel);
+	S.ZoneDecel = static_cast<float>(A.ZoneDecel);
+	S.ZoneBrakeDecel = static_cast<float>(A.ZoneBrakeDecel);
+	S.bAntiRollback = A.bAntiRollback;
+	S.bStartsNewDevice = A.bStartsNewDevice;
+
+	S.YawCurvatureStart = static_cast<float>(A.RawSegment.YawCurvatureStart);
+	S.YawCurvatureEnd = static_cast<float>(A.RawSegment.YawCurvatureEnd);
+	S.PitchCurvatureStart = static_cast<float>(A.RawSegment.PitchCurvatureStart);
+	S.PitchCurvatureEnd = static_cast<float>(A.RawSegment.PitchCurvatureEnd);
+	// Torsion only means anything on a Raw segment — every other kind derives its
+	// own, and the file stores these three only for Raw for exactly that reason.
+	S.Torsion = static_cast<float>(A.RawSegment.Torsion);
+	return S;
 }
