@@ -52,7 +52,42 @@ struct FTrackZone
     // to pull.
     double MaxAccel = 0.0; // applied when the train is below target
     double MaxDecel = 0.0; // applied when the train is above target
+
+    // ===================== THE BRAKE, AS A SECOND DEVICE =====================
+    //
+    // A real block brake is TWO machines sharing a stretch of track: a friction
+    // or magnetic pad that can only ever remove energy, and drive tyres that can
+    // push and hold. NL2 exposes them as separate devices with separate speeds
+    // and separate rates, and it is right to — they are separate hardware, they
+    // are specified separately, and one of them can fail without the other.
+    //
+    // Everything above this line is the TRANSPORT: a SETPOINT, driven toward
+    // from either side. Everything below is the BRAKE: a CEILING, never a
+    // setpoint. A train already under the limit is untouched, which is the whole
+    // difference and the reason a trim cannot start a train — a ceiling can only
+    // reduce.
+    //
+    // Collapsing the two into one number is what `ServeHolds` documents itself
+    // doing: "commanding a crawl speed says both stages in one number". It gets
+    // the right answer for the sequence and it cannot express a brake that bites
+    // at 8 m/s^2 conveying at 0.5, which is an ordinary specification.
+    //
+    // NEGATIVE MEANS NO BRAKE DEVICE, so every zone built before this existed
+    // behaves exactly as it did.
+    double BrakeLimit = -1.0;   // m/s ceiling; < 0 is "no pad on this section"
+    double BrakeDecel = 0.0;    // m/s^2, its own rate, not the transport's
 };
+
+// A section with drive tyres AND a pad, which is what every real block brake is.
+// The pad bites at its own rate; the tyres convey at theirs.
+inline FTrackZone MakeBlockBrake(double StartS, double EndS, double ConveySpeed,
+                                 double Grip, double PadLimit, double PadBite)
+{
+    FTrackZone Z{StartS, EndS, ConveySpeed, Grip, Grip};
+    Z.BrakeLimit = PadLimit;
+    Z.BrakeDecel = PadBite;
+    return Z;
+}
 
 inline FTrackZone MakeLift(double StartS, double EndS, double ChainSpeed, double Grip = 3.0)
 {
@@ -217,6 +252,29 @@ public:
         }
         Zones[Index].TargetSpeed = Speed;
         return true;
+    }
+
+    // THE PAD IS COMMANDED SEPARATELY FROM THE TYRES, which is the whole reason
+    // they are two fields. A block brake's sequence is "pad bites, train stops,
+    // pad releases, tyres convey" — four states of two devices, and a single
+    // commanded speed can only say two of them.
+    //
+    // A NEGATIVE LIMIT RELEASES THE PAD, rather than there being a separate
+    // release call. One number with a documented out-of-band value beats two
+    // calls that can disagree about whether the pad is on.
+    bool SetZoneBrakeLimit(std::size_t Index, double LimitMs)
+    {
+        if (Index >= Zones.size())
+        {
+            return false;
+        }
+        Zones[Index].BrakeLimit = LimitMs;
+        return true;
+    }
+
+    double GetZoneBrakeLimit(std::size_t Index) const
+    {
+        return Index < Zones.size() ? Zones[Index].BrakeLimit : -1.0;
     }
 
     // ===================== A DEVICE THAT DOES NOT DELIVER =====================
@@ -565,8 +623,28 @@ public:
             const double Needed = (Zone.TargetSpeed - VelocityMs) / DeltaSeconds - GravityAccel + Resistive;
             // What the device DELIVERS, which on a healthy one is all of it.
             const double Health = zi < ZoneHealth.size() ? ZoneHealth[zi] : 1.0;
-            const double Applied = std::max(-Zone.MaxDecel * Health,
-                                            std::min(Zone.MaxAccel * Health, Needed));
+            double Applied = std::max(-Zone.MaxDecel * Health,
+                                      std::min(Zone.MaxAccel * Health, Needed));
+
+            // ---- AND THE PAD, WHICH IS A SECOND DEVICE ON THE SAME TRACK.
+            //
+            // A CEILING, NOT A SETPOINT: a train already under the limit is
+            // untouched, so this can never add energy however it is authored.
+            // That is what makes it a brake rather than a slow drive, and the
+            // std::min(0.0, ...) is where the guarantee lives — not in a comment
+            // asking callers to pass sensible numbers.
+            //
+            // The harder of the two wins. Both machines are physically on the
+            // train, and a ride control system fails toward the slower answer —
+            // the same rule overlapping zones already follow one level down.
+            if (Zone.BrakeLimit >= 0.0 && VelocityMs > Zone.BrakeLimit)
+            {
+                const double PadNeeded =
+                    (Zone.BrakeLimit - VelocityMs) / DeltaSeconds - GravityAccel + Resistive;
+                const double PadApplied =
+                    std::max(-Zone.BrakeDecel * Health, std::min(0.0, PadNeeded));
+                Applied = std::min(Applied, PadApplied);
+            }
             ZoneApplied[zi] = Applied;
             // Overlapping zones are an authoring error, but a ride control
             // system should fail toward the slower answer, so the most

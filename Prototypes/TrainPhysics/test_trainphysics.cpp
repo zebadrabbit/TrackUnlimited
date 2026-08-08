@@ -1119,6 +1119,116 @@ static void TestRideProfileCarriesRollRateWhichGCannot()
                 P.MaxAbsRollRate, P.MaxAbsRollRateS);
 }
 
+// ===================== THE PAD AND THE TYRES ARE TWO DEVICES =====================
+
+// A CEILING CANNOT ADD ENERGY, however it is authored. This is the assertion
+// that makes BrakeLimit a brake rather than a slow drive, and it is asserted
+// with a deliberately hostile value: a pad "limit" far above the train's speed,
+// which a setpoint would accelerate toward.
+static void TestABrakeLimitNeverAddsEnergy()
+{
+    const FTrack T = MakeLevelStraight(200.0);
+    FTrainConfig C;
+    C.RollingResistance = 0.0;
+    C.DragK = 0.0;
+
+    FTrain Train(T, C);
+    // No transport at all — a bare pad, and its limit is 40 m/s.
+    FTrackZone Pad{0.0, 200.0, 0.0, 0.0, 0.0};
+    Pad.BrakeLimit = 40.0;
+    Pad.BrakeDecel = 8.0;
+    Train.AddZone(Pad);
+    Train.Place(0.0, 10.0);
+
+    for (int i = 0; i < 600; ++i) { Train.Step(1.0 / 60.0); }
+
+    // Frictionless and level, so it should hold 10 m/s exactly. A setpoint would
+    // have hauled it to 40.
+    std::printf("  a 40 m/s pad limit on a 10 m/s train: %.6f m/s after 10 s\n",
+                Train.GetSpeed());
+    assert(std::fabs(Train.GetSpeed() - 10.0) < 1e-9);
+}
+
+// THE PAD BITES AT ITS OWN RATE, not the transport's. This is the specification
+// that could not be expressed before: a hard brake feeding gentle tyres.
+static void TestThePadBitesAtItsOwnRateNotTheTransports()
+{
+    const FTrack T = MakeLevelStraight(400.0);
+    FTrainConfig C;
+    C.RollingResistance = 0.0;
+    C.DragK = 0.0;
+
+    // Tyres that convey at 2 m/s with only 0.5 m/s^2 of authority, and a pad
+    // that stops at 8. Collapsed into one number this is impossible: whichever
+    // rate is chosen is wrong for the other device.
+    FTrain Hard(T, C);
+    Hard.AddZone(MakeBlockBrake(0.0, 400.0, /*convey*/ 2.0, /*grip*/ 0.5,
+                                /*padLimit*/ 2.0, /*padBite*/ 8.0));
+    Hard.Place(0.0, 30.0);
+
+    FTrain Soft(T, C);
+    // The same device with no pad — the transport alone, as it was before.
+    Soft.AddZone(FTrackZone{0.0, 400.0, 2.0, 0.5, 0.5});
+    Soft.Place(0.0, 30.0);
+
+    for (int i = 0; i < 120; ++i) { Hard.Step(1.0 / 60.0); Soft.Step(1.0 / 60.0); }
+
+    // Two seconds in: the pad has taken 16 m/s off, the tyres only 1.
+    std::printf("  after 2 s from 30 m/s: pad+tyres %.3f m/s, tyres alone %.3f m/s\n",
+                Hard.GetSpeed(), Soft.GetSpeed());
+    assert(std::fabs(Hard.GetSpeed() - 14.0) < 1e-6);
+    assert(std::fabs(Soft.GetSpeed() - 29.0) < 1e-6);
+}
+
+// RELEASING THE PAD LEAVES THE TYRES, which is the second half of the two-stage
+// hold and the state the collapsed model could not reach: brake off, conveying.
+static void TestReleasingThePadLeavesTheTyresConveying()
+{
+    const FTrack T = MakeLevelStraight(400.0);
+    FTrainConfig C;
+    C.RollingResistance = 0.0;
+    C.DragK = 0.0;
+
+    FTrain Train(T, C);
+    Train.AddZone(MakeBlockBrake(0.0, 400.0, 2.0, 1.0, /*padLimit*/ 0.0, /*padBite*/ 8.0));
+    Train.Place(0.0, 10.0);
+
+    // Pad at zero: it stops, and the tyres cannot convey against it.
+    for (int i = 0; i < 300; ++i) { Train.Step(1.0 / 60.0); }
+    std::printf("  pad closed: %.6f m/s\n", Train.GetSpeed());
+    assert(Train.GetSpeed() < 1e-6);
+
+    // Release it, and the tyres take over unopposed.
+    assert(Train.SetZoneBrakeLimit(0, -1.0));
+    for (int i = 0; i < 300; ++i) { Train.Step(1.0 / 60.0); }
+    std::printf("  pad released: %.6f m/s (tyres commanded 2.0)\n", Train.GetSpeed());
+    assert(std::fabs(Train.GetSpeed() - 2.0) < 1e-6);
+}
+
+// AND NO PAD IS EXACTLY WHAT IT WAS. Every zone built before this existed has
+// BrakeLimit < 0, and this is the assertion that says the default changed
+// nothing — the whole reason every canonical figure in the docs still holds.
+static void TestAZoneWithNoPadIsBitIdentical()
+{
+    const FTrack T = MakeLevelStraight(300.0);
+    FTrainConfig C;
+
+    FTrain Old(T, C);
+    Old.AddZone(MakeBrake(0.0, 300.0, 5.0, 3.0));
+    Old.Place(0.0, 25.0);
+
+    FTrain New(T, C);
+    FTrackZone Z = MakeBrake(0.0, 300.0, 5.0, 3.0);
+    Z.BrakeLimit = -1.0;             // explicitly absent
+    New.AddZone(Z);
+    New.Place(0.0, 25.0);
+
+    for (int i = 0; i < 900; ++i) { Old.Step(1.0 / 240.0); New.Step(1.0 / 240.0); }
+    std::printf("  no pad: %.12f vs %.12f m/s\n", Old.GetSpeed(), New.GetSpeed());
+    assert(Old.GetSpeed() == New.GetSpeed());
+    assert(Old.GetDistance() == New.GetDistance());
+}
+
 int main()
 {
     TestGravityIsExactEnergyExchange();
@@ -1152,6 +1262,10 @@ int main()
     TestRideProfileReportsAStallRatherThanHanging();
     TestRideProfileReportsARollbackDistinctlyFromAStall();
     TestRideProfileCarriesRollRateWhichGCannot();
+    TestABrakeLimitNeverAddsEnergy();
+    TestThePadBitesAtItsOwnRateNotTheTransports();
+    TestReleasingThePadLeavesTheTyresConveying();
+    TestAZoneWithNoPadIsBitIdentical();
     std::printf("All train physics tests passed.\n");
     return 0;
 }
