@@ -2,6 +2,8 @@
 
 #include "ProceduralMeshComponent.h"
 #include "RenderCore.h"                 // SetNearClipPlaneGlobals
+#include "Blueprint/UserWidget.h"
+#include "UI/TUFrameWidget.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 
@@ -58,6 +60,16 @@ ATUCoasterRide::ATUCoasterRide()
 	Cars->SetupAttachment(Root);
 	Cars->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	Cars->SetCastShadow(false);
+	// The shell's frame, found the same way the cars find their cube: by path, so
+	// a fresh actor has a UI without anybody wiring one up. Overridable in the
+	// Details panel, and null is a valid state.
+	static ConstructorHelpers::FClassFinder<UTUFrameWidget> FrameBP(
+		TEXT("/Game/UI/WBP_TUFrame"));
+	if (FrameBP.Succeeded())
+	{
+		FrameWidgetClass = FrameBP.Class;
+	}
+
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> CubeMesh(TEXT("/Engine/BasicShapes/Cube.Cube"));
 	if (CubeMesh.Succeeded())
 	{
@@ -2879,6 +2891,29 @@ void ATUCoasterRide::BeginPlay()
 	Plc.PowerOn();
 	Plc.DeclareCourseClear();
 	SetPlcMode(EPlcMode::Run);
+
+	// ===================== THE SHELL =====================
+	//
+	// Created here rather than by a HUD or a game mode, because the frame is a
+	// view of THIS ride and there is exactly one of them. Routing it through a
+	// game mode would add a class whose only job is to know about this actor.
+	//
+	// GUARDED, AND MISSING IS FINE. The debug-canvas panels are still the whole
+	// UI in a build without the asset, and a ride that refused to run without
+	// its chrome would have made a layout asset a hard dependency of the
+	// simulation — which is exactly backwards.
+	if (FrameWidgetClass && GetWorld())
+	{
+		if (APlayerController* PC = GetWorld()->GetFirstPlayerController())
+		{
+			FrameWidget = CreateWidget<UTUFrameWidget>(PC, FrameWidgetClass);
+			if (FrameWidget)
+			{
+				FrameWidget->AttachTo(this);
+				FrameWidget->AddToViewport();
+			}
+		}
+	}
 
 	if (bDrawTrack)
 	{

@@ -1376,6 +1376,27 @@ public:
 	void EnterAppMode(EAppMode Wanted, bool bConfirmed = false);
 
 	/**
+	 * THE SHELL'S FRAME. Created once at BeginPlay and given this actor to read.
+	 *
+	 * A class reference rather than a hard-coded spawn, so the layout asset can
+	 * be swapped without touching code — which is the whole point of the split
+	 * that puts behaviour in C++ and layout in the asset.
+	 *
+	 * NULL IS A VALID STATE. The debug-canvas panels still work and are still the
+	 * only UI in a build where this asset is missing; a shell that refused to run
+	 * without its chrome would make the asset a hard dependency of the ride,
+	 * which it is not.
+	 */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|UI")
+	TSubclassOf<class UTUFrameWidget> FrameWidgetClass;
+
+private:
+	UPROPERTY(Transient)
+	TObjectPtr<class UTUFrameWidget> FrameWidget;
+
+public:
+
+	/**
 	 * THE FRAME'S READ-ONLY WINDOW ONTO THE RIDE.
 	 *
 	 * Accessors rather than public members: the UI needs to READ four things and
