@@ -126,6 +126,33 @@ on any new colour before it ships.
 
 ---
 
+## 3b. Program flow — one session, three modes
+
+**Decided 2026-08-07.** NoLimits 2 forks at its main menu — simulator or editor — and changing your
+mind means going back. Considered and **rejected** here.
+
+- **Operate has no side to be on.** NL2 forks between two things; this has three, and the third is
+  the pillar with no precedent in either NL2 or Planet Coaster.
+- **Switching is free, and that is load-bearing.** Build ↔ Operate ↔ Ride discards nothing, which is
+  why those transitions never ask. A fork puts the document through a load to change your mind — and
+  the real workflow is *edit a brake, watch it dispatch, ride it, edit again*.
+- **It would invert the on-ramp.** Depth is meant to be findable by somebody who wants it and
+  invisible to somebody who does not. A fork before the session makes you choose before you know
+  what either involves.
+
+**What NL2 gets right and is taken:** the menu says what you are about to do, so the *action* picks
+the landing mode — new from a template lands in **Build**, open or a recent lands in **Ride**.
+Nothing is locked; `[Tab]` and the frame tabs still move freely.
+
+**`[Tab]` is a cycle and is not the primary control.** Build → Operate → Ride → Build, so which
+direction is cheap depends on where you are standing. The frame's three tabs are the direct control;
+the key remains a quick toggle.
+
+*Cost of changing later:* high once the menu has grown a second navigation layer around it, which is
+why it is settled now.
+
+---
+
 ## 4. Layout — fixed
 
 **No docking, no user-arrangeable panels, no saved workspace.** Each mode gets a designed layout.

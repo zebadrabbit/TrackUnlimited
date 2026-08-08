@@ -38,6 +38,44 @@
 #include <cstddef>
 #include <string>
 
+// ===================== ONE SESSION, THREE MODES — NOT TWO PROGRAMS =====================
+//
+// DECIDED 2026-08-07. NoLimits 2 forks at its main menu: you launch into the
+// simulator or into the editor, and changing your mind means going back. That
+// does not transfer here, for three reasons worth keeping.
+//
+// **OPERATE HAS NO SIDE TO BE ON.** NL2 has two things to fork between. This has
+// three, and the third is the pillar with no precedent in NL2 or Planet Coaster.
+// A two-way fork forces Operate into a bucket it does not belong to.
+//
+// **SWITCHING IS FREE, AND THAT IS LOAD-BEARING.** Build to Operate to Ride
+// discards nothing — the document is open and in memory — which is why those
+// transitions never ask. A top-level fork puts the document through a load to
+// change your mind, and the actual workflow is: edit a brake, watch it dispatch,
+// ride it, edit again. That loop IS the product.
+//
+// **AND IT WOULD INVERT THE ON-RAMP.** The stated position is that depth should
+// be findable by somebody who wants it and invisible to somebody who does not. A
+// fork before the session makes you choose between building and riding before
+// you know what either involves — turning the editor into a floor you step over
+// rather than a ceiling you reach for.
+//
+// WHAT NL2 GETS RIGHT AND IS TAKEN: the menu should say what you are about to
+// do. So the ACTION picks the landing mode, and nothing is locked:
+//
+//     new from a template  ->  Build
+//     open, or a recent    ->  Ride
+//
+// Somebody opening a downloaded track gets a ride rather than an editor they did
+// not ask for; somebody starting fresh gets the thing they came for. One field,
+// not a second navigation layer.
+//
+// AND THE MODE KEY IS A CYCLE, WHICH IS NOT THE PRIMARY CONTROL. [Tab] goes
+// Build -> Operate -> Ride -> Build, so Ride to Build is one press and Build to
+// Ride is two — which direction is cheap depends on where you are standing, and
+// that reads as awkward because it is. The frame's three tabs are the direct
+// control; the key stays as the quick toggle for somebody who wants it.
+//
 // Where the application is. Four states and a boot, because the modes were
 // decided by the program-flow card and they are what the shell's navigation is.
 enum class EAppMode
