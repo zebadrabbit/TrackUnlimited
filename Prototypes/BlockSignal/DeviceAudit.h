@@ -83,6 +83,15 @@ struct FDeviceSpan
     bool bIsBlockBoundary = false;   // the interlocking parks trains here
     std::string Name;                // for the message, e.g. "block brake"
 
+    // WHAT THIS DEVICE ACTUALLY BRAKES AT, from the zone itself.
+    //
+    // Not a setting on the audit. A global "service deceleration" was the first
+    // version and it was a SECOND SOURCE OF TRUTH: the audit predicted stopping
+    // distances at one rate while the physics braked at another, so it could
+    // report a brake as too short that stops fine, or pass one that does not.
+    // Zero means "ask the settings", for a caller that has no zone to read.
+    double DecelMs2 = 0.0;
+
     double Length() const { return EndS - StartS; }
 };
 
@@ -158,21 +167,26 @@ inline std::vector<FDeviceFinding> AuditDevices(
         // for, and the speed it leaves at is the speed it was asked for.
         if (D.bIsBlockBoundary && D.bCanHold)
         {
+            // THE DEVICE'S OWN RATE, not a global one. A single figure for every
+            // brake on the ride is a second source of truth about how hard they
+            // bite, and it disagrees with the physics in whichever direction the
+            // guess was wrong.
+            const double Decel = D.DecelMs2 > 0.0 ? D.DecelMs2 : Settings.ServiceDecelMs2;
             const double Entry = SpeedAt(D.StartS);
-            const double Need = StoppingDistanceM(Entry, Settings.ServiceDecelMs2);
+            const double Need = StoppingDistanceM(Entry, Decel);
             const double Usable = L - Settings.NoseClearanceM;
             if (Need > Usable)
             {
                 // What it will still be doing at the far end. This is the number
                 // that separates "a metre short" from "will not stop at all".
-                const double ExitSq = Entry * Entry - 2.0 * Settings.ServiceDecelMs2 * Usable;
+                const double ExitSq = Entry * Entry - 2.0 * Decel * Usable;
                 const double Exit = ExitSq > 0.0 ? std::sqrt(ExitSq) : 0.0;
                 std::snprintf(Buf, sizeof(Buf),
                     "%s at %.0f m: a train arrives at %.1f m/s and needs %.0f m to stop "
                     "at %.1f m/s^2, but only %.0f m is usable. It leaves the block at "
                     "%.1f m/s. Lengthen it by %.0f m, brake harder, or slow the train "
                     "upstream.",
-                    D.Name.c_str(), D.StartS, Entry, Need, Settings.ServiceDecelMs2,
+                    D.Name.c_str(), D.StartS, Entry, Need, Decel,
                     Usable, Exit, Need - Usable);
                 Out.push_back({D.StartS, EDeviceProblem::CannotStopArrival, true, Buf});
             }

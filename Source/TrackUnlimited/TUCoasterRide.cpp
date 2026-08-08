@@ -1440,6 +1440,10 @@ void ATUCoasterRide::RebuildFromSegments()
 			D.CommandedSpeed = Z.TargetSpeed;
 			D.bCanHold = Z.MaxDecel > 0.0;
 			D.bCanRelease = Z.MaxAccel > 0.0;
+			// THE ZONE'S OWN RATE. The audit had a global service deceleration and
+			// it did not match the Grip these are built with, so it was predicting
+			// stopping distances the physics would never produce.
+			D.DecelMs2 = Z.MaxDecel;
 			D.bIsBlockBoundary = D.bCanHold && D.bCanRelease;
 
 			// The name is only for the message. FTrackZone drops the kind on
@@ -5491,10 +5495,16 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 			}
 		}
 
-		// Generic, per constraint 5: a shade under a metre and a half across and
-		// about chest height on a seated rider.
+		// Generic, per constraint 5: a shade under a metre and a half across, and
+		// CHEST HEIGHT ON A SEATED RIDER rather than head height.
+		//
+		// 0.9 m, and the number is load-bearing: the heartline is 1.1 m above the
+		// rail centreline, so a body any taller than that swallows the point the
+		// ride camera sits at and the rider spends the lap inside a box. A real
+		// car body comes up to about the chest for the same reason — you have to
+		// be able to see out of it.
 		const double BodyWidth = 1.4;
-		const double BodyHeight = 1.2;
+		const double BodyHeight = 0.9;
 		const FVector CarScale(Spacing, BodyWidth, BodyHeight);
 
 		for (int32 t = 0; t < Trains.Num(); ++t)
@@ -5616,7 +5626,16 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 	}
 	else if (CameraMode == ETUCameraMode::Rider)
 	{
-		Camera->SetWorldLocationAndRotation(ToWorld(Frame.Position), Rotation);
+		// THE HEARTLINE IS THE RIDER'S HEART, NOT THEIR EYES, and the camera wants
+		// the second one. Sitting exactly on it puts the view at chest height,
+		// inside the car body — which is where it was.
+		//
+		// ADDED HERE AND NOWHERE ELSE. The heartline is what FeltG is computed
+		// about and what the banking is built around; moving it to suit a camera
+		// would change every G number on the ride to fix a framing problem. This
+		// is a cosmetic offset on the view alone and touches no physics.
+		Camera->SetWorldLocationAndRotation(
+			ToWorld(Frame.Position + Frame.Up * RiderEyeAboveHeartlineM), Rotation);
 		// Centimetres in a seat, or the restraint in front of the rider is clipped
 		// off — the other end of the same trade the orbit camera makes. 2 cm is
 		// twice the engine's own 1 cm floor, so it survives the clamp.

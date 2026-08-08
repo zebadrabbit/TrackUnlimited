@@ -147,6 +147,23 @@ public:
 	bool bInvertLookY = false;
 
 	/**
+	 * Rider eye height above the heartline, metres.
+	 *
+	 * THE HEARTLINE IS THE HEART. It is where felt G is computed and what the
+	 * banking is built around — a rider's chest, roughly — and a camera sitting
+	 * exactly on it is a view from inside the car body.
+	 *
+	 * A KNOB RATHER THAN A CONSTANT, because seat geometry is a property of the
+	 * vehicle somebody designed and 0.25 m is a seated adult's eye-above-heart.
+	 * It is COSMETIC: it moves the view and nothing else, and must stay that way.
+	 * Adding it to the heartline instead would change every G figure on the ride
+	 * to fix a framing problem.
+	 */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Camera",
+		meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float RiderEyeAboveHeartlineM = 0.25f;
+
+	/**
 	 * THE CURSOR IS VISIBLE WHERE THERE IS SOMETHING TO CLICK, and looking moves
 	 * to a HELD RIGHT BUTTON.
 	 *

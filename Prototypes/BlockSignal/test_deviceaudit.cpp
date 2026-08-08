@@ -178,6 +178,50 @@ void TestTheAuditReadsTheProfileATTheDeviceStart()
     std::printf("  OK\n\n");
 }
 
+// THE DEVICE'S OWN DECELERATION WINS over the audit's default, and this is the
+// assertion that keeps the audit from becoming a second source of truth about
+// how hard a brake bites. The physics brakes at the zone's MaxDecel; a checker
+// predicting stopping distances at some other figure is not checking the ride.
+void TestTheDEVICESOwnDecelerationIsUsed()
+{
+    std::printf("A device's own deceleration is used, not the audit's default\n");
+
+    FDeviceAuditSettings S;
+    S.ServiceDecelMs2 = 3.0;                       // the fallback
+
+    FDeviceSpan Weak = BlockBrake(400.0, 530.0);   // 130 m
+    FDeviceSpan Strong = Weak;
+    Strong.DecelMs2 = 6.0;                         // what the zone actually does
+
+    // At 3 m/s^2 a 30.4 m/s arrival needs 154 m and the 129 m usable is short.
+    // At 6 it needs 77 m and there is room to spare, so the SAME geometry is a
+    // finding or not purely on which figure is believed.
+    const auto Bad = AuditDevices({Weak}, S, [](double) { return 30.4; });
+    const auto Good = AuditDevices({Strong}, S, [](double) { return 30.4; });
+
+    assert(Has(Bad, EDeviceProblem::CannotStopArrival));
+    assert(!Has(Good, EDeviceProblem::CannotStopArrival));
+    for (const FDeviceFinding& X : Bad) { std::printf("  fallback 3.0: %s\n", X.What.c_str()); }
+    std::printf("  device 6.0: silent\n");
+
+    // And the message quotes the rate it actually used, or somebody reads a
+    // number that was never applied to anything.
+    // 3.5, not 4.0: at 4.0 a 30.4 m/s arrival stops in 115.5 m and 129 m is
+    // plenty, so the first version of this assertion was simply wrong about its
+    // own arithmetic. 924.16 / (2 * 3.5) = 132.0 m, which is short by 3 m.
+    FDeviceSpan Mid = Weak;
+    Mid.DecelMs2 = 3.5;
+    const auto M = AuditDevices({Mid}, S, [](double) { return 30.4; });
+    assert(Has(M, EDeviceProblem::CannotStopArrival));
+    bool bQuotesTheRate = false;
+    for (const FDeviceFinding& X : M)
+    {
+        bQuotesTheRate = X.What.find("3.5 m/s^2") != std::string::npos;
+    }
+    assert(bQuotesTheRate);
+    std::printf("  and the message quotes the rate it used\n  OK\n\n");
+}
+
 int main()
 {
     std::printf("DeviceAudit: what a layout's devices will actually do\n\n");
@@ -188,6 +232,7 @@ int main()
     TestATRIMAtABlockBoundaryIsREPORTED();
     TestATRIMThatIsNOTABlockBoundaryIsSILENT();
     TestTheAuditReadsTheProfileATTheDeviceStart();
+    TestTheDEVICESOwnDecelerationIsUsed();
 
     std::printf("test_deviceaudit: all assertions passed.\n");
     return 0;
