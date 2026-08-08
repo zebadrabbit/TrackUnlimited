@@ -48,14 +48,10 @@ void TestEveryDefaultIsReachable()
         else if (E.Kind == ESettingKind::Choice)
         {
             ++Choices;
-            // video.resolution is the deliberate exception: its options come
-            // from the monitor at runtime, so an empty default means "whatever
-            // the display is already using" rather than a missing value.
-            if (E.Options.empty())
-            {
-                assert(E.Default.empty() && "no options means no default to pick from");
-                continue;
-            }
+            // NO EXCEPTIONS LEFT. This carried one for video.resolution, whose
+            // options came from the monitor at runtime. Dropping that setting
+            // makes the rule absolute: every choice offers its own default.
+            assert(!E.Options.empty() && "a choice with no options is a dead control");
             bool bFound = false;
             for (const std::string& O : E.Options) { bFound = bFound || O == E.Default; }
             if (!bFound)

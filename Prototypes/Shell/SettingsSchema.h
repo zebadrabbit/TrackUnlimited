@@ -20,10 +20,10 @@
 //
 // ===================== WHAT IS OURS AND WHAT IS NOT =====================
 //
-// **Video and graphics are UE's.** `UGameUserSettings` already owns resolution,
-// window mode, VSync, frame cap and the five scalability groups, it already
-// persists them, and it already knows what the hardware can do. Reimplementing
-// that would be worse in every respect. Those entries appear here so the MENU is
+// **Video and graphics are UE's.** `UGameUserSettings` already owns window mode,
+// VSync, frame cap and the five scalability groups, it already persists them,
+// and it already knows what the hardware can do. Reimplementing that would be
+// worse in every respect. Those entries appear here so the MENU is
 // uniform — one walk builds every page — and the engine binding says which
 // property each maps to.
 //
@@ -137,20 +137,23 @@ inline std::vector<FSettingEntry> SettingsSchema()
         E.Page = ESettingPage::Video;
 
         E.Key = "video.windowMode"; E.Label = "Window mode";
-        E.Help = "Fullscreen is exclusive; borderless shares the desktop and alt-tabs faster.";
+        E.Help = "Fullscreen takes exclusive control of the display. Windowed Fullscreen is a "
+                 "borderless window at desktop size — same look, and it alt-tabs instantly. "
+                 "Windowed is resizable.";
         E.Kind = ESettingKind::Choice;
-        E.Options = {"Fullscreen", "Borderless", "Windowed"};
-        E.Default = "Borderless";
+        E.Options = {"Fullscreen", "Windowed Fullscreen", "Windowed"};
+        E.Default = "Windowed Fullscreen";
         E.Engine = "FullscreenMode";
         Add(E);
 
-        E = FSettingEntry(); E.Owner = ESettingOwner::Engine; E.Page = ESettingPage::Video;
-        E.Key = "video.resolution"; E.Label = "Resolution";
-        E.Help = "Filled from the monitor at runtime; the default is whatever it is already using.";
-        E.Kind = ESettingKind::Choice;
-        E.Default = "";              // DELIBERATELY EMPTY — see the note below.
-        E.Engine = "ScreenResolution";
-        Add(E);
+        // NO RESOLUTION PICKER, and that is a decision rather than an omission.
+        // Two of the three modes have no resolution to pick — they are the
+        // desktop's — and the third is a window somebody drags to the size they
+        // want, which is a better control than a dropdown of sizes their monitor
+        // may not have. What makes this affordable is the DPI rule: the scale
+        // curve clamps at 1.5 so a bigger window shows MORE ROWS rather than
+        // larger ones, and no list hardcodes a row count. A layout that only
+        // worked at one size would need the picker back.
 
         E = FSettingEntry(); E.Owner = ESettingOwner::Engine; E.Page = ESettingPage::Video;
         E.Key = "video.vsync"; E.Label = "V-Sync";
@@ -321,8 +324,4 @@ inline void DeclareSchemaDefaults(TSettings& Store)
 // default satisfies its own constraint — which is the failure worth catching,
 // because a default outside its own slider is a control that cannot show the
 // value it starts on.
-//
-// video.resolution ships with an EMPTY default on purpose: the option list is
-// filled from the monitor at runtime and the right starting value is whatever
-// the display is already using. A hardcoded "1920x1080" would be wrong on every
-// machine that is not, and wrong in the direction that looks deliberate.
+
