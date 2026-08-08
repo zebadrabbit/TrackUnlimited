@@ -352,6 +352,15 @@ does **not** exist, in rough order of how much it would change:
   first — but nothing sequences them yet.
 - **A turnout, and a maintenance spur.** Parked as a far-future stretch goal. A switch is not a zone:
   it changes which *track* a train is on, which the whole arc-length model currently has no way to say.
+  **Designed but not scheduled** — see [`DIRECTION_AND_ROUTES.md`](DIRECTION_AND_ROUTES.md), which
+  works out what a switch actually costs (a block *graph* and route interlocking, not a new zone
+  kind) and why direction has to land first: whether a point is facing or trailing depends on the
+  direction of travel, so it cannot be a property of the point.
+- **A train running backwards**, as on a reverse section. The physics already does it — `Advance`
+  is signed and `bAllowRollback` exists — but nothing above it has heard. The sharpest consequence
+  is not in the signalling at all: the fore-aft envelope bands are asymmetric 3:1, so a backwards
+  train is judged against the wrong ones and reports "within envelope" while doing it. Same
+  document.
 
 ### Multi-position platforms, which turned out to be mostly emergent
 
