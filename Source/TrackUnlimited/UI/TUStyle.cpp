@@ -144,6 +144,14 @@ TSharedRef<FSlateStyleSet> FTUStyle::Create()
 	const FSlateFontInfo Small = FCoreStyle::GetDefaultFontStyle("Regular", 9);
 	const FSlateFontInfo Heading = FCoreStyle::GetDefaultFontStyle("Bold", 14);
 
+	// Exposed as fonts as well as text styles: UMG's SetFont takes an
+	// FSlateFontInfo, not an FTextBlockStyle, so a widget wanting only the type
+	// would otherwise have to construct one to throw it away.
+	S->Set("Font.Body", Body);
+	S->Set("Font.Small", Small);
+	S->Set("Font.Heading", Heading);
+	S->Set("Font.Readout", Bold);
+
 	S->Set("Text.Body", FTextBlockStyle()
 		.SetFont(Body).SetColorAndOpacity(FSlateColor(TextPrimary)));
 	S->Set("Text.Secondary", FTextBlockStyle()

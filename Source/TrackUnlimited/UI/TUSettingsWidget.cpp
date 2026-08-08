@@ -13,6 +13,7 @@
 #include "Components/CheckBox.h"
 #include "Components/Slider.h"
 #include "Components/ComboBoxString.h"
+#include "Components/SizeBox.h"
 #include "GameFramework/GameUserSettings.h"
 
 // ===================== APPLYING AN ENGINE SETTING NEEDS A MAP =====================
@@ -191,6 +192,10 @@ void UTUSettingsWidget::BuildRow(const FSettingEntry& Entry)
 	UTextBlock* Label = WidgetTree->ConstructWidget<UTextBlock>();
 	Label->SetText(FText::FromString(UTF8_TO_TCHAR(Entry.Label.c_str())));
 	Label->SetColorAndOpacity(FSlateColor(FTUStyle::TextPrimary));
+	// The style set finally consumed by something. Without this every row is the
+	// engine's default 24pt, which is why the first screenshot looked like a
+	// placeholder rather than a settings page.
+	Label->SetFont(FTUStyle::Get().GetFontStyle("Font.Body"));
 	if (UHorizontalBoxSlot* S = Row->AddChildToHorizontalBox(Label))
 	{
 		S->SetSize(ESlateSizeRule::Fill);
@@ -199,13 +204,29 @@ void UTUSettingsWidget::BuildRow(const FSettingEntry& Entry)
 
 	const FString Value = ReadValue(Entry);
 
+	// ===================== THE CONTROL COLUMN =====================
+	//
+	// Every control goes in a fixed-width box so they line up down the page, and
+	// because without one a checkbox and a slider take their NATURAL size — which
+	// for a slider is a few pixels, squeezed against the right edge by the label
+	// filling everything else. That is not a styling nicety; it is the difference
+	// between a slider you can drag and one you cannot hit.
+	//
+	// A width here does not break "no panel hardcodes its own dimensions": that
+	// rule is about panels claiming screen space. This is a control's own size,
+	// which is exactly the kind of thing that should be fixed — 220 units so the
+	// longest option string ("Windowed Fullscreen") fits without eliding.
+	USizeBox* ControlBox = WidgetTree->ConstructWidget<USizeBox>();
+	ControlBox->SetWidthOverride(220.f);
+	Row->AddChildToHorizontalBox(ControlBox);
+
 	switch (Entry.Kind)
 	{
 	case ESettingKind::Bool:
 	{
 		UCheckBox* Box = WidgetTree->ConstructWidget<UCheckBox>();
 		Box->SetIsChecked(Value == TEXT("true"));
-		Row->AddChildToHorizontalBox(Box);
+		ControlBox->AddChild(Box);
 		Box->OnCheckStateChanged.AddDynamic(Bind(Entry), &UTUSettingBinding::OnBool);
 		break;
 	}
@@ -216,7 +237,7 @@ void UTUSettingsWidget::BuildRow(const FSettingEntry& Entry)
 		S->SetMaxValue(static_cast<float>(Entry.Max));
 		S->SetStepSize(static_cast<float>(Entry.Step));
 		S->SetValue(FCString::Atof(*Value));
-		Row->AddChildToHorizontalBox(S);
+		ControlBox->AddChild(S);
 		S->OnValueChanged.AddDynamic(Bind(Entry), &UTUSettingBinding::OnScalar);
 		break;
 	}
@@ -228,7 +249,7 @@ void UTUSettingsWidget::BuildRow(const FSettingEntry& Entry)
 			C->AddOption(UTF8_TO_TCHAR(O.c_str()));
 		}
 		C->SetSelectedOption(Value);
-		Row->AddChildToHorizontalBox(C);
+		ControlBox->AddChild(C);
 		C->OnSelectionChanged.AddDynamic(Bind(Entry), &UTUSettingBinding::OnChoice);
 		break;
 	}
@@ -243,7 +264,7 @@ void UTUSettingsWidget::BuildRow(const FSettingEntry& Entry)
 		UTextBlock* Key = WidgetTree->ConstructWidget<UTextBlock>();
 		Key->SetText(FText::FromString(Value));
 		Key->SetColorAndOpacity(FSlateColor(FTUStyle::TextSecondary));
-		Row->AddChildToHorizontalBox(Key);
+		ControlBox->AddChild(Key);
 		break;
 	}
 	}

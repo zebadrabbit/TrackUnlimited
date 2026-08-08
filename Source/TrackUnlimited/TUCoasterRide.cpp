@@ -1849,9 +1849,15 @@ void ATUCoasterRide::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 	PlayerInputComponent->BindKey(EKeys::F2, IE_Pressed, this,
 		&ATUCoasterRide::ToggleOverlays);
 
-	// [F1] — settings, in the frame's content slot. A key rather than a button
-	// so the screen is reachable before the main menu that will own it exists.
-	PlayerInputComponent->BindKey(EKeys::F1, IE_Pressed, this,
+	// [O] — options, in the frame's content slot. A key rather than a button so
+	// the screen is reachable before the main menu that will own it exists.
+	//
+	// NOT F1. The editor binds F1 to a viewport view mode, so pressing it in PIE
+	// opened the settings AND flipped the viewport to wireframe — which read as
+	// the settings screen being broken when it was drawing correctly over a
+	// wireframe world. Same class of collision as [Backspace] being the E-stop
+	// and the editor's own function keys are just as owned as ours.
+	PlayerInputComponent->BindKey(EKeys::O, IE_Pressed, this,
 		&ATUCoasterRide::ToggleSettings);
 
 	// [T] — which train you are on. Not guarded against typing: a letter is not
