@@ -103,9 +103,34 @@ struct FRideProfile
 // The train must already have its zones. Sampling is by ARC LENGTH rather than
 // by time, so the density of the data does not collapse where the ride is fast
 // — which is exactly where the G is worth looking at.
+// ===================== WHICH WAY THE SEAT FACES =====================
+//
+// `FacingSign` is +1 for a seat facing along +S and -1 for one facing back down
+// it: a backward-facing car, a face-off train, a train a turntable has spun.
+// Ordinary hardware, and until now inexpressible.
+//
+// IT IS A PROPERTY OF THE SEAT, NOT THE TRAIN, which is why it is a parameter
+// here rather than a field on FTrainConfig — a face-off train has both at once,
+// and the honest way to measure one is to run this twice.
+//
+// TRAVELLING BACKWARDS NEEDS NOTHING. `LastTangentialAccel` is a signed dv/dt
+// and `GetTangentialG` measures along +S, so a train braking while running
+// backwards already reports +Gx and a forward-facing rider really is pressed
+// into their seat. That case is correct today; this is the other one.
+//
+// WHAT FLIPS: fore-aft, and lateral WITH it. The frame is right-handed with
+// Tangent x Lateral = Up, so reversing the tangent and keeping up requires
+// reversing lateral too or the frame is no longer right-handed — a reversed
+// rider's left is the track's right. Vertical is untouched: up is up either way,
+// and flipping it would put a reversed rider in permanent negative-G.
 inline FRideProfile RunRideProfile(FTrain& Train, const FTrack& Track,
-                                   double SampleSpacingM = 1.0, double Dt = 1.0 / 240.0)
+                                   double SampleSpacingM = 1.0, double Dt = 1.0 / 240.0,
+                                   double FacingSign = 1.0)
 {
+    // Anything not negative is forward. A zero would silently null both axes and
+    // report a ride with no lateral and no braking at all, which would pass
+    // every envelope band there is.
+    const double Facing = FacingSign < 0.0 ? -1.0 : 1.0;
     const double Pi = 3.14159265358979323846;
     const double RadToDeg = 180.0 / Pi;
 
@@ -147,9 +172,9 @@ inline FRideProfile RunRideProfile(FTrain& Train, const FTrack& Track,
             Sample.Time = Time;
             Sample.Speed = Train.GetSpeed();
             Sample.Height = F.Position.Z;
-            Sample.VerticalG = G.Vertical;
-            Sample.LateralG = G.Lateral;
-            Sample.TangentialG = Train.GetTangentialG();
+            Sample.VerticalG = G.Vertical;              // up is up either way
+            Sample.LateralG = G.Lateral * Facing;
+            Sample.TangentialG = Train.GetTangentialG() * Facing;
 
             // Unwrapped: resolved roll carries an atan2 term for world-bank
             // segments, so a bank passing through +/-pi steps by 2pi with

@@ -10,6 +10,8 @@
 #include "GEnvelope.h"
 #include "../TrackSpline/TrackSpline.h"
 
+#include <string>
+
 #include <cassert>
 #include <cstdio>
 
@@ -470,6 +472,114 @@ void TestRealRideIsJudgedAndLocatable()
 
 } // namespace
 
+// ===================== A BACKWARD-FACING SEAT =====================
+//
+// The fore-aft bands are asymmetric 3:1 — 6 g eyeballs-in with a headrest
+// against 2 g back-to-chest — so which way the seat points is not cosmetic. It
+// decides which band a braking event is judged against.
+void TestABackwardFacingSeatFlipsFOREAFTAndLATERALButNotVERTICAL()
+{
+    const FTrack Track = BuildReferenceish();
+
+    FTrainConfig Cfg;
+    Cfg.TrainLength = 15.0;
+
+    FTrain Fwd(Track, Cfg);
+    assert(Fwd.AddZone(MakeLift(0.0, 166.0, 4.0, 5.0)));
+    const FRideProfile F = RunRideProfile(Fwd, Track, 1.0, 1.0 / 240.0, +1.0);
+
+    FTrain Rev(Track, Cfg);
+    assert(Rev.AddZone(MakeLift(0.0, 166.0, 4.0, 5.0)));
+    const FRideProfile R = RunRideProfile(Rev, Track, 1.0, 1.0 / 240.0, -1.0);
+
+    assert(F.bCompleted && R.bCompleted);
+    assert(F.Samples.size() == R.Samples.size());
+
+    // EXACTLY NEGATED, not approximately — it is a sign, not a model.
+    for (std::size_t i = 0; i < F.Samples.size(); ++i)
+    {
+        assert(R.Samples[i].TangentialG == -F.Samples[i].TangentialG);
+        assert(R.Samples[i].LateralG == -F.Samples[i].LateralG);
+        // VERTICAL IS UNTOUCHED. Up is up either way, and flipping it would put
+        // a reversed rider in permanent negative G — which would be caught by
+        // the envelope instantly, so the failure worth asserting against is the
+        // one that would NOT be.
+        assert(R.Samples[i].VerticalG == F.Samples[i].VerticalG);
+        assert(R.Samples[i].Speed == F.Samples[i].Speed);
+        assert(R.Samples[i].Height == F.Samples[i].Height);
+    }
+    std::printf("\n  a reversed seat: Gx and Gy exactly negated over %zu samples, Gz identical\n",
+                F.Samples.size());
+}
+
+// AND THE VERDICT CHANGES, which is the whole reason the flip matters.
+//
+// A synthetic profile rather than authored geometry, because the point is the
+// JUDGEMENT — hunting for a layout that lands between the two verdicts would be
+// a test about track design, and it would break the first time anybody retuned
+// the drag coefficient.
+//
+// RAMPED, NOT STEPPED. The first version stepped from 0 to 3 g between samples,
+// which is 27 g/s of jerk against a 15 g/s limit — so both facings failed on the
+// edge and the test proved nothing about facing at all. The ramp is not a
+// convenience; it is what makes the assertion about the thing it names.
+void TestTheSAMEEventIsJudgedDifferentlyByFacing()
+{
+    auto Build = [](double Gx)
+    {
+        FRideProfile P;
+        P.bCompleted = true;
+        for (int i = 0; i <= 400; ++i)
+        {
+            FRideSample S;
+            S.Time = i * 0.01;
+            S.S = i * 0.1;
+            S.Speed = 20.0;
+            S.VerticalG = 1.0;      // resting on the seat, as a real ride is
+            S.LateralG = 0.0;
+
+            const double t = S.Time;
+            double k = 0.0;
+            if (t >= 0.5 && t < 1.0)       { k = (t - 0.5) / 0.5; }
+            else if (t >= 1.0 && t <= 3.0) { k = 1.0; }
+            else if (t > 3.0 && t < 3.5)   { k = 1.0 - (t - 3.0) / 0.5; }
+            S.TangentialG = Gx * k;
+            P.Samples.push_back(S);
+        }
+        P.Duration = P.Samples.back().Time;
+        return P;
+    };
+
+    const FGVerdict In = JudgeRideProfile(Build(+3.0));
+    const FGVerdict Out = JudgeRideProfile(Build(-3.0));
+
+    std::printf("  3 g for 2 s alongside 1 g of seat load:"
+                " eyeballs-in passes=%d, back-to-chest passes=%d\n",
+                In.bPasses ? 1 : 0, Out.bPasses ? 1 : 0);
+    assert(In.bPasses);
+    assert(!Out.bPasses);
+
+    // AND IT IS THE *COMBINED* BAND THAT BITES, not the fore-aft one, which is
+    // worth recording because it is not what this test was written expecting.
+    // The two fore-aft tables are only asymmetric ABOVE 6 g — `PosGx` carries a
+    // hard ceiling there and `NegGx` carries none at all — so at 3 g they treat
+    // both directions identically. What separates them is the combined-loading
+    // check, where 3 g of back-to-chest alongside 1 g of seat load lands outside
+    // the envelope and the same magnitude of eyeballs-in does not.
+    bool bCombined = false;
+    for (const FGFinding& F : Out.Findings)
+    {
+        if (std::string(F.Axis) == "combined") { bCombined = true; }
+    }
+    assert(bCombined);
+
+    // NOTED, NOT FIXED: `NegGx` having no hard ceiling means a very large
+    // back-to-chest spike under 4 s is currently unreported. That may be a gap
+    // in the table or may be what the standard says — the tables are UNVERIFIED
+    // research and this project does not author safety limits from guesswork.
+    // Recorded here so a verified table has something to answer.
+}
+
 int main()
 {
     std::printf("GEnvelope: judging a ride against acceleration envelopes\n");
@@ -490,6 +600,8 @@ int main()
     TestBandsActuallyBite();
     TestVerdictDeclaresItsGaps();
     TestRealRideIsJudgedAndLocatable();
+    TestABackwardFacingSeatFlipsFOREAFTAndLATERALButNotVERTICAL();
+    TestTheSAMEEventIsJudgedDifferentlyByFacing();
 
     std::printf("\nAll GEnvelope assertions passed.\n");
     return 0;

@@ -65,8 +65,11 @@ real systems carry it: a railway does not renumber its mileposts for a train run
 
 ### What breaks, deepest first
 
-**The G envelope gives a silently wrong verdict.** This is the sharpest one and it is measured, not
-supposed. `GEnvelope.h` has asymmetric fore-aft bands:
+**The G envelope gives a silently wrong verdict — but for ORIENTATION, not travel.** The first
+revision of this document got that backwards, and the correction is worth keeping because it changes
+what has to be built.
+
+`GEnvelope.h` has asymmetric fore-aft bands:
 
 ```
 PosGx = {{6.0, 0.0}, {2.0, 4.0}}    // +Gx eyeballs-in: 6 g with a headrest, 2 g without for 4 s
@@ -74,11 +77,25 @@ NegGx = {{2.0, 4.0}}                // -Gx back-to-chest: 2 g, 4 s
 ```
 
 Three to one, and correctly so — a body tolerates being pressed into a seat far better than being
-thrown out of it. A train riding backwards has **both signs swapped in the rider's frame**: its
-braking becomes eyeballs-in and its acceleration becomes back-to-chest. Judged against the forward
-bands it will flag a safe event and pass an unsafe one — and report "within envelope" while doing
-it. That is the same class of failure as the backwards band reading already recorded in
-`PHASE0_FINDINGS.md`, and it is worse, because there is nothing odd-looking to notice.
+thrown out of it.
+
+**Travelling backwards is already right.** `LastTangentialAccel` is `(NewSpeed − VelocityMs)/dt` over
+*signed* speeds, and `GetTangentialG` measures along `+S`. A train braking while running backwards
+has `dv/dt > 0`, so it reports `+Gx`, and a rider facing forward really is pressed into their seat.
+Everest comes out correct today without a line changing.
+
+**A rider FACING backwards is wrong**, and that is a different and commoner case — backward-facing
+seats, face-off trains, a train a turntable has spun. Their forward is `−Tangent`, so the same
+braking event that reports `+Gx` is felt as back-to-chest. Judged against `PosGx` it gets 6 g of
+headroom where it should have 2, and reports "within envelope" while doing it.
+
+**And lateral flips with it.** The frame is right-handed with `Tangent × Lateral = Up`. Reverse the
+tangent and keep up, and lateral must reverse too or the frame is no longer right-handed — so a
+reversed rider's left is the track's right. Vertical is untouched, because up is up either way.
+
+So the rider frame depends on **orientation alone**, not on travel. That is a simplification rather
+than a complication: the acceleration vector is whatever the physics produced, and the only question
+is which axes to project it onto.
 
 **The stop mark trips on the nose.** A span covers a point the moment its front reaches it — but
 rolling backwards, the leading edge is the tail. The rule becomes "leading edge in the direction of
@@ -201,13 +218,18 @@ signalling can finally see) and costs nothing that routes would want back.
 
 Within direction, the order is what the failures cost:
 
-1. **The two signs on the train**, and every derived rule asking for the leading edge rather than the
-   nose. Cheap, and it is the change everything else is expressed in.
-2. **The rider frame flip in `FRideProfile` and `GEnvelope`.** Highest severity of anything here —
-   it is a wrong conformance verdict that looks right.
+1. **Seat orientation, and the rider-frame flip it implies.** Highest severity of anything here — a
+   wrong conformance verdict that looks right — and it is also the *cheapest*, because it needs no
+   travel direction at all. Independent of everything below it, and worth doing on its own even if
+   reverse running is never built: backward-facing seats are ordinary.
+2. **The travel sign, and every derived rule asking for the leading edge** rather than the nose.
 3. **The directional counter in `FTrackSensors`.** Two heads and a phase.
 4. **A signed zone target**, for a device that releases backwards.
 5. **The permissive's sense of "ahead."**
+
+The first revision of this list had 1 and 2 the other way round, on the reasoning that the envelope
+problem came from travelling backwards. It does not — see Part 1 — and the correction moves the
+highest-severity item to the top *and* off the critical path.
 
 Neither of these is scheduled. When one is, it gets an engine-free prototype and an assert suite
 first, the way `BlockSignal` and `PlcExpr` did — not a feature grafted onto the ring.
