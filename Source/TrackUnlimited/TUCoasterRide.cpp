@@ -5574,7 +5574,22 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 	// the state the last scan left and never advances anything.
 	if (!bHideOverlays)
 	{
-		DrawRestraints();
+		// RESTRAINT MARKERS DO NOT DRAW FROM THE SEAT. They sit 0.35 m above the
+		// heartline and the eye sits 0.25 m above it, so on the train you are
+		// riding the camera is INSIDE one — a green wireframe box filling the
+		// screen with the ride behind it.
+		//
+		// Suppressed by CAMERA rather than by app mode, because the obstruction
+		// is a property of where the camera is: Ride is not the only way to end
+		// up in the seat, and Build with [C] on rider is the same view.
+		//
+		// Block markers stay. A signal going amber as you approach it is the
+		// causal chain this project exists to make visible, and seeing it from
+		// the train is the best place to see it from.
+		if (CameraMode != ETUCameraMode::Rider)
+		{
+			DrawRestraints();
+		}
 		DrawBlockMarkers();
 	}
 
@@ -5847,6 +5862,22 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 					Row += FString::Printf(TEXT(" %.1fs"), Signals->GetBufferRemaining(b));
 				}
 				Row += TEXT("]  ");
+
+				// WRAPPED, because this line does not. AddOnScreenDebugMessage
+				// draws one unbroken run and clips what will not fit — and it
+				// clips the START, so an eleven-block circuit showed a row
+				// beginning "CUPIED]" with blocks 0 to 5 simply gone. The blocks
+				// most likely to be missing were the low-numbered ones, which on
+				// every preset here is the station.
+				//
+				// Six per line, and the newline is what does it: the on-screen
+				// message renderer honours embedded ones, so this stays a single
+				// keyed message that replaces itself rather than a pile of them
+				// fighting over slots.
+				if ((b + 1) % 6 == 0 && b + 1 < Signals->NumBlocks())
+				{
+					Row += TEXT("\n");
+				}
 			}
 			// "Held" is now a property of a train standing at a device, not a flag:
 			// a train is held when it is at a holding place and its permissive is
