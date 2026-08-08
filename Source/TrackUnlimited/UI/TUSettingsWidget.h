@@ -1,0 +1,152 @@
+// TrackUnlimited: the settings screen, BUILT BY WALKING THE SCHEMA.
+//
+// ===================== NO ROW ASSETS, AND NO ROW LIST =====================
+//
+// The rows are constructed at runtime from `SettingsSchema()`, so adding a
+// setting is one entry in that table and this file does not change. There is no
+// per-row widget asset either — `WidgetTree->ConstructWidget` builds them from
+// UMG primitives, which means a new setting cannot be blocked on somebody making
+// an asset for it.
+//
+// That is the same answer the control panel gives: it walks the block and zone
+// lists the geometry walks rather than keeping its own. A second list is a second
+// thing to keep true, and the failure mode is silent — a setting that exists and
+// is not shown looks exactly like a setting that does not exist.
+//
+// ===================== WHO OWNS THE VALUE IS NOT THIS FILE'S PROBLEM =====================
+//
+// An entry says where its value lives: ours (`FSettings`), the engine's
+// (`UGameUserSettings`), or the input map's. This reads and writes through that,
+// so the screen never becomes a third place a setting is stored — which is how
+// the value you see and the value in effect start disagreeing.
+
+#pragma once
+
+#include "CoreMinimal.h"
+#include "Blueprint/UserWidget.h"
+#include "Shell/SettingsSchema.h"
+#include "TUSettingsWidget.generated.h"
+
+class ATUCoasterRide;
+class UVerticalBox;
+class UHorizontalBox;
+class UTextBlock;
+class UButton;
+class UTUSettingsWidget;
+
+/**
+ * ONE OF THESE PER GENERATED CONTROL, and it exists because UMG's delegates are
+ * DYNAMIC: they take a UFUNCTION on a UObject and nothing else. No lambda, no
+ * capture, and no sender passed to the handler — so a single handler on the
+ * screen cannot tell which of thirty-seven rows called it.
+ *
+ * So the row's identity lives in an object bound alongside it. That is the
+ * standard UMG answer to a generated list, and it is the cost of generation
+ * rather than a smell: the alternative is thirty-seven hand-written handlers,
+ * which is the hardcoded list this design exists to avoid.
+ *
+ * Kept alive by a UPROPERTY array on the screen — a bare `NewObject` with no
+ * reference is garbage two frames later, and the symptom is a control that works
+ * until it silently stops.
+ */
+UCLASS()
+class UTUSettingBinding : public UObject
+{
+	GENERATED_BODY()
+
+public:
+	UPROPERTY()
+	TWeakObjectPtr<UTUSettingsWidget> Owner;
+
+	/** Deliberately not a UPROPERTY: FSettingEntry is a plain C++17 struct with
+	 *  std::string in it, which the reflection system cannot describe and does
+	 *  not need to. */
+	FSettingEntry Entry;
+	ESettingPage Page = ESettingPage::Video;
+
+	UFUNCTION() void OnBool(bool bOn);
+	UFUNCTION() void OnScalar(float Value);
+	UFUNCTION() void OnChoice(FString Selected, ESelectInfo::Type Info);
+	UFUNCTION() void OnPageClicked();
+};
+
+UCLASS(Abstract)
+class TRACKUNLIMITED_API UTUSettingsWidget : public UUserWidget
+{
+	GENERATED_BODY()
+
+public:
+	void AttachTo(ATUCoasterRide* InRide);
+
+	/** Rebuild the visible page. Called on construct and whenever a tab changes. */
+	void ShowPage(ESettingPage Page);
+
+protected:
+	virtual void NativeConstruct() override;
+
+	/** Where the generated rows go. The asset provides an empty box; everything
+	 *  inside it is built here, so the asset never needs editing to add a row. */
+	UPROPERTY(meta = (BindWidget))
+	TObjectPtr<UVerticalBox> RowBox;
+
+	/** Where the generated page tabs go, for the same reason — the page list is
+	 *  the enum, and hardcoding five buttons in the asset would be a sixth page
+	 *  waiting to be forgotten. */
+	UPROPERTY(meta = (BindWidget))
+	TObjectPtr<UHorizontalBox> PageTabs;
+
+	UPROPERTY(meta = (BindWidget))
+	TObjectPtr<UTextBlock> PageHelp;
+
+	/**
+	 * RESET AFFECTS THE VISIBLE PAGE ONLY, and the button says which.
+	 *
+	 * A single "reset everything" is the kind of control somebody presses once,
+	 * loses their bindings to, and never trusts again. Per-page is what they
+	 * almost always mean, and the whole-lot version can be a second, plainer
+	 * button if anybody asks for it.
+	 */
+	UPROPERTY(meta = (BindWidget))
+	TObjectPtr<UButton> ResetPageButton;
+
+	UFUNCTION()
+	void OnResetPage();
+
+private:
+	UPROPERTY()
+	TWeakObjectPtr<ATUCoasterRide> Ride;
+
+	ESettingPage Current = ESettingPage::Video;
+
+	void BuildPageTabs();
+	void BuildRow(const FSettingEntry& Entry);
+	UTUSettingBinding* Bind(const FSettingEntry& Entry);
+
+public:
+	/** Read a setting's current value as a string, from whichever store owns it. */
+	FString ReadValue(const FSettingEntry& Entry) const;
+
+	/** Write it back to whichever store owns it, and apply it if the engine's.
+	 *  Public because the per-row bindings call it — they are the handler UMG
+	 *  insists on, not a second owner of the logic. */
+	void WriteValue(const FSettingEntry& Entry, const FString& Value);
+
+private:
+	/**
+	 * TWO ARRAYS, BECAUSE THEY HAVE DIFFERENT LIFETIMES.
+	 *
+	 * Page tabs are built once and live as long as the screen. Row bindings are
+	 * thrown away and rebuilt every time the page changes, or they would be live
+	 * handlers on widgets that no longer exist.
+	 *
+	 * Kept apart rather than distinguished by a test on their contents. The first
+	 * version had one array and told them apart by whether the binding had an
+	 * entry key — which worked, and encoded "a tab has no entry" as a rule
+	 * nothing states and the next person to give a tab an entry would break.
+	 */
+	UPROPERTY()
+	TArray<TObjectPtr<UTUSettingBinding>> TabBindings;
+
+	UPROPERTY()
+	TArray<TObjectPtr<UTUSettingBinding>> RowBindings;
+};
