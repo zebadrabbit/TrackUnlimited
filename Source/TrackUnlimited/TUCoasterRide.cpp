@@ -2530,7 +2530,27 @@ void ATUCoasterRide::CycleAppMode()
 			Why ? UTF8_TO_TCHAR(Why) : TEXT("unknown"));
 		return;
 	}
+	ApplyAppMode(Want);
+}
 
+void ATUCoasterRide::EnterAppMode(EAppMode Wanted, bool bConfirmed)
+{
+	// THE SAME DOOR THE KEY GOES THROUGH. [Tab] and a clicked tab must not be
+	// two ways of changing mode with two ideas of what a mode does — that is how
+	// a shell ends up where the keyboard and the mouse disagree about the state
+	// of the application.
+	if (!Session.Enter(Wanted, bConfirmed))
+	{
+		const char* Why = Session.WhyNotEnter(Wanted);
+		UE_LOG(LogTUEvents, Warning, TEXT("mode refused: %s"),
+			Why ? UTF8_TO_TCHAR(Why) : TEXT("unknown"));
+		return;
+	}
+	ApplyAppMode(Wanted);
+}
+
+void ATUCoasterRide::ApplyAppMode(EAppMode Want)
+{
 	// THE MODE DECIDES THE VIEW, which is what makes it a mode rather than a
 	// label. Operate is the operator's console and the ride seen from outside;
 	// Ride is the seat; Build is the thing you are editing, framed.

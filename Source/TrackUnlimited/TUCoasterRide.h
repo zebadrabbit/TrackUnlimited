@@ -1356,9 +1356,47 @@ private:
 	 *  edits are accepted all follow from it, which is the point of a mode. */
 	void CycleAppMode();
 
+	// ===================== WHAT THE SHELL IS ALLOWED TO SEE =====================
+	//
+	// A deliberate public island in a private section. Everything around it is
+	// implementation the UI has no business touching; these four reads and one
+	// command are the whole surface a frame widget needs, and naming that
+	// surface is cheaper than making the class public and hoping.
+public:
+	/**
+	 * Enter a mode directly — what a clicked tab calls, where [Tab] calls
+	 * CycleAppMode. BOTH GO THROUGH ApplyAppMode, so the keyboard and the mouse
+	 * cannot end up with two ideas of what a mode does.
+	 *
+	 * `bConfirmed` is passed straight to FSession::Enter and means "the person
+	 * has been asked about unsaved work and said yes". A caller that passes true
+	 * without having asked is lying to a class that cannot tell, which is why
+	 * MayEnter is a separate call the shell is expected to make first.
+	 */
+	void EnterAppMode(EAppMode Wanted, bool bConfirmed = false);
+
+	/**
+	 * THE FRAME'S READ-ONLY WINDOW ONTO THE RIDE.
+	 *
+	 * Accessors rather than public members: the UI needs to READ four things and
+	 * has no business writing any of them. Session in particular is a state
+	 * machine whose whole value is that its rules are in one place — handing a
+	 * widget a mutable reference to it would put mode logic in the widget within
+	 * a week.
+	 */
+	const FSession& GetSession() const { return Session; }
+	int32 NumTrains() const { return Trains.Num(); }
+	int32 GetScanOverruns() const { return ScanOverruns; }
+	double GetScanTimeDroppedS() const { return ScanTimeDroppedS; }
+
+private:
+
 	/** What the shell is showing, for the mode banner. */
 	void DrawModeBanner(class UCanvas* Canvas);
 	void BuildDiagnostics();
+
+	/** What a mode DOES, once the session has allowed it. */
+	void ApplyAppMode(EAppMode Want);
 	void DrawDiagnosticsPanel(class UCanvas* Canvas);
 	void ToggleDiagnostics() { bShowDiagnostics = !bShowDiagnostics; bHideOverlays = false; }
 	void CycleProfileChannel();
