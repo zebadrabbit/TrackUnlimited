@@ -1536,6 +1536,21 @@ private:
 	void LoadRecentList();
 	void WriteRecentList() const;
 
+	/**
+	 * WHAT THE MENU LISTS, read once on the way in.
+	 *
+	 * The recent list and the tracks folder, merged — a saved track has to be
+	 * findable by somebody whose recent list is gone, which is every fresh install
+	 * and every second machine.
+	 *
+	 * Cached because `DrawMainMenu` is immediate-mode: parsing every track file to
+	 * draw a list of names is a cost that stays invisible until somebody has
+	 * thirty tracks, and then is the menu.
+	 */
+	void RefreshTrackList();
+	std::vector<FTrackEntry> KnownTracks;
+	std::vector<std::string> TrackPaths;
+
 
 	/** Save, open, save again — and the two texts must match. The one part of the
 	 *  save path with no engine-free test, checked on the real preset at BeginPlay

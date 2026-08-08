@@ -2403,13 +2403,17 @@ void ATUCoasterRide::DrawMainMenu(UCanvas* Canvas)
 		Y += Row;
 	}
 
-	// ---- RECENT.
+	// ---- TRACKS: what has been opened recently, then whatever else is in the
+	// folder. Merged rather than two lists, because "have I got this one" is one
+	// question and answering it in two places is how somebody misses a row.
 	Y += 10.f;
-	PanelLabel(Canvas, Ox, Y, TEXT("RECENT"), PanelDim);
+	PanelLabel(Canvas, Ox, Y, TEXT("TRACKS"), PanelDim);
 	Y += Row;
 
-	const std::vector<FTrackEntry> Rows =
-		FTrackBrowser::Rows(std::vector<FTrackEntry>(), Browser.RecentList());
+	// KNOWN entries are passed in now. They were not, and `Rows` marks anything it
+	// has no entry for as MISSING — so every recent track, however present and
+	// readable, was labelled as being on a disconnected drive.
+	const std::vector<FTrackEntry> Rows = FTrackBrowser::Rows(KnownTracks, TrackPaths);
 	if (Rows.empty())
 	{
 		PanelLabel(Canvas, Ox + 12.f, Y,
@@ -2612,10 +2616,14 @@ void ATUCoasterRide::ClickMainMenu()
 		}
 		else
 		{
+			// Indexed against the LIST THAT WAS DRAWN, which is the merge of
+			// recents and the tracks folder — not against the recent list, which
+			// it used to be and which is now a subset. Same index, different
+			// array, and the failure would have been opening the wrong track.
 			const int32 Which = -1000 - Action;
-			if (Which >= 0 && Which < static_cast<int32>(Browser.NumRecent()))
+			if (Which >= 0 && Which < static_cast<int32>(TrackPaths.size()))
 			{
-				const std::string& Path = Browser.RecentAt(static_cast<std::size_t>(Which));
+				const std::string& Path = TrackPaths[static_cast<std::size_t>(Which)];
 				// A ROW THAT OPENS THE TRACK, rather than one that logs its name.
 				// A missing file is still listed and still clickable — the
 				// commonest cause is an unplugged drive — so this can fail, and it
@@ -2657,6 +2665,7 @@ void ATUCoasterRide::OpenMainMenu()
 		bConfirmingMenu = true;
 		return;
 	}
+	RefreshTrackList();
 	Session.Enter(EAppMode::MainMenu);
 	ApplyAppMode(EAppMode::MainMenu);
 }
@@ -2671,6 +2680,10 @@ void ATUCoasterRide::ConfirmLeaveToMenu(bool bDiscard)
 	// CONFIRMED HERE AND ONLY HERE, because the question was actually put on
 	// screen and answered. Passing bConfirmed without having asked is lying to a
 	// class that cannot tell, which is why MayEnter and Enter are two calls.
+	//
+	// Refreshed on the way through, because "save and leave" has just written a
+	// file that ought to be the first row somebody sees.
+	RefreshTrackList();
 	Session.Enter(EAppMode::MainMenu, true);
 	ApplyAppMode(EAppMode::MainMenu);
 }
@@ -3225,6 +3238,96 @@ bool ATUCoasterRide::OpenDocumentFrom(const FString& InPath)
 	return true;
 }
 
+void ATUCoasterRide::RefreshTrackList()
+{
+	// ONCE, ON THE WAY INTO THE MENU — never per frame. The menu is drawn
+	// immediate-mode every frame, and reading and parsing every track file at
+	// sixty hertz to draw a list of names is the kind of cost that is invisible
+	// until somebody has thirty tracks.
+	KnownTracks.clear();
+	TrackPaths.clear();
+
+	// RECENTS FIRST, because most-recent-first is the order somebody is looking
+	// for. The folder then contributes anything not already listed, which is what
+	// makes a track saved on another machine — or by an earlier install whose
+	// recent list is gone — findable at all.
+	for (std::size_t i = 0; i < Browser.NumRecent(); ++i)
+	{
+		TrackPaths.push_back(Browser.RecentAt(i));
+	}
+
+	TArray<FString> Found;
+	IFileManager::Get().FindFiles(Found, *(TracksDir() / TEXT("*.track")), true, false);
+	for (const FString& Leaf : Found)
+	{
+		const std::string Full = TCHAR_TO_UTF8(*(TracksDir() / Leaf));
+		bool bAlready = false;
+		for (const std::string& P : TrackPaths)
+		{
+			// The browser normalises three spellings of one path; this is the same
+			// question one level up, and asking it here keeps a track that is both
+			// recent and in the folder from appearing twice.
+			bAlready = bAlready || FPaths::IsSamePath(
+				FString(UTF8_TO_TCHAR(P.c_str())), FString(UTF8_TO_TCHAR(Full.c_str())));
+		}
+		if (!bAlready)
+		{
+			TrackPaths.push_back(Full);
+		}
+	}
+
+	// ===================== WHAT EACH ONE IS, INCLUDING THE FAILURES =====================
+	//
+	// `Rows` marks anything it has no entry for as MISSING, which is right for a
+	// file that cannot be read and WRONG for one that simply was not looked at —
+	// and until now nothing looked at any of them, so the menu told you every
+	// track you had ever opened was on a disconnected drive.
+	for (const std::string& P : TrackPaths)
+	{
+		const FString Path(UTF8_TO_TCHAR(P.c_str()));
+		FString Text;
+		if (!FFileHelper::LoadFileToString(Text, *Path))
+		{
+			// Left out deliberately: no entry IS the missing row, and the browser
+			// already writes that sentence better than a duplicate here would.
+			continue;
+		}
+
+		FTrackEntry E;
+		E.Path = P;
+		E.Name = FTrackBrowser::FileNameOf(P);
+
+		FTrackDocument Doc;
+		std::string Error;
+		if (!ParseTrackJson(TCHAR_TO_UTF8(*Text), Doc, Error))
+		{
+			// THE LOADER'S OWN REASON, carried to the row. "line 12 is wrong" and
+			// "plug the drive back in" are different problems and the list is the
+			// only place somebody will see either.
+			E.Error = Error;
+			KnownTracks.push_back(E);
+			continue;
+		}
+
+		// ONE FORWARD WALK, not a sample loop. `EvaluateAt` is O(track length) per
+		// call, so measuring height by evaluating every couple of metres is the
+		// O(n^2) trap this project keeps having to unlearn — `WalkTrack` advances
+		// a frame instead, which is linear.
+		const FTrack Built = ::BuildTrack(Doc);
+		E.LengthM = Built.TotalLength();
+		double Lowest = 0.0, Highest = 0.0;
+		bool bFirst = true;
+		for (const FTrackFrame& F : WalkTrack(Built, 2.0))
+		{
+			Lowest = bFirst ? F.Position.Z : std::fmin(Lowest, F.Position.Z);
+			Highest = bFirst ? F.Position.Z : std::fmax(Highest, F.Position.Z);
+			bFirst = false;
+		}
+		E.HeightM = Highest - Lowest;
+		KnownTracks.push_back(E);
+	}
+}
+
 FString ATUCoasterRide::RecentListPath() const
 {
 	return FPaths::ProjectSavedDir() / TEXT("RecentTracks.txt");
@@ -3359,6 +3462,26 @@ void ATUCoasterRide::RunDocumentSmokeTest()
 	UE_LOG(LogTUEvents, Log,
 		TEXT("smoke: %d segments saved, opened and unchanged; document is %s, clean"),
 		Segments.Num(), *FPaths::GetCleanFilename(UTF8_TO_TCHAR(Session.Path().c_str())));
+
+	// ===================== AND WHAT THE MENU WOULD LIST =====================
+	//
+	// The three states a row can be in, made to happen rather than reasoned about:
+	// a track that loads, one that will not parse, and one that is not there. The
+	// failure rows are the ones nobody exercises by hand, and they are the whole
+	// reason the browser keeps a file in the list instead of pruning it.
+	SaveDocumentTo(TracksDir() / TEXT("SmokeInFolder.track"));
+	FFileHelper::SaveStringToFile(FString(TEXT("{\"segments\": [{\"kind\": \"banana\"}]}")),
+		*(TracksDir() / TEXT("SmokeBroken.track")),
+		FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+	Browser.Touch("Z:/gone/SmokeMissing.track");
+
+	RefreshTrackList();
+	for (const FTrackEntry& E : FTrackBrowser::Rows(KnownTracks, TrackPaths))
+	{
+		UE_LOG(LogTUEvents, Log, TEXT("smoke: row \"%s\" — %s"),
+			UTF8_TO_TCHAR(E.Name.c_str()),
+			UTF8_TO_TCHAR(FTrackBrowser::Subtitle(E).c_str()));
+	}
 }
 
 FString ATUCoasterRide::ShellSettingsPath() const
