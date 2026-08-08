@@ -3988,8 +3988,14 @@ void ATUCoasterRide::BuildBlockMarks()
 		// Kept in WORLD space, converted once here rather than per frame, and
 		// through the same mapping the rest of the drawing uses — a post that
 		// leans the wrong way on a banked boundary would be its own small lie.
-		M.Up = ToWorld(Walk.Position + Walk.Up) - M.World;
-		M.Lateral = ToWorld(Walk.Position + Walk.Lateral) - M.World;
+		//
+		// NORMALISED, and it was not. Differencing two ToWorld calls a metre
+		// apart gives a vector of length 100, because ToWorld converts metres to
+		// centimetres — so this was a UNIT-PER-METRE vector wearing the name of a
+		// direction, and every multiplier applied to it downstream came out 100x.
+		// The gate meant to stand 4.2 m over the rails stood 420 m over them.
+		M.Up = (ToWorld(Walk.Position + Walk.Up) - M.World).GetSafeNormal();
+		M.Lateral = (ToWorld(Walk.Position + Walk.Lateral) - M.World).GetSafeNormal();
 		BlockMarks.Add(M);
 	}
 }
@@ -4025,6 +4031,10 @@ void ATUCoasterRide::DrawBlockMarkers() const
 
 		// A gate across the track rather than a post beside it: the boundary is a
 		// line the train crosses, and a marker off to one side reads as scenery.
+		// CENTIMETRES, because M.Up and M.Lateral are unit vectors in UE space.
+		// A gate 4.2 m over the rails and 1.6 m under them, 2.6 m to each side —
+		// which is about a train and a half wide and reads as a gantry rather
+		// than a wall.
 		const FVector Top = M.World + M.Up * 420.f;
 		const FVector Foot = M.World - M.Up * 160.f;
 		const FVector Half = M.Lateral * 260.f;

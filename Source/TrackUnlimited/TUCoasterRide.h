@@ -677,7 +677,19 @@ private:
 
 	struct FTUBlockMark
 	{
+		/** UE world space, centimetres. */
 		FVector World = FVector::ZeroVector;
+
+		/**
+		 * UNIT vectors in UE space, and the word is load-bearing.
+		 *
+		 * They are built by differencing two ToWorld calls a metre apart, which
+		 * yields a vector of length 100 rather than 1 — ToWorld converts metres
+		 * to centimetres. Left un-normalised that is a unit-per-METRE vector
+		 * wearing the name of a direction, and every multiplier downstream comes
+		 * out 100x: the gate meant to stand 4.2 m over the rails stood 420 m over
+		 * them, which is what "markers flying off into the sky" was.
+		 */
 		FVector Up = FVector::UpVector;
 		FVector Lateral = FVector::RightVector;
 	};
