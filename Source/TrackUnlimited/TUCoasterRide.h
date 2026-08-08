@@ -20,6 +20,7 @@
 // was ill-formed and MSVC recovered into a bare `std::vector` -- which then
 // misreported as "no default constructor" in generated code and as a broken
 // range-for hundreds of lines away from the actual cause.
+#include "TrackSpline/TrackHistory.h"
 #include "TrackSpline/TrackValidate.h"
 #include "BlockSignal/RideSignals.h"
 #include "BlockSignal/DeviceAudit.h"
@@ -1550,6 +1551,46 @@ private:
 	void RefreshTrackList();
 	std::vector<FTrackEntry> KnownTracks;
 	std::vector<std::string> TrackPaths;
+
+	// ===================== UNDO, WHICH THE RUNTIME EDITOR DID NOT HAVE =====================
+	//
+	// `FTrackHistory` has existed since Phase 0 with its snapshot rules tested, and
+	// nothing in the game ever constructed one. The Details panel has Unreal's own
+	// transactions, so the DEVELOPER path has always had undo — the shipping path,
+	// the runtime segment editor, had none at all.
+	//
+	// A pointer because the class takes its initial document in the constructor:
+	// there is no empty history, which is the right shape (a history with nothing
+	// to go back to is not a history) and means this is seeded once the first
+	// document exists rather than declared beside the actor.
+	TUniquePtr<FTrackHistory> History;
+
+	/** Record the current segment list as a step. Called from the two places an
+	 *  edit is FINISHED, never from a rebuild — a rebuild also happens for a
+	 *  preset, an open and an undo, and committing there would make undo a step
+	 *  that undoes itself. */
+	void PushHistory(const FString& Label, const FString& MergeKey = FString());
+
+	/** A new document is a new history. Undoing across an open would restore
+	 *  another track's geometry into this one, which is not an edit anybody made. */
+	void ResetHistory();
+
+	/** [J] and [L]. Apply the stored document; do NOT commit it. */
+	void UndoEdit();
+	void RedoEdit();
+	void ApplyHistoryDocument(const FTrackDocument& Doc);
+
+	/**
+	 * True while an undo is being applied.
+	 *
+	 * HONEST ABOUT WHAT IT GUARDS: nothing today takes the path it closes, because
+	 * `PushHistory` is called from the two places an edit FINISHES and never from
+	 * `RebuildFromSegments`. It is three lines of insurance against the obvious
+	 * future change — `Observe` already lives in the rebuild, so putting the
+	 * history commit beside it looks tidy — and that change would make undo push
+	 * the undone state as a new step, so the second press goes forward again.
+	 */
+	bool bApplyingHistory = false;
 
 
 	/** Save, open, save again — and the two texts must match. The one part of the

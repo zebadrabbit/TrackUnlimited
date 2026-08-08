@@ -260,6 +260,10 @@ inline std::vector<FSettingEntry> SettingsSchema()
             // PIE, so the familiar one would save the level as well as the track.
             // Every letter that spells save is taken, [S] most of all — it moves.
             {"key.save",        "Save the track",       "K"},
+            // Either side of save, for the same reason it is not Ctrl+S: the
+            // editor's undo is live in PIE and would step back through the LEVEL.
+            {"key.undo",        "Undo",                 "J"},
+            {"key.redo",        "Redo",                 "L"},
             {"key.dispatch",    "Dispatch",             "SpaceBar"},
             {"key.estop",       "Emergency stop",       "BackSpace"},
             {"key.reset",       "Reset E-stop",         "End"},

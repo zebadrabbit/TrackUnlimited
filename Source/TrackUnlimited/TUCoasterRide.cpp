@@ -807,6 +807,12 @@ void ATUCoasterRide::RebuildFromSegments()
 	// The text is built from `Doc`, which is the same list just walked, so this
 	// costs a serialisation of a few dozen segments per rebuild and no walk of its
 	// own. A rebuild is already the expensive operation on this actor.
+	//
+	// AND HISTORY IS DELIBERATELY NOT PUSHED HERE, however tidy it would look
+	// beside this. A rebuild is not an edit: it also happens for a preset, an
+	// open and an undo, and committing here would make undo record the undone
+	// state as a new step — so the second press would go forward again.
+	// `PushHistory` is called from the two places an edit is FINISHED.
 	{
 		std::string DocText, DocError;
 		Session.Observe(WriteTrackJson(Doc, DocText, DocError) ? DocText : std::string());
@@ -1725,6 +1731,25 @@ void ATUCoasterRide::PostEditChangeProperty(FPropertyChangedEvent& Event)
 	// it ends up and whether it hits itself. The viewport stays a read-only
 	// preview: this is feedback, not manipulation.
 	Super::PostEditChangeProperty(Event);
+
+	// ===================== THE DETAILS PANEL FEEDS THE SAME HISTORY =====================
+	//
+	// It has Unreal's transactions and does not need ours, so this looks like a
+	// second undo stack for the same edits — and the reason it is right anyway is
+	// the case where it is MISSING. A Details edit our history never saw is a
+	// document [J] does not know about, so the next undo would restore a state
+	// from before it and silently revert somebody's typing.
+	//
+	// A MERGE KEY HERE AND NOT IN THE RUNTIME EDITOR, because this is the control
+	// that fires continuously: a spinner dragged across twenty values is twenty
+	// callbacks and one edit. Keyed on the property, cleared by touching a
+	// different one, which is exactly what TrackHistory asks the UI to supply.
+	if (History)
+	{
+		const FName Changed = Event.GetPropertyName();
+		PushHistory(FString::Printf(TEXT("%s in the Details panel"), *Changed.ToString()),
+			Changed.ToString());
+	}
 }
 #endif
 
@@ -1915,6 +1940,19 @@ void ATUCoasterRide::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 		&ATUCoasterRide::OpenMainMenu);
 	PlayerInputComponent->BindKey(EKeys::K, IE_Pressed, this,
 		&ATUCoasterRide::SaveDocumentFromKey);
+
+	// [J] UNDO and [L] REDO, either side of [K] save. Not Ctrl+Z, for the reason
+	// [K] is not Ctrl+S: the editor owns that chord and its bindings are live in
+	// PIE, so undo would run the EDITOR's undo stack as well as ours -- two
+	// histories stepping back together, one of them through the level.
+	//
+	// J-K-L is a poor mnemonic and an honest one: it is three free adjacent keys,
+	// back and forward either side of save, and every letter that spells any of
+	// the three words is already taken.
+	PlayerInputComponent->BindKey(EKeys::J, IE_Pressed, this,
+		&ATUCoasterRide::UndoEdit);
+	PlayerInputComponent->BindKey(EKeys::L, IE_Pressed, this,
+		&ATUCoasterRide::RedoEdit);
 
 	// THE SEGMENT EDITOR. Numeric entry only — constraint 1 holds absolutely, and
 	// a digit key IS typed entry rather than a stepper wearing its name.
@@ -2356,9 +2394,20 @@ void ATUCoasterRide::CommitField()
 	// COMMITTED ON ENTER, NEVER PER KEYSTROKE. "3" on the way to "30" is a
 	// segment 3 m long and a rebuild nobody asked for — and on a closed circuit
 	// it is a rebuild that briefly reports the track as not closing.
+	const EEditField Was = FocusedField;
 	FocusedField = EEditField::Count;
 	FieldBuffer.Empty();
 	RebuildFromSegments();
+
+	// ONE ENTER IS ONE UNDO STEP, and that falls out rather than needing a merge
+	// key: this commits on Enter and never per keystroke, so "30.5" has already
+	// been coalesced into one edit before history ever sees it. The key exists for
+	// a control that fires continuously — a spinner drag in the Details panel —
+	// and the runtime editor is not one.
+	// The editor model's own name for the field, so the undo label and the panel
+	// row cannot disagree about what a thing is called.
+	PushHistory(FString::Printf(TEXT("%s on segment %d"),
+		UTF8_TO_TCHAR(FieldName(Was)), SelectedSegment));
 }
 
 void ATUCoasterRide::CancelField()
@@ -2518,6 +2567,7 @@ void ATUCoasterRide::StartFromTemplate(int32 Index)
 	}
 
 	Session.DidCreateNew(std::string());
+	ResetHistory();
 	Session.Enter(EAppMode::Build);
 	CameraMode = ETUCameraMode::Orbit;
 	RebuildFromSegments();
@@ -3171,6 +3221,9 @@ bool ATUCoasterRide::SaveDocumentTo(const FString& InPath)
 	// caller that serialised something other than what it displayed cannot
 	// accidentally mark the session clean.
 	Session.DidSave(TCHAR_TO_UTF8(*Path), TCHAR_TO_UTF8(*Text));
+	// Session's comparison is still the one thing that decides dirty; this only
+	// stops FTrackHistory's own IsDirty being a second answer that is wrong.
+	if (History) { History->MarkSaved(); }
 	Browser.Touch(TCHAR_TO_UTF8(*Path));
 	WriteRecentList();
 
@@ -3231,11 +3284,99 @@ bool ATUCoasterRide::OpenDocumentFrom(const FString& InPath)
 	// normalises it. That is a diff somebody can read, once, instead of an unsaved
 	// marker they can never clear.
 	Session.DidOpen(TCHAR_TO_UTF8(*Path), TCHAR_TO_UTF8(*SerialiseDocument()));
+	// A NEW DOCUMENT IS A NEW HISTORY. Undoing across an open would restore the
+	// previous track's geometry into this one, which is not an edit anybody made
+	// and not a state any file was ever in.
+	ResetHistory();
 	Browser.Touch(TCHAR_TO_UTF8(*Path));
 	WriteRecentList();
 
 	UE_LOG(LogTUEvents, Log, TEXT("opened %d segments from %s"), Segments.Num(), *Path);
 	return true;
+}
+
+namespace
+{
+	// The segment list as the authored document, which is what history stores and
+	// what the file stores. One conversion, used by both, so a step that is
+	// restored is exactly a file that would have been written.
+	FTrackDocument DocumentFrom(const TArray<FTUTrackSegment>& Segments)
+	{
+		FTrackDocument Doc;
+		Doc.HeartlineHeight = 1.1;
+		Doc.Segments.reserve(static_cast<std::size_t>(Segments.Num()));
+		for (const FTUTrackSegment& S : Segments)
+		{
+			Doc.Segments.push_back(ToAuthored(S));
+		}
+		return Doc;
+	}
+}
+
+void ATUCoasterRide::ResetHistory()
+{
+	History = MakeUnique<FTrackHistory>(DocumentFrom(Segments));
+}
+
+void ATUCoasterRide::PushHistory(const FString& Label, const FString& MergeKey)
+{
+	if (!History || bApplyingHistory)
+	{
+		return;
+	}
+	// `Commit` returns false and does nothing when the document is unchanged, so
+	// a field re-entered with the same number costs no step — which is the whole
+	// reason it compares canonical text rather than trusting the caller.
+	History->Commit(DocumentFrom(Segments), TCHAR_TO_UTF8(*Label),
+		TCHAR_TO_UTF8(*MergeKey));
+}
+
+void ATUCoasterRide::ApplyHistoryDocument(const FTrackDocument& Doc)
+{
+	// GUARDED, because this rebuilds and a rebuild is where an edit would normally
+	// be recorded. Without the flag, undo would push the undone state as a new
+	// step and the second press would take you forward again.
+	bApplyingHistory = true;
+	Segments.Reset(static_cast<int32>(Doc.Segments.size()));
+	for (const FAuthoredSegment& A : Doc.Segments)
+	{
+		Segments.Add(FromAuthored(A));
+	}
+	// A restored document may not contain the segment that was selected, and a
+	// selection past the end is an editor drawing a row that is not there.
+	SelectedSegment = FMath::Clamp(SelectedSegment, -1, Segments.Num() - 1);
+	CancelField();
+	RebuildFromSegments();
+	bApplyingHistory = false;
+}
+
+void ATUCoasterRide::UndoEdit()
+{
+	if (!History || !History->CanUndo())
+	{
+		// SAID, not swallowed. A key that silently does nothing at the end of the
+		// stack is indistinguishable from one that is broken — the same rule the
+		// mode tabs and [Z] already follow.
+		UE_LOG(LogTUEvents, Log, TEXT("undo: nothing further back"));
+		return;
+	}
+	// The label describes the edit that PRODUCED the current state, which is the
+	// one about to be reversed — so it is read before the index moves.
+	const FString What(UTF8_TO_TCHAR(History->UndoLabel().c_str()));
+	ApplyHistoryDocument(History->Undo());
+	UE_LOG(LogTUEvents, Log, TEXT("undo: %s"), *What);
+}
+
+void ATUCoasterRide::RedoEdit()
+{
+	if (!History || !History->CanRedo())
+	{
+		UE_LOG(LogTUEvents, Log, TEXT("redo: nothing ahead"));
+		return;
+	}
+	const FString What(UTF8_TO_TCHAR(History->RedoLabel().c_str()));
+	ApplyHistoryDocument(History->Redo());
+	UE_LOG(LogTUEvents, Log, TEXT("redo: %s"), *What);
 }
 
 void ATUCoasterRide::RefreshTrackList()
@@ -3463,6 +3604,40 @@ void ATUCoasterRide::RunDocumentSmokeTest()
 		TEXT("smoke: %d segments saved, opened and unchanged; document is %s, clean"),
 		Segments.Num(), *FPaths::GetCleanFilename(UTF8_TO_TCHAR(Session.Path().c_str())));
 
+	// ===================== UNDO, THERE AND BACK =====================
+	//
+	// An edit, a step back, a step forward. Asserted on the TEXT rather than on a
+	// segment count, because the failure worth catching is a field that does not
+	// survive the round trip through the document — which a count cannot see, and
+	// which is exactly how the device layer went missing from the save format.
+	if (Segments.Num() > 0)
+	{
+		const FString Original = SerialiseDocument();
+		Segments[0].Length += 7.5f;
+		RebuildFromSegments();
+		PushHistory(TEXT("smoke edit"));
+		const FString Edited = SerialiseDocument();
+
+		UndoEdit();
+		const bool bBack = SerialiseDocument() == Original;
+		RedoEdit();
+		const bool bForward = SerialiseDocument() == Edited;
+		UndoEdit();   // leave it as it was found
+
+		if (Edited == Original || !bBack || !bForward)
+		{
+			UE_LOG(LogTUEvents, Error,
+				TEXT("smoke: undo/redo did not round-trip (changed %d, back %d, forward %d)"),
+				Edited != Original, bBack, bForward);
+		}
+		else
+		{
+			UE_LOG(LogTUEvents, Log,
+				TEXT("smoke: an edit undoes and redoes exactly; %d steps deep"),
+				static_cast<int32>(History ? History->Depth() : 0));
+		}
+	}
+
 	// ===================== AND WHAT THE MENU WOULD LIST =====================
 	//
 	// The three states a row can be in, made to happen rather than reasoned about:
@@ -3644,6 +3819,7 @@ void ATUCoasterRide::BeginPlay()
 	// the session skips Boot here. Somebody who edits a segment now gets the
 	// unsaved marker in the frame, which is true — nothing on disc matches it.
 	Session.DidCreateNew(TCHAR_TO_UTF8(*SerialiseDocument()));
+	ResetHistory();
 	CheckDocumentRoundTrip();
 
 	if (FParse::Param(FCommandLine::Get(), TEXT("TUSmokeTest")))
