@@ -243,6 +243,11 @@ public:
 		meta = (ClampMin = "0.1", UIMax = "10.0"))
 	float GraphScale = 2.f;
 
+	/** Profile samples that could not be drawn because a channel was NaN or
+	 *  infinite. Counted rather than clamped, and reported after the walk —
+	 *  a trace drawn over broken data is worse than a trace with a hole in it. */
+	mutable int32 NonFiniteTraceSamples = 0;
+
 	/** Restart the ride this many seconds after the train comes to rest. */
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited")
 	float RestartDelaySeconds = 3.f;

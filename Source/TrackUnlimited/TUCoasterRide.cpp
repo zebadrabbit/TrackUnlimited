@@ -4922,11 +4922,20 @@ void ATUCoasterRide::DrawRideProfile() const
 	{
 		return;
 	}
+	NonFiniteTraceSamples = 0;
 
 	// One walk for every channel rather than one per channel: the frames are
 	// the expensive part and they do not depend on which trace is being drawn.
-	FTrackFrame Walk = Track.EvaluateAt(0.0);
+	//
+	// SEEDED AT THE FIRST SAMPLE, NOT AT ZERO. It used to start from
+	// EvaluateAt(0.0) while telling AdvanceFrom the walk was already at
+	// Samples[0].S — and a train's profile starts wherever it was parked, which
+	// on every preset here is its holding position rather than the seam. Every
+	// frame after that was offset along the track by exactly that distance, so
+	// the whole trace was drawn on the wrong piece of layout while looking
+	// perfectly plausible.
 	double PrevS = Profile_.Samples[0].S;
+	FTrackFrame Walk = Track.EvaluateAt(PrevS);
 	for (std::size_t i = 1; i < Profile_.Samples.size(); ++i)
 	{
 		const FRideSample& A = Profile_.Samples[i - 1];
@@ -4942,12 +4951,39 @@ void ATUCoasterRide::DrawRideProfile() const
 			}
 			const double VA = A.*(C.Field) * C.PerUnit * GraphScale;
 			const double VB = B.*(C.Field) * C.PerUnit * GraphScale;
+
+			// A NON-FINITE SAMPLE DRAWS A WEDGE ACROSS THE SCREEN, and it is
+			// invisible in the reported maxima — std::max(a, NaN) returns a, so
+			// the profile's own "peak lateral 0.30 g" is silent about it while
+			// ToWorld(Position + Up * NaN) sends one endpoint to nowhere. A thick
+			// debug line with one end at infinity renders as a solid triangle
+			// with its apex on the track, which is exactly what was on screen.
+			//
+			// SKIPPED AND COUNTED, not clamped: clamping would draw a plausible
+			// trace over data that is broken, which is the failure this project
+			// refuses everywhere else. The count is reported once per rebuild.
+			if (!FMath::IsFinite(VA) || !FMath::IsFinite(VB))
+			{
+				++NonFiniteTraceSamples;
+				continue;
+			}
 			DrawDebugLine(GetWorld(), ToWorld(FrameA.Position + FrameA.Up * VA),
 				ToWorld(FrameB.Position + FrameB.Up * VB), C.Colour, true, -1.f, 0, 2.f);
 		}
 
 		Walk = FrameB;
 		PrevS = B.S;
+	}
+
+	// SAID OUT LOUD, because a hole in a trace looks like a trace. If a channel
+	// went non-finite the ride profile has a real problem somewhere upstream of
+	// the drawing, and the drawing is the only thing that noticed.
+	if (NonFiniteTraceSamples > 0)
+	{
+		UE_LOG(LogTUEvents, Warning,
+			TEXT("ride profile: %d trace segment(s) skipped, a channel was not finite. "
+				 "The reported maxima do NOT show this -- std::max ignores NaN."),
+			NonFiniteTraceSamples);
 	}
 
 	// Where the train gave up, if it did. A marker beats a log line nobody reads.
