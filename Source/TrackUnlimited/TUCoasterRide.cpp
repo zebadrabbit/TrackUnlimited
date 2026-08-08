@@ -1837,6 +1837,12 @@ void ATUCoasterRide::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 	PlayerInputComponent->BindKey(EKeys::F2, IE_Pressed, this,
 		&ATUCoasterRide::ToggleOverlays);
 
+	// [T] — which train you are on. Not guarded against typing: a letter is not
+	// part of a number the segment editor accepts, and the same is true of every
+	// other letter bound here.
+	PlayerInputComponent->BindKey(EKeys::T, IE_Pressed, this,
+		&ATUCoasterRide::NextRiderTrain);
+
 	// THE SEGMENT EDITOR. Numeric entry only — constraint 1 holds absolutely, and
 	// a digit key IS typed entry rather than a stepper wearing its name.
 	PlayerInputComponent->BindKey(EKeys::B, IE_Pressed, this,
@@ -2571,6 +2577,16 @@ void ATUCoasterRide::DrawModeBanner(UCanvas* Canvas)
 	}
 	if (Session.IsDirty()) { Line += TEXT("   *unsaved"); }
 
+	// WHICH TRAIN, WHENEVER THERE IS MORE THAN ONE. Four trains on a circuit are
+	// identical objects on identical track, so cycling between them is invisible
+	// unless something says which one you landed on — and "the camera did not
+	// move" and "it moved to a train in the same place" look the same.
+	if (Trains.Num() > 1)
+	{
+		Line += FString::Printf(TEXT("   train %d/%d  [T]"),
+			ActiveTrainIndex() + 1, Trains.Num());
+	}
+
 	// THE CLOCK IS ALWAYS STATED WHEN IT IS NOT 1x. A ride running at quarter
 	// speed with nothing saying so is a ride somebody will report as too slow —
 	// and a paused one is a ride they will report as broken.
@@ -3163,9 +3179,9 @@ void ATUCoasterRide::DrawProfileGraph(UCanvas* Canvas)
 	// THE TRAIN IS ALWAYS DRAWN, because the most useful thing this panel does is
 	// let you watch the trace and the ride at the same time and see which bit of
 	// the graph is the bit you are on.
-	if (!Trains.IsEmpty() && Trains[0])
+	if (!Trains.IsEmpty() && Trains[ActiveTrainIndex()])
 	{
-		const double S = Trains[0]->GetDistance();
+		const double S = Trains[ActiveTrainIndex()]->GetDistance();
 		const float X = Ox + static_cast<float>(FMath::Clamp(S / Total, 0.0, 1.0)) * Wx;
 		PanelTile(Canvas, X, Oy, 1.f, Hy, PanelAmber);
 		PanelLabel(Canvas, X + 3.f, Oy + Hy - 12.f,
@@ -5384,6 +5400,25 @@ static void SetNearPlaneMetres(double Metres)
 // The wireframe and the ride-profile trace are PERSISTENT debug lines drawn once
 // at BeginPlay rather than every frame, so hiding them means flushing and
 // unhiding means redrawing. Everything else is a per-frame gate.
+void ATUCoasterRide::NextRiderTrain()
+{
+	if (Trains.Num() <= 1)
+	{
+		// SAID RATHER THAN IGNORED. A key that does nothing on a one-train
+		// layout is indistinguishable from a key that is broken, and this one is
+		// pressed precisely when somebody is looking for the other trains.
+		UE_LOG(LogTUEvents, Log, TEXT("[T] one train on this layout"));
+		return;
+	}
+	RiderTrain = (ActiveTrainIndex() + 1) % Trains.Num();
+
+	// A CAMERA SNAP IS NOT A TELEPORT, and the chase camera has to be told so.
+	// Left alone it smooths from where it was toward the new train, which on a
+	// circuit is a long sweep across the whole layout rather than a cut.
+	bFreeInitialised = false;
+	UE_LOG(LogTUEvents, Log, TEXT("riding train %d of %d"), RiderTrain + 1, Trains.Num());
+}
+
 void ATUCoasterRide::ToggleOverlays()
 {
 	bHideOverlays = !bHideOverlays;
@@ -5415,7 +5450,15 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 	{
 		return;
 	}
-	FTrain* const Train = Trains[0].Get();   // the rider's train: camera, readout
+	// THE TRAIN YOU ARE ON, which used to be Trains[0] and a comment saying so.
+	// The camera, the seat readout and the profile scrubber all follow it; the
+	// simulation does not care, because every train is stepped either way.
+	const int32 Rider = ActiveTrainIndex();
+	if (!Trains[Rider].IsValid())
+	{
+		return;
+	}
+	FTrain* const Train = Trains[Rider].Get();
 
 	// ===================== A FIXED SCAN PERIOD =====================
 	//

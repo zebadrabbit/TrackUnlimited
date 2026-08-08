@@ -459,6 +459,33 @@ public:
 		meta = (ClampMin = "-1.0", ClampMax = "1.0"))
 	float RiderPosition = 0.f;
 
+	/**
+	 * WHICH TRAIN YOU ARE ON. [T] cycles it.
+	 *
+	 * `Trains[0]` was hardcoded, with a comment calling it "the rider's train" —
+	 * which was true when there was only ever one. The circuit carries four and
+	 * the small-batch preset seven, and every one of them has its own lap, its
+	 * own dwell and its own reason for waiting at a signal. Watching the ride
+	 * from a different train is most of what an operator's view is FOR.
+	 *
+	 * The ride profile deliberately still measures train 0, because that is a
+	 * property of the LAYOUT rather than of a train: every train on a circuit
+	 * runs the same geometry, and a profile that changed with the camera would
+	 * be a conformance verdict that moved when you looked at it differently.
+	 */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Camera", meta = (ClampMin = "0"))
+	int32 RiderTrain = 0;
+
+	/** The train the camera and the readouts follow, clamped to what exists.
+	 *  Clamped rather than trusted because TrainCount is editable and shrinking
+	 *  it must not leave the camera pointed at a train that is gone. */
+	int32 ActiveTrainIndex() const
+	{
+		return Trains.Num() > 0 ? FMath::Clamp(RiderTrain, 0, Trains.Num() - 1) : 0;
+	}
+
+	void NextRiderTrain();
+
 private:
 	void RebuildFromSegments();
 	void DrawTrack() const;
