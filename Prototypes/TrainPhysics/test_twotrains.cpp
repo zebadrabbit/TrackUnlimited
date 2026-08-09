@@ -2319,6 +2319,87 @@ void TestASmallBatchPlatformWorksThreeTrainsAtOnce()
     assert(!SlowFront.bShared);
 }
 
+// ===================== WHAT A SLOW LOAD COSTS, AND WHERE =====================
+//
+// The test above samples the asymmetry at two points — 52 extra seconds at the
+// rear and the same at the front — and concludes rear-is-cheap, front-is-dear.
+// That is true and it is not the question an operations team asks. They ask HOW
+// MUCH LONGER a load may run before it costs anything, because that is what
+// decides whether it is worth walking a slow party down the platform.
+//
+// Two points cannot tell a knee from a constant. The sweep below shows there is
+// one, and that the shape is the same at every position: A BUDGET OF FREE TIME,
+// AND 1:1 BEYOND IT. The budget is the only thing that differs, and it is the
+// time the queue in front takes to clear — which is why the front's is zero.
+double FreeLoadBudget(std::size_t Position, double Base)
+{
+    // BISECTION, not a fine sweep: each sample is a 200-second three-train run,
+    // and thirty of them per position to find one number is a suite nobody waits
+    // for. Half a second of cost is the threshold — below that is scheduling
+    // jitter in when a mark trips, not a train being held.
+    double Free = 0.0, Costly = 120.0;
+    for (int Step = 0; Step < 8; ++Step)
+    {
+        const double Mid = 0.5 * (Free + Costly);
+        const FBatchResult R = RunSmallBatch(8.0 + Mid, Position);
+        assert(R.Violations == 0);
+        assert(R.UnsecuredFrames == 0);
+        ((R.LeftPlatformAt[2] - Base) > 0.5 ? Costly : Free) = Mid;
+    }
+    return Free;
+}
+
+void TestWhereASlowLoadStartsCosting()
+{
+    std::printf("What a slow load costs, and where\n");
+
+    const FBatchResult Even = RunSmallBatch(8.0, 99);
+    const double Base = Even.LeftPlatformAt[2];   // the last train away
+
+    // THE LAST DEPARTURE IS THE MEASURE, not the average. A platform is finished
+    // when the last train has gone, and a mean over three would hide the one that
+    // is holding everybody up — which is the entire subject.
+    std::printf("    extra load       rear (P0)   middle (P1)    front (P2)\n");
+    double Cost50[3] = {0.0, 0.0, 0.0};
+    for (int Extra = 10; Extra <= 50; Extra += 20)
+    {
+        double Cost[3] = {0.0, 0.0, 0.0};
+        for (std::size_t Pos = 0; Pos < 3; ++Pos)
+        {
+            const FBatchResult R = RunSmallBatch(8.0 + Extra, Pos);
+            assert(R.Violations == 0);
+            assert(R.UnsecuredFrames == 0);
+            Cost[Pos] = R.LeftPlatformAt[2] - Base;
+        }
+        std::printf("    +%2d s          %8.1f s    %8.1f s    %8.1f s\n",
+                    Extra, Cost[0], Cost[1], Cost[2]);
+        // A TRAIN CANNOT PASS THE TRAIN IN FRONT OF IT, and this is that fact
+        // stated as a number at every delay rather than at one: a delay further
+        // forward is never cheaper than the same delay further back.
+        assert(Cost[0] <= Cost[1] + 1e-6);
+        assert(Cost[1] <= Cost[2] + 1e-6);
+        if (Extra == 50) { Cost50[0] = Cost[0]; Cost50[1] = Cost[1]; Cost50[2] = Cost[2]; }
+    }
+
+    // THE FRONT PAYS ONE FOR ONE. Nothing can pass it, so every second it spends
+    // loading is a second the two behind it stand still — which makes its free
+    // budget exactly zero, and that is a property rather than a measurement.
+    assert(std::fabs(Cost50[2] - 50.0) < 1.0);
+
+    const double Budget[3] = {FreeLoadBudget(0, Base), FreeLoadBudget(1, Base),
+                              FreeLoadBudget(2, Base)};
+    std::printf("    free budget:   %8.1f s    %8.1f s    %8.1f s\n",
+                Budget[0], Budget[1], Budget[2]);
+
+    // AND THE BUDGET IS THE ANSWER SOMEBODY CAN USE. "Move a slow party to the
+    // back" is advice; "the back absorbs about forty seconds and the middle about
+    // twenty before anybody waits" is a decision.
+    assert(Budget[2] < 2.0);              // the front has none, by construction
+    assert(Budget[1] > Budget[2] + 5.0);  // and each position back has more
+    assert(Budget[0] > Budget[1] + 5.0);
+}
+
+
 void TestAnEmergencyStopStopsTheRideNotTheTrains()
 {
     // THE PROPERTY THAT FALLS OUT OF THE MODEL RATHER THAN BEING ARRANGED, and the
@@ -2620,6 +2701,7 @@ int main()
     TestTheSameRunTwiceIsTheSameRun();
     TestTheSmallBatchCircuitIsTheSameOvalAndStillCloses();
     TestASmallBatchPlatformWorksThreeTrainsAtOnce();
+    TestWhereASlowLoadStartsCosting();
     TestAnEmergencyStopStopsTheRideNotTheTrains();
     TestTheCircuitCarriesFourTrains();
     TestTheActorsOwnLoopRunsTwoTrains();
