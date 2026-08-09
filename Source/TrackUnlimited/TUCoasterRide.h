@@ -626,8 +626,8 @@ private:
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Sound")
 	bool bBrakeReleaseSound = true;
 
-	/** How loud, and how far it carries. A blow-off is sharp and local — you hear
-	 *  it from the queue, not across the park. */
+	/** How loud. A blow-off is sharp — this is the level at the valve, before
+	 *  distance does anything to it. */
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Sound",
 		meta = (ClampMin = "0.0", ClampMax = "4.0"))
 	float BrakeReleaseVolume = 1.f;
@@ -644,6 +644,36 @@ private:
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Sound",
 		meta = (ClampMin = "0.0", ClampMax = "3.0"))
 	float BrakeValveDropM = 0.55f;
+
+	/**
+	 * HOW FAR IT CARRIES, in metres, and it is a SEPARATE knob from volume.
+	 *
+	 * Turning the volume up on an unattenuated sound does not make it more distant,
+	 * it makes it louder everywhere — which is the bug this landed to fix. Range is
+	 * the falloff distance; volume is the level at the valve.
+	 *
+	 * You hear a blow-off from the queue and the station, not across the park.
+	 */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Sound",
+		meta = (ClampMin = "5.0", ClampMax = "500.0"))
+	float BrakeReleaseRangeM = 90.f;
+
+	/**
+	 * BUILT IN CODE, NOT AN ASSET, and it is the whole fix.
+	 *
+	 * `PlaySoundAtLocation` spatialises a sound only if the sound HAS attenuation
+	 * settings, and an imported `USoundWave` has none — so it played flat 2D at full
+	 * volume wherever the listener happened to be, and the world position it was
+	 * handed was computed correctly and then ignored. Nothing looks wrong at the
+	 * place the emitter is positioned; the emitter simply was not one.
+	 *
+	 * In code rather than a `.uasset` for the same reason the control panel draws on
+	 * the debug canvas: the ride should run from a fresh clone with no content set up
+	 * by hand, and an attenuation asset somebody has to create is a step that only
+	 * ever fails for the next person.
+	 */
+	UPROPERTY(Transient)
+	TObjectPtr<class USoundAttenuation> BrakeAttenuation;
 
 	/** One per drive, last frame's output. The release is an EDGE, and an edge
 	 *  needs the previous value — the same shape `FStateWatch` uses for every other

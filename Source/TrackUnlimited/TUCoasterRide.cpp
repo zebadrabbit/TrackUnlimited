@@ -33,6 +33,7 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Sound/SoundBase.h"
+#include "Sound/SoundAttenuation.h"
 #include "UObject/ConstructorHelpers.h"
 
 // The ride's own event stream. Its own category so it can be filtered on its
@@ -7113,6 +7114,27 @@ void ATUCoasterRide::LoadBrakeSounds()
 			BrakeReleaseSounds.Add(S);
 		}
 	}
+	// ===================== WHAT MAKES IT AN EMITTER =====================
+	//
+	// A sound with no attenuation settings is played FLAT: full volume, no
+	// direction, no distance, wherever the listener is. That is not a quiet bug —
+	// it is every brake on the ride hissing in your ear as you ride past them.
+	//
+	// NaturalSound is the inverse-square-ish curve real sound follows, rather than
+	// Linear, which fades at a constant rate per metre and reads as a sound being
+	// turned down by hand as you walk away from it.
+	BrakeAttenuation = NewObject<USoundAttenuation>(this);
+	FSoundAttenuationSettings& A = BrakeAttenuation->Attenuation;
+	A.bAttenuate = true;
+	A.bSpatialize = true;
+	A.DistanceAlgorithm = EAttenuationDistanceModel::NaturalSound;
+	A.AttenuationShape = EAttenuationShape::Sphere;
+	// Radius of the full-volume core, not the audible range. Small: standing at the
+	// valve and standing a metre from it are the same thing, and a large core is how
+	// a sound ends up flat again over the whole station.
+	A.AttenuationShapeExtents = FVector(200.0, 0.0, 0.0);
+	A.FalloffDistance = static_cast<float>(BrakeReleaseRangeM) * 100.f;
+
 	if (BrakeReleaseSounds.Num() == 0)
 	{
 		// SAID ONCE, at Log rather than Warning. Not having imported them yet is
@@ -7218,7 +7240,7 @@ void ATUCoasterRide::ServeBrakeReleaseSound()
 		// is untouched by it.
 		const int32 Pick = FMath::RandRange(0, BrakeReleaseSounds.Num() - 1);
 		UGameplayStatics::PlaySoundAtLocation(this, BrakeReleaseSounds[Pick], Where,
-			BrakeReleaseVolume);
+			FRotator::ZeroRotator, BrakeReleaseVolume, 1.f, 0.f, BrakeAttenuation);
 	}
 }
 
