@@ -112,6 +112,7 @@ ATUCoasterRide::ATUCoasterRide()
 	RailMesh = MakeTrackMesh(TEXT("RailMesh"));
 	SpineMesh = MakeTrackMesh(TEXT("SpineMesh"));
 	TieMesh = MakeTrackMesh(TEXT("TieMesh"));
+	SupportMesh = MakeTrackMesh(TEXT("SupportMesh"));
 
 	// Seeded so a freshly placed actor has a ride in it. Everything about that
 	// ride is data in the Details panel rather than code, which is the whole
@@ -7013,6 +7014,7 @@ void ATUCoasterRide::RebuildTrackMesh()
 		if (RailMesh) { RailMesh->ClearAllMeshSections(); }
 		if (SpineMesh) { SpineMesh->ClearAllMeshSections(); }
 		if (TieMesh) { TieMesh->ClearAllMeshSections(); }
+		if (SupportMesh) { SupportMesh->ClearAllMeshSections(); }
 		return;
 	}
 
@@ -7040,6 +7042,36 @@ void ATUCoasterRide::RebuildTrackMesh()
 	PushMeshSection(RailMesh, Mesh.Rails);
 	PushMeshSection(SpineMesh, Mesh.Spine);
 	PushMeshSection(TieMesh, Mesh.Ties);
+
+	// ===================== AND WHAT HOLDS IT UP =====================
+	//
+	// PLACEMENT WAS NEVER THE MISSING PART. `PlanSupports` refuses track under
+	// grade, refuses through an inversion where the spine is above the rails,
+	// refuses a column that would pass through the track it is not carrying, and
+	// reports the longest unsupported run — all of it asserted engine-free since
+	// the day it was written. The actor read `Plan.Finding` and dropped `Plan.Leg`
+	// on the floor every rebuild.
+	//
+	// ITS OWN WALK, at a coarser spacing than the mesh. A support span is 9 m and
+	// the mesher samples every half metre; asking the placer to consider eighteen
+	// candidates per span is eighteen times the work for the same answer.
+	if (bBuildSupports)
+	{
+		std::vector<FMeshFinding> Unused;
+		const FSupportPlan Plan = PlanSupports(WalkTrack(Track, 1.0),
+			// The TRACK profile (the cross-section), not the RIDE profile. Two
+			// different things one letter apart, and the compiler caught it.
+			Track.GetHeartlineHeight(), Profile, FSupportSettings(),
+			FlatGround(-GroundOffsetM));
+		PushMeshSection(SupportMesh, BuildSupportMesh(Plan));
+		UE_LOG(LogTemp, Log,
+			TEXT("TrackUnlimited: %d support legs, longest unsupported run %.1f m"),
+			static_cast<int32>(Plan.Leg.size()), Plan.LongestGapM);
+	}
+	else if (SupportMesh)
+	{
+		SupportMesh->ClearAllMeshSections();
+	}
 
 	// AFTER the sections exist, because SetMaterial on a component with no
 	// section is a colour assigned to nothing.

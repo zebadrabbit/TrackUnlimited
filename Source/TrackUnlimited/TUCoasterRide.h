@@ -566,6 +566,25 @@ private:
 	TObjectPtr<class UProceduralMeshComponent> TieMesh;
 
 	/**
+	 * THE STRUCTURE UNDER THE TRACK, and a fourth section because it is a fourth
+	 * MATERIAL. Steel columns are not painted rail, and a mesh section is the unit
+	 * of material in the engine — the same reason the track is three rather than one.
+	 *
+	 * `PlanSupports` produced these legs on every rebuild from the day it was
+	 * written, and the actor read only its FINDINGS, so they were computed and
+	 * thrown away. A meshed track with nothing under it reads as a toy; the
+	 * structure is most of a coaster's silhouette.
+	 */
+	UPROPERTY(VisibleAnywhere, Category = "TrackUnlimited|Mesh")
+	TObjectPtr<class UProceduralMeshComponent> SupportMesh;
+
+	/** Off leaves the track floating, which is what every screenshot before today
+	 *  was taken with. Placement is unchanged either way — the findings are the
+	 *  same whether or not anything is drawn. */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Mesh")
+	bool bBuildSupports = true;
+
+	/**
 	 * Off leaves the wireframe as the only view, which is what every screenshot
 	 * before Phase 4 was taken with. Measured: a 1288 m circuit at these defaults
 	 * is 14 ms to sweep, so a rebuild is one hitch rather than something needing
@@ -1159,9 +1178,19 @@ private:
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Diagnostics")
 	bool bShowDiagnostics = true;
 
-	/** Support placement refuses more than it places on a layout with a helix,
-	 *  and those refusals are the point — but they are noise while somebody is
-	 *  still shaping the track, so they are opt-in. */
+	/**
+	 * Support placement refuses more than it places on a layout with a helix, and
+	 * those refusals are the point — but they were NOISE while somebody was still
+	 * shaping track, because nothing was drawn and a refusal was a log line about
+	 * an absence.
+	 *
+	 * STILL OPT-IN NOW THAT THE LEGS ARE DRAWN, and for a better reason than
+	 * before: a hole in the structure is VISIBLE, so the panel repeating it is a
+	 * second answer to a question the picture already answered. What the list adds
+	 * is the metres and the WHY — "48 m refused, a column here would pass through
+	 * the return leg" — which is worth asking for and not worth being told
+	 * unprompted on every helix.
+	 */
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Diagnostics")
 	bool bShowSupportFindings = false;
 

@@ -12,6 +12,10 @@
 #include <cassert>
 #include <cmath>
 #include <cstdio>
+#include <algorithm>
+#include <cstdint>
+#include <map>
+#include <utility>
 #include <vector>
 
 namespace
@@ -320,6 +324,103 @@ void TestGROUNDIsAFunctionSoTerrainCostsNothingLater()
 
 } // namespace
 
+// ===================== THE SUPPORTS AS GEOMETRY =====================
+//
+// Placement has been asserted since this file was written. What was never checked
+// is the step that turns a plan into something you can see, because nothing did
+// it: the actor read Plan.Finding and dropped Plan.Leg on the floor every rebuild.
+//
+// Held to the same bar as the track, because it is the same failure if it is
+// wrong: a closed mesh encloses positive volume only when every triangle faces
+// outward, and a column standing on the ground with an open bottom is the ties'
+// open-pipe bug with a better view of it.
+void TestSupportsBecomeGeometry()
+{
+    std::printf("Supports become geometry\n");
+
+    // A plain hill, high enough that every span wants a column.
+    const FSupportSettings S;
+    const FSupportPlan Built = Plan(Hill(), S, FlatGround(-40.0));
+    assert(!Built.Leg.empty() && "a hill above the ground wants columns");
+
+    const int Sides = 8;
+    const FMeshBuffer M = BuildSupportMesh(Built, Sides);
+
+    // ONE CAPPED TUBE PER LEG, and the count is exact rather than "about right":
+    // a tube of N sides is 2N wall triangles plus two N-triangle cap fans.
+    const std::size_t PerLeg = static_cast<std::size_t>(Sides) * 4;
+    assert(M.Index.size() / 3 == Built.Leg.size() * PerLeg);
+    std::printf("  %zu legs -> %zu triangles\n", Built.Leg.size(), M.Index.size() / 3);
+
+    // ---- WATERTIGHT. Every edge shared by exactly two triangles, welded by
+    // position because the UV seam splits vertices that are geometrically one.
+    std::map<std::pair<std::uint32_t, std::uint32_t>, int> Edges;
+    std::vector<std::uint32_t> Weld(M.Position.size());
+    for (std::size_t i = 0; i < M.Position.size(); ++i)
+    {
+        Weld[i] = static_cast<std::uint32_t>(i);
+        for (std::size_t j = 0; j < i; ++j)
+        {
+            if (Length(M.Position[i] - M.Position[j]) < 1e-9) { Weld[i] = Weld[j]; break; }
+        }
+    }
+    for (std::size_t t = 0; t + 2 < M.Index.size(); t += 3)
+    {
+        for (int e = 0; e < 3; ++e)
+        {
+            const std::uint32_t A = Weld[M.Index[t + static_cast<std::size_t>(e)]];
+            const std::uint32_t B = Weld[M.Index[t + static_cast<std::size_t>((e + 1) % 3)]];
+            Edges[{std::min(A, B), std::max(A, B)}] += 1;
+        }
+    }
+    std::size_t Boundary = 0;
+    for (const auto& E : Edges) { if (E.second != 2) { ++Boundary; } }
+    assert(Boundary == 0 && "a column has no open end — including the one on the ground");
+
+    // ---- OUTWARD-WOUND, by signed volume, and compared against what the legs
+    // should enclose: an N-gon prism per leg of its own height.
+    double V6 = 0.0;
+    for (std::size_t t = 0; t + 2 < M.Index.size(); t += 3)
+    {
+        V6 += Dot(M.Position[M.Index[t]],
+                  Cross(M.Position[M.Index[t + 1]], M.Position[M.Index[t + 2]]));
+    }
+    const double Volume = V6 / 6.0;
+
+    double Expected = 0.0;
+    for (const FSupportLeg& L : Built.Leg)
+    {
+        const double R = L.Diameter * 0.5;
+        Expected += 0.5 * Sides * R * R * std::sin(TrackMeshTwoPi / Sides) * L.Height();
+    }
+    std::printf("  volume %.6f m^3, %d-gon prisms %.6f m^3\n", Volume, Sides, Expected);
+    assert(Volume > 0.0 && "an outward-wound closed mesh has positive signed volume");
+    assert(std::fabs(Volume - Expected) < 1e-6);
+
+    // ---- AND THE CHECK BITES. Reversing one triangle drops the volume, which is
+    // the property that makes this stronger than a winding check: a test that
+    // cannot fail is decoration.
+    FMeshBuffer Flipped = M;
+    std::swap(Flipped.Index[1], Flipped.Index[2]);
+    double FlipV6 = 0.0;
+    for (std::size_t t = 0; t + 2 < Flipped.Index.size(); t += 3)
+    {
+        FlipV6 += Dot(Flipped.Position[Flipped.Index[t]],
+                      Cross(Flipped.Position[Flipped.Index[t + 1]],
+                            Flipped.Position[Flipped.Index[t + 2]]));
+    }
+    assert(FlipV6 / 6.0 < Volume);
+
+    // ---- A REFUSED PLACEMENT PRODUCES NO COLUMN, which is the whole point of the
+    // placement rules surviving into the geometry: track at grade is a station and
+    // gets a footer rather than a tower, so a plan with no legs is an empty mesh
+    // rather than a degenerate one.
+    FSupportPlan Empty;
+    const FMeshBuffer None = BuildSupportMesh(Empty, Sides);
+    assert(None.Index.empty() && None.Position.empty());
+    std::printf("  a plan with no legs builds nothing at all\n");
+}
+
 int main()
 {
     std::printf("Support placement: where a column goes, and where it must not\n\n");
@@ -332,6 +433,7 @@ int main()
     TestAColumnDoesNOTFoulTheTrackItIsHOLDINGUP();
     TestTheLONGESTGAPIsReportedBecauseRefusalsLeaveHoles();
     TestGROUNDIsAFunctionSoTerrainCostsNothingLater();
+    TestSupportsBecomeGeometry();
 
     std::printf("\ntest_tracksupports: all assertions passed.\n");
     return 0;

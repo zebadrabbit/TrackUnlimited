@@ -300,6 +300,48 @@ inline FSupportPlan PlanSupports(const std::vector<FTrackFrame>& Path,
     return Plan;
 }
 
+// ===================== AND THE LEGS AS GEOMETRY =====================
+//
+// `PlanSupports` has produced legs — foot, top, diameter — since it was written,
+// and the actor read only `Plan.Finding`, so every rebuild computed them and threw
+// them away. A meshed track with nothing under it reads as a toy; the structure is
+// most of a coaster's silhouette, which is the argument at the top of this file
+// arriving at its own conclusion.
+//
+// IT IS A SEPARATE BUFFER, like the rails and the ties, because it is a separate
+// MATERIAL. Steel columns are not painted rail, and a mesh section is the unit of
+// material in the engine — the same reason the track is three buffers rather than
+// one.
+//
+// AND IT IS THE TIE STRUT AGAIN. A column is a capped tube between two points,
+// which is exactly what `SweepStrut` already builds and already asserts: two open
+// ends were the visible defect that made ties get caps, and a column standing on
+// the ground with an open bottom would be the same bug with a better view of it.
+inline FMeshBuffer BuildSupportMesh(const FSupportPlan& Plan, int Sides = 8)
+{
+    FMeshBuffer Out;
+    // FEWER SIDES THAN THE RAILS, deliberately. A column is background: it is seen
+    // at distance and in quantity, where a rail is the thing under the camera in a
+    // ride view. Eight reads as round at the range anything looks at a support
+    // from, and a 1288 m circuit is a lot of columns to pay twelve sides for.
+    const int N = Sides < 3 ? 3 : Sides;
+    for (const FSupportLeg& L : Plan.Leg)
+    {
+        // A LEG OF NO HEIGHT IS NOT A LEG. `PlanSupports` already refuses these by
+        // MinHeightM, so this is a guard against a caller that built a plan some
+        // other way rather than a case that happens — but a zero-length sweep is a
+        // degenerate ring pair and it is cheaper to refuse than to reason about.
+        if (!(L.Height() > 1e-6)) { continue; }
+        // THE HINT IS WORLD X, and it is genuinely arbitrary here: a column is not
+        // textured along its length and nothing about its cross-section has a
+        // preferred orientation, unlike a rail whose seam follows the track. The
+        // degenerate case cannot arise -- a leg is vertical by construction and X
+        // is never parallel to it -- but SweepStrut handles it anyway.
+        SweepStrut(Out, L.Foot, L.Top, FVec3{1.0, 0.0, 0.0}, L.Diameter * 0.5, N);
+    }
+    return Out;
+}
+
 // ponytail: single vertical columns only. No bents (the A-frame pair that carries
 // a banked turn), no diagonal bracing, no cantilevers, no shared footers where two
 // legs land within a metre of each other. Each is a real thing a real coaster has
