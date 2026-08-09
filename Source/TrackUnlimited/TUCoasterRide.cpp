@@ -2800,10 +2800,10 @@ bool ATUCoasterRide::PressConsole(float Mx, float My)
 			// A multi-position platform with a console each is the first thing this
 			// will have to split, and it is the same limitation the dispatch
 			// button already carries.
-			for (FTUPlatform& P : Platforms)
+			if (FTUPlatform* P = ConsolePlatformPtr())
 			{
-				FCommandedBank& Bank = HeldConsoleButton == 4 ? P.Crew.Gates
-															  : P.Crew.Restraints;
+				FCommandedBank& Bank = HeldConsoleButton == 4 ? P->Crew.Gates
+															  : P->Crew.Restraints;
 				Bank.Command(!Bank.IsCommandedClosed());
 			}
 			HeldConsoleButton = -1;
@@ -2813,9 +2813,19 @@ bool ATUCoasterRide::PressConsole(float Mx, float My)
 			// THE WALK-ROUND, and it only ever goes one way. Un-declaring an
 			// all-clear is not a thing an operator does — if something is wrong
 			// after they have given it, the control for that is the E-stop.
-			bOperatorAllClear = true;
+			if (FTUPlatform* P = ConsolePlatformPtr())
+			{
+				P->bOperatorAllClear = true;
+				UE_LOG(LogTUEvents, Log, TEXT("console: all clear given at Z%d"), P->Zone);
+			}
 			HeldConsoleButton = -1;
-			UE_LOG(LogTUEvents, Log, TEXT("console: all clear given"));
+			break;
+		case 7:
+			// THE POSITION SELECTOR. -1 follows the train, then each platform in
+			// turn, then back — so the useful default is one press away from
+			// wherever somebody has got to.
+			ConsolePlatform = ConsolePlatform + 1 >= Platforms.Num() ? -1 : ConsolePlatform + 1;
+			HeldConsoleButton = -1;
 			break;
 		default:
 			HeldConsoleButton = -1;
@@ -3024,6 +3034,28 @@ void ATUCoasterRide::ConfirmLeaveToMenu(bool bDiscard)
 	RefreshTrackList();
 	Session.Enter(EAppMode::MainMenu, true);
 	ApplyAppMode(EAppMode::MainMenu);
+}
+
+ATUCoasterRide::FTUPlatform* ATUCoasterRide::ConsolePlatformPtr()
+{
+	// ONE ANSWER, used by the draw AND by every command. The panel picking one
+	// platform to display while the buttons commanded all of them is exactly the
+	// bug this replaces, and two functions would let it come back.
+	if (Platforms.IsValidIndex(ConsolePlatform))
+	{
+		return &Platforms[ConsolePlatform];
+	}
+	// FOLLOWING THE TRAIN: whichever position has one and is furthest along, which
+	// is the one an operator standing at a console is working.
+	FTUPlatform* Best = nullptr;
+	for (FTUPlatform& P : Platforms)
+	{
+		if (P.Inputs.bTrainPresent && (Best == nullptr || P.Zone > Best->Zone))
+		{
+			Best = &P;
+		}
+	}
+	return Best;
 }
 
 double ATUCoasterRide::ConsoleStandS() const
@@ -5205,21 +5237,22 @@ void ATUCoasterRide::DrawPanels(UCanvas* Canvas)
 		// is the one an operator standing at a station console is working. Nothing
 		// here is invented — a control this cannot honestly light is left off it,
 		// which is why there is no FLOOR RAISE/LOWER lamp.
-		const FTUPlatform* Console = nullptr;
-		for (const FTUPlatform& P : Platforms)
-		{
-			if (P.Inputs.bTrainPresent
-				&& (Console == nullptr || P.Zone > Console->Zone))
-			{
-				Console = &P;
-			}
-		}
+		const FTUPlatform* Console = const_cast<ATUCoasterRide*>(this)->ConsolePlatformPtr();
 
 		Ty += 4.f;
 		PanelTile(Canvas, Lx, Ty + 5.f, W - Pad * 2.f, 1.f, PanelRule);
+		// THE HEADER IS THE POSITION SELECTOR. It says where the operator is
+		// standing, and says whether that is following the train or pinned — which
+		// matters, because "the gates I just shut" is a different sentence at each
+		// position of a multi-position platform.
+		ConsoleRects.Reset();
+		ConsoleAction.Reset();
+		ConsoleRects.Add(FVector4(Lx, Ty, Lx + 220.f, Ty + Row - 2.f));
+		ConsoleAction.Add(7);
 		PanelLabel(Canvas, Lx, Ty, Console != nullptr
-			? FString::Printf(TEXT("CONSOLE · Z%d"), Console->Zone)
-			: FString(TEXT("CONSOLE")), PanelDim);
+			? FString::Printf(TEXT("CONSOLE · Z%d%s"), Console->Zone,
+				ConsolePlatform >= 0 ? TEXT("  PINNED") : TEXT("  follows train"))
+			: FString(TEXT("CONSOLE · no platform")), PanelDim);
 		Ty += Row;
 
 		auto Lamp = [&](float Lx2, const TCHAR* Label, bool bLit, const FLinearColor& Col)
@@ -5282,8 +5315,6 @@ void ATUCoasterRide::DrawPanels(UCanvas* Canvas)
 		// and the controls are physically different objects in different places,
 		// and a lamp you can press is a lamp somebody presses by accident while
 		// pointing at what it says.
-		ConsoleRects.Reset();
-		ConsoleAction.Reset();
 		Ty += 2.f;
 
 		auto Button = [&](float Bx, float Bw, const TCHAR* Label, int32 Action,
@@ -5353,8 +5384,9 @@ void ATUCoasterRide::DrawPanels(UCanvas* Canvas)
 			// person having walked the train and looked at every car. Latched for
 			// this train, and the next one needs its own.
 			Button(232.f, 220.f,
-				bOperatorAllClear ? TEXT("ALL CLEAR GIVEN") : TEXT("ALL CLEAR"), 6,
-				PanelCyan, Console != nullptr && !bOperatorAllClear);
+				Console != nullptr && Console->bOperatorAllClear
+					? TEXT("ALL CLEAR GIVEN") : TEXT("ALL CLEAR"), 6,
+				PanelCyan, Console != nullptr && !Console->bOperatorAllClear);
 			Ty += Row;
 		}
 
@@ -5956,7 +5988,13 @@ void ATUCoasterRide::ServeStations(float DeltaSeconds)
 		// operator standing at it; there is one keyboard here, so it presses them
 		// all — which is right for the single-platform layouts this project has and
 		// is the first thing a multi-position platform will have to split.
-		P.Inputs.bDispatchRequest = bDispatchHeld;
+		// THE BUTTON IS AT ONE POSITION, and so is the operator holding it. It used
+		// to be pressed at every platform at once, which on a three-position
+		// platform is one press dispatching three trains.
+		//
+		// Only bites in MANUAL — the permissive ignores the request in AUTO — so
+		// every measured figure, all of which were taken in AUTO, is unmoved.
+		P.Inputs.bDispatchRequest = bDispatchHeld && &P == ConsolePlatformPtr();
 		P.Process.SetMode(bManualDispatch ? EDispatchMode::Manual
 										  : EDispatchMode::Automatic);
 
@@ -5995,7 +6033,7 @@ void ATUCoasterRide::ServeStations(float DeltaSeconds)
 			P.Inputs.bUnloadComplete = !P.Crew.Restraints.IsCommandedClosed();
 			P.Inputs.bLoadComplete = P.Crew.Gates.IsClosedAndLocked()
 				&& P.Crew.Restraints.IsCommandedClosed();
-			P.Inputs.bPlatformClear = bOperatorAllClear;
+			P.Inputs.bPlatformClear = P.bOperatorAllClear;
 		}
 		else
 		{
@@ -6008,7 +6046,7 @@ void ATUCoasterRide::ServeStations(float DeltaSeconds)
 		if (P.Process.GetPhase() == EStationPhase::Departing
 			|| P.Process.GetPhase() == EStationPhase::Empty)
 		{
-			bOperatorAllClear = false;
+			P.bOperatorAllClear = false;
 		}
 
 		// Boarded here, and it stays boarded. Set on readiness rather than on the

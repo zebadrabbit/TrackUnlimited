@@ -686,6 +686,16 @@ private:
 		FStationProcess Process{EStationRole::Combined};
 		FAutoStationCrew Crew;
 		FStationInputs Inputs;
+
+		/**
+		 * THE WALK-ROUND FOR THE TRAIN AT THIS POSITION.
+		 *
+		 * Per platform rather than one for the ride, because it is a statement
+		 * about a specific train that a specific person walked. On a three-position
+		 * platform, "I have looked at this one" is not a claim about the two in
+		 * front of it, and a single flag said it was.
+		 */
+		bool bOperatorAllClear = false;
 	};
 	TArray<FTUPlatform> Platforms;
 
@@ -1274,6 +1284,12 @@ private:
 	 *  platform the block walk found, so it is right on layouts nobody has built. */
 	double ConsoleStandS() const;
 
+	/** The platform the console is working: the pinned one, or the train's.
+	 *  ONE answer, shared by the draw and by every command, because the panel
+	 *  picking one platform while the buttons commanded all of them is the bug
+	 *  this exists to close. Null on a ride with no platform. */
+	struct FTUPlatform* ConsolePlatformPtr();
+
 	/**
 	 * THE MAIN MENU. The first screen anyone sees, and the first thing that makes
 	 * this an application rather than a project.
@@ -1396,10 +1412,20 @@ private:
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Operations")
 	bool bPlayerIsCrew = false;
 
-	/** The operator's all-clear for THIS train: the walk-round, done and stated.
-	 *  Latched, because it is a statement about a moment, and cleared when the
-	 *  train goes so the next one needs its own. */
-	bool bOperatorAllClear = false;
+	/**
+	 * WHICH PLATFORM THE CONSOLE IS WORKING, or -1 to follow the train.
+	 *
+	 * ONE OPERATOR, ONE POSITION. The controls used to command every platform at
+	 * once — shutting the gates shut them at four places somebody cannot see, and
+	 * a walk-round given at one position was recorded against all of them. That is
+	 * correct and invisible on a single-platform ride and wrong on the small-batch
+	 * preset, which has an unload position and three loading ones.
+	 *
+	 * FOLLOWING THE TRAIN IS THE DEFAULT because it is what somebody wants nine
+	 * times in ten, and picking a position explicitly is what they want when a
+	 * particular one is holding the ride up. The header is the selector.
+	 */
+	int32 ConsolePlatform = -1;
 
 	/** True if the press landed on a console control, which is also how the click
 	 *  falls through to the editor and the diagnostics list when it did not. */
