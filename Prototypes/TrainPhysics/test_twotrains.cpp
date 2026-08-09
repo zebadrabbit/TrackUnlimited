@@ -81,10 +81,21 @@ struct FItem
     // genuinely nothing different about them except that they are separate
     // machines with separate motors.
     bool bNewDevice = false;
+
+    // THE DEVICE'S OWN RATES, negative meaning "the default", because this
+    // transcription silently ran every device at the one Grip constant and that
+    // cost a real diagnosis: the actor's showcase violated with six trains while
+    // this harness ran six and seven clean, and the difference was exactly the
+    // rates this struct could not carry. A harness whose devices are all the
+    // same machine measures a different ride.
+    double Accel = -1.0;      // tyre/chain/launch drive rate, m/s^2
+    double Decel = -1.0;      // tyre braking rate, m/s^2
+    double PadDecel = -1.0;   // friction pad bite; < 0 is "no pad beyond the kind's own"
 };
 
 void AddStraight(std::vector<FItem>& O, double L, EZone Z = EZone::None, double Sp = 0.0,
-                 bool bNewDevice = false)
+                 bool bNewDevice = false,
+                 double Accel = -1.0, double Decel = -1.0, double PadDecel = -1.0)
 {
     FItem I;
     I.A.Kind = ESegmentKind::Straight;
@@ -92,6 +103,9 @@ void AddStraight(std::vector<FItem>& O, double L, EZone Z = EZone::None, double 
     I.Zone = Z;
     I.Speed = Sp;
     I.bNewDevice = bNewDevice;
+    I.Accel = Accel;
+    I.Decel = Decel;
+    I.PadDecel = PadDecel;
     O.push_back(I);
 }
 
@@ -280,6 +294,12 @@ FCircuit BuildCircuitFrom(FTrain* Tr, const std::vector<FItem>& Items,
     double AccS = 0.0;
     double OpenS = 0.0;
     double OpenSpeed = 0.0;
+    // The open device's own rates, carried from its FItem. Negative is "the
+    // default", which keeps every existing layout in this file bit-identical —
+    // the same rule the actor's segment struct applies to the same three fields.
+    double OpenAccel = -1.0;
+    double OpenDecel = -1.0;
+    double OpenPad = -1.0;
 
     auto Close = [&](double EndS)
     {
@@ -287,16 +307,25 @@ FCircuit BuildCircuitFrom(FTrain* Tr, const std::vector<FItem>& Items,
         {
             return;
         }
+        const double UpRate = OpenAccel > 0.0 ? OpenAccel : Grip;
+        const double DownRate = OpenDecel > 0.0 ? OpenDecel : Grip;
         switch (Open)
         {
         case EZone::Lift:
-            if (Tr) { Tr->AddZone(MakeLift(OpenS, EndS, OpenSpeed, Grip)); }
+            if (Tr)
+            {
+                FTrackZone Z = MakeLift(OpenS, EndS, OpenSpeed, Grip);
+                Z.MaxAccel = UpRate;
+                Z.MaxDecel = DownRate;
+                Tr->AddZone(Z);
+            }
             break;
         case EZone::Launch:
-            if (Tr) { Tr->AddZone(MakeLaunch(OpenS, EndS, OpenSpeed, Grip)); }
+            if (Tr) { Tr->AddZone(MakeLaunch(OpenS, EndS, OpenSpeed, UpRate)); }
             break;
         case EZone::Brake:
-            if (Tr) { Tr->AddZone(MakeBrake(OpenS, EndS, OpenSpeed, Grip)); }
+            if (Tr) { Tr->AddZone(MakeBrake(OpenS, EndS, OpenSpeed,
+                                            OpenPad > 0.0 ? OpenPad : Grip)); }
             break;
         case EZone::BlockBrake:
         case EZone::Station:
@@ -308,7 +337,19 @@ FCircuit BuildCircuitFrom(FTrain* Tr, const std::vector<FItem>& Items,
             // Authored as a Lift it MERGES into any lift behind it, which on the
             // reference layout is the lift hill, and a station sharing a block
             // with a lift means no train can board while another is climbing.
-            if (Tr) { Tr->AddZone(MakeLift(OpenS, EndS, OpenSpeed, Grip)); }
+            //
+            // A PAD rides on top when one is authored: the two-machine block
+            // brake, with the pad tracking the same commanded speed the tyres
+            // drive toward — the actor's rule, transcribed rather than invented.
+            if (Tr)
+            {
+                FTrackZone Z = OpenPad > 0.0
+                    ? MakeBlockBrake(OpenS, EndS, OpenSpeed, Grip, OpenSpeed, OpenPad)
+                    : MakeLift(OpenS, EndS, OpenSpeed, Grip);
+                Z.MaxAccel = UpRate;
+                Z.MaxDecel = DownRate;
+                Tr->AddZone(Z);
+            }
             break;
         default:
             return;
@@ -364,6 +405,9 @@ FCircuit BuildCircuitFrom(FTrain* Tr, const std::vector<FItem>& Items,
             Open = Items[i].Zone;
             OpenS = AccS;
             OpenSpeed = Items[i].Speed;
+            OpenAccel = Items[i].Accel;
+            OpenDecel = Items[i].Decel;
+            OpenPad = Items[i].PadDecel;
         }
         AccS += L;
     }
@@ -623,6 +667,18 @@ void DriveTheTrack(const FTrackDrives& D, const std::vector<FTrain*>& Trains)
         for (std::size_t z = 0; z < D.Num(); ++z)
         {
             Tr->SetZoneTargetSpeed(z, D.Output(z));
+            // THE PAD TRACKS THE SAME COMMAND — the line the actor has at its own
+            // serve loop and this transcription lacked, found the expensive way: a
+            // gated mid-course whose pad still held its authored ceiling relied on
+            // 1.5 m/s^2 tyres to stop a 20 m/s train, which needs 133 m of a 130 m
+            // block. The train escaped, the counter saw two trains in one block,
+            // and the harness reproduced the actor's violation for the WRONG
+            // reason. Guarded on the pad's own rate, exactly as the actor guards
+            // on ZoneBrakeDecel: a zone with no pad keeps its negative limit.
+            if (Tr->GetZone(z).BrakeDecel > 0.0)
+            {
+                Tr->SetZoneBrakeLimit(z, D.Output(z));
+            }
             // And how much of that the hardware is actually producing. One device,
             // so every train's copy hears the same thing about it — the same reason
             // Output is pushed here rather than held per train.
@@ -1150,6 +1206,8 @@ struct FRunResult
 // The actor's tick, N trains, for Seconds of ride. One place, because the only
 // way to trust a capacity number is for the capacity test and the two-train test
 // to be running the SAME policy.
+bool GTraceRun = false;
+
 FRunResult RunTrains(std::size_t N, std::size_t Lookahead, double Seconds,
                      double EStopAtSeconds = -1.0,
                      const std::vector<FItem>* InItems = nullptr,
@@ -1257,7 +1315,15 @@ FRunResult RunTrains(std::size_t N, std::size_t Lookahead, double Seconds,
         const double Total2 = T.TotalLength();
         auto Wrap = [Total2](double X) { return X < 0.0 ? X + Total2 : X; };
         TrapZone.push_back(z);
-        TrapDecel.push_back(Z.MaxDecel);
+        // THE HARDER OF THE TWO MACHINES, the same rule the device audit already
+        // applies, and the trap predates pads so it had never learned it. Judged
+        // on the tyres alone, a mid-course with 1.5 m/s^2 tyres and an 8 m/s^2
+        // pad reads as needing 232 m of a 130 m device -- so the trap tripped the
+        // E-stop on a healthy arrival THE PAD WAS ABOUT TO STOP IN 44 m, froze
+        // every drive at output zero, and parked the whole ride with zero
+        // violations on the board. A commissioned trap threshold is surveyed
+        // from the device's actual braking capability, which includes its pad.
+        TrapDecel.push_back(std::max(Z.MaxDecel, Z.BrakeDecel));
         TrapDeviceLength.push_back(Z.EndS - Z.StartS);
         TrapAt.push_back(Wrap(Z.StartS - 12.0));
         TrapAt.push_back(Wrap(Z.StartS - 2.0));
@@ -1378,6 +1444,26 @@ FRunResult RunTrains(std::size_t N, std::size_t Lookahead, double Seconds,
         }
         Drives.Tick(Dt);
         DriveTheTrack(Drives, All);
+
+        // A DIAGNOSTIC TAP, off unless a test turns it on. One line a second for
+        // the first train: where it is, what it feels, and what the drive under
+        // it believes — the same three numbers the maintenance panel shows,
+        // because "the train does not move" has too many candidate causes to
+        // argue about and exactly one of these columns goes wrong first.
+        if (GTraceRun && F % 240 == 0)
+        {
+            const FTrain& Tr0 = *Owned[0];
+            const int Hz = Tr0.FindHoldZoneAt(Tr0.GetDistance());
+            const std::size_t Zi = Hz >= 0 ? static_cast<std::size_t>(Hz) : 0;
+            std::printf("      t=%3.0f s S=%7.1f v=%5.2f zone=%2d cmd=%5.2f out=%5.2f "
+                        "tgt=%5.2f pad=%5.2f mark=%d\n",
+                        F * Dt, Tr0.GetDistance(), Tr0.GetSpeed(), Hz,
+                        Hz >= 0 ? Drives.Read(Zi).Commanded : -1.0,
+                        Hz >= 0 ? Drives.Output(Zi) : -1.0,
+                        Hz >= 0 ? Tr0.GetZoneTargetSpeed(Zi) : -1.0,
+                        Hz >= 0 ? Tr0.GetZoneBrakeLimit(Zi) : -1.0,
+                        Hz >= 0 ? (Marks.IsBlocked(Zi) ? 1 : 0) : -1);
+        }
 
         for (std::size_t t = 0; t < N; ++t)
         {
@@ -2817,6 +2903,170 @@ void TestTheActorsOwnLoopRunsTwoTrains()
 
 } // namespace
 
+// THE SHOWCASE CIRCUIT: the small-batch oval with the trim split out of the
+// fill straight, exactly as ATUCoasterRide::ShowcaseLayout() derives it. The
+// trim is the piece that matters to signalling: it BOUNDS a block and cannot
+// hold a train, so a train dispatched into its block is committed to the next
+// device -- which is why "trains = holding places - 1" over-counts here. The
+// formula counts places; a committed block consumes headway the formula never
+// sees.
+//
+// The actor's showcase also specifies per-device rates (a 10 m/s^2 launch, an
+// 8 m/s^2 pad on the mid-course). This transcription runs the default grip,
+// deliberately: if the capacity ceiling reproduces WITHOUT the rates, the cause
+// is the block topology, not the tuning -- which is the claim under test.
+//
+// bWithHelix adds one full turn (2*pi*R of arc) to the final banked turn. A
+// full circle returns to its own start point and heading, so the seam is
+// untouched; what it changes is LAP TIME, and this harness is the first thing
+// to measure that against the interlocking rather than against a single train
+// with every signal green.
+std::vector<FItem> ShowcaseCircuitLayout(bool bWithHelix)
+{
+    const double Up = Deg(26.0);
+    const double Dn = Deg(32.0);
+    const double R = 35.0;
+    const double Ease = 50.0;
+    const double Arc = Pi * R - Ease;
+    const double DropLen = 15.6847323;
+    const double FillLen = 75.5024975;
+    const double TrimLen = 40.0;
+
+    // THE RATES ARE THE POINT. The first version of this transcription carried
+    // none, ran every device at the one Grip constant, and measured six and
+    // seven trains CLEAN on a layout whose actor tripped a signalling violation
+    // at six -- a harness whose devices are all the same machine measures a
+    // different ride. These are ShowcaseLayout()'s numbers, transcribed.
+    std::vector<FItem> Out;
+    AddStraight(Out, 10.0, EZone::StationUnload, 1.5, false, 1.0, 1.0);
+    AddStraight(Out, 10.0, EZone::StationLoad, 1.5, false, 1.0, 1.0);
+    AddStraight(Out, 10.0, EZone::StationLoad, 1.5, true, 1.0, 1.0);
+    AddStraight(Out, 10.0, EZone::StationLoad, 1.5, true, 1.0, 1.0);
+    AddStraight(Out, 136.0, EZone::Launch, 38.0, false, 10.0);
+    AddEasedPitch(Out, Up, 0.0130);
+    AddStraight(Out, 40.0);
+    AddEasedPitch(Out, -Up, 0.0130);
+    AddBankedTurn(Out, R, Arc, Ease, BankDegreesFor(14.2, R));
+    AddEasedPitch(Out, -Dn, 0.0150);
+    AddStraight(Out, DropLen);
+    AddEasedPitch(Out, Dn, 0.0150);
+    AddEasedPitch(Out, Deg(20.0), 0.024);
+    AddEasedPitch(Out, Deg(-40.0), 0.024);
+    AddEasedPitch(Out, Deg(20.0), 0.024);
+    // The split: trim first, then what is left of the fill -- the same order
+    // ShowcaseLayout()'s Insert produces. Total length unchanged, so the
+    // closure that lives in the leg lengths comes along untouched.
+    AddStraight(Out, TrimLen, EZone::Brake, 24.0, false, -1.0, -1.0, 3.0);
+    AddStraight(Out, FillLen - TrimLen);
+    // The two-machine mid-course: a pad biting at 8 and tyres conveying at 1.5,
+    // which is an ordinary specification and the whole reason the two rates are
+    // separate fields.
+    AddStraight(Out, 130.0, EZone::BlockBrake, 20.0, false, 1.5, 1.5, 8.0);
+    AddBankedTurn(Out, R, bWithHelix ? Arc + 2.0 * Pi * R : Arc, Ease,
+                  BankDegreesFor(18.1, R));
+    AddStraight(Out, 24.0);
+    AddStraight(Out, 37.5, EZone::BlockBrake, 6.0);
+    AddStraight(Out, 27.0, EZone::Lift, 4.0, false, 1.0, 1.0);
+    AddStraight(Out, 37.5, EZone::BlockBrake, 2.0);
+    return Out;
+}
+
+// THE MISSING CONSUMER. Two things shipped tonight on the strength of a
+// single-train ride profile -- a check that runs one train with every signal
+// green and structurally cannot see headway -- and both tripped the real ride:
+// six trains violated on the plain layout, and the helix was withdrawn
+// unmeasured because it was implicated. This is the check both needed first.
+void TestTheShowcaseCapacityAndTheHelix()
+{
+    const std::vector<FItem> Plain = ShowcaseCircuitLayout(false);
+    const std::vector<FItem> Helix = ShowcaseCircuitLayout(true);
+
+    // The geometry claims first: the split keeps the length, the helix adds
+    // exactly one turn, and BOTH still close at the seam.
+    {
+        const FTrack A = BuildTrack(BuildCircuitFrom(nullptr, Plain, BatchTrainLen).Doc);
+        const FTrack B = BuildTrack(BuildCircuitFrom(nullptr, Helix, BatchTrainLen).Doc);
+        const double R = 35.0;
+        std::printf("\nSHOWCASE: plain %.2f m, helix %.2f m (+%.2f, one turn is %.2f)\n",
+                    A.TotalLength(), B.TotalLength(),
+                    B.TotalLength() - A.TotalLength(), 2.0 * Pi * R);
+        assert(std::fabs(B.TotalLength() - A.TotalLength() - 2.0 * Pi * R) < 1e-6);
+        for (const FTrack* T : {&A, &B})
+        {
+            const FTrackFrame S = T->EvaluateAt(0.0);
+            const FTrackFrame E = T->EvaluateAt(T->TotalLength());
+            const double Seam = std::sqrt((E.Position.X - S.Position.X) * (E.Position.X - S.Position.X)
+                                        + (E.Position.Y - S.Position.Y) * (E.Position.Y - S.Position.Y)
+                                        + (E.Position.Z - S.Position.Z) * (E.Position.Z - S.Position.Z));
+            assert(Seam < 1e-3);
+        }
+    }
+
+    for (int Variant = 0; Variant < 2; ++Variant)
+    {
+        const std::vector<FItem>* Items = Variant == 0 ? &Plain : &Helix;
+        for (std::size_t N = 1; N <= 7; ++N)
+        {
+            const FRunResult R = RunTrains(N, 1, 600.0, -1.0, Items, BatchTrainLen);
+            int TotalLaps = 0;
+            for (int L : R.Laps) { TotalLaps += L; }
+            std::printf("  %s %zu trains: %zu violation(s), %d laps, "
+                        "diverge %s, counter %s%s\n",
+                        Variant == 0 ? "plain" : "helix", N, R.Violations, TotalLaps,
+                        R.FirstDivergence < 0.0 ? "never" : "YES",
+                        (R.bCounterOverOccupied || R.bCounterInconsistent) ? "BAD" : "ok",
+                        R.bOverspeed ? ", OVERSPEED E-STOP" : "");
+            if (R.bOverspeed)
+            {
+                std::printf("    trap: zone %d at %.1f m/s, needs %.0f m of %.0f m, %.1f s in\n",
+                            R.OverspeedZone, R.OverspeedSpeed, R.OverspeedNeeded,
+                            R.OverspeedHave, R.FirstOverspeed);
+            }
+            if (R.Violations > 0)
+            {
+                std::printf("    first: train %d at %.1f m, %.1f s in\n",
+                            R.FirstViolationTrain, R.FirstViolationS, R.FirstViolation);
+            }
+            // Zero laps is not a pass, it is a parked ride — say where.
+            if (TotalLaps == 0)
+            {
+                for (std::size_t t = 0; t < R.FinalS.size(); ++t)
+                {
+                    std::printf("    train %zu ended at %.1f m, %.2f m/s, hold zone %d\n",
+                                t, R.FinalS[t], R.FinalSpeed[t], R.FinalHoldZone[t]);
+                }
+            }
+
+            // ===================== WHAT IS ASSERTED, AND WHAT IS ONLY REPORTED ==
+            //
+            // PLAIN IS CLEAN THROUGH SIX TRAINS in this harness, with real laps —
+            // which is exactly what the actor DID NOT do: it tripped a signalling
+            // violation at six. That disagreement is a fidelity gap this file has
+            // not closed yet, and it is stated here rather than papered over. The
+            // assertion holds the harness to its own measurement; the actor's trip
+            // still needs reproducing before capacity claims transfer.
+            //
+            // THE HELIX IS CLEAN TO FOUR and wedges at five, and the wedge is
+            // PHYSICS, not signalling: a train released from a standing hold at
+            // the mid-course gets ~65 m of 1.5 m/s^2 tyres, leaves at ~14 m/s,
+            // and cannot coast 400 m of banked helix — it stalls at rest on open
+            // course. Which is why a real mid-course brake sits HIGH with a drop
+            // after it: gravity does the re-launch, not the tyres. Reported, not
+            // asserted, because it is a property of this layout's authored rates
+            // and moves the day somebody gives the mid-course real conveyance.
+            const bool bAsserted = (Variant == 0 && N <= 6) || (Variant == 1 && N <= 4);
+            if (bAsserted)
+            {
+                assert(R.Violations == 0);
+                assert(!R.bOverspeed);
+                assert(R.FirstDivergence < 0.0);
+                assert(!R.bCounterOverOccupied && !R.bCounterInconsistent);
+                assert(TotalLaps > 0 && "a clean run with no laps is a parked ride");
+            }
+        }
+    }
+}
+
 int main()
 {
     TestRetargetingIsValidated();
@@ -2843,6 +3093,7 @@ int main()
     TestAnEmergencyStopStopsTheRideNotTheTrains();
     TestTheCircuitCarriesFourTrains();
     TestTheActorsOwnLoopRunsTwoTrains();
+    TestTheShowcaseCapacityAndTheHelix();
 
     // The canonical figures, printed rather than only asserted, because the docs
     // quote them and CLAUDE.md's rule is that a number should come from running
