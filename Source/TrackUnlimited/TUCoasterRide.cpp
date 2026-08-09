@@ -215,6 +215,7 @@ TArray<FTUTrackSegment> ATUCoasterRide::PresetLayout(ETUPresetLayout Which)
 	case ETUPresetLayout::OutAndBack:      return OutAndBackLayout();
 	case ETUPresetLayout::TwoTrainCircuit: return TwoTrainCircuitLayout();
 	case ETUPresetLayout::SmallBatch:      return SmallBatchLayout();
+	case ETUPresetLayout::Showcase:        return ShowcaseLayout();
 	default:                               return ReferenceLayout();
 	}
 }
@@ -283,6 +284,14 @@ void ATUCoasterRide::ApplyPresetTrainSetup(ETUPresetLayout Which)
 	case ETUPresetLayout::SmallBatch:
 		TrainLengthM = 6.f;
 		TrainCount = 5;
+		break;
+	case ETUPresetLayout::Showcase:
+		// The same 6 m vehicles the platform positions are sized for. One more than
+		// SmallBatch runs, because the trim splits a block off the return leg -- and
+		// that buys HEADWAY rather than a holding place, so the extra train has
+		// somewhere to wait rather than somewhere new to park.
+		TrainLengthM = 6.f;
+		TrainCount = 6;
 		break;
 	case ETUPresetLayout::TwoTrainCircuit:
 		TrainLengthM = 15.f;
@@ -661,6 +670,126 @@ TArray<FTUTrackSegment> ATUCoasterRide::SmallBatchLayout()
 	Head[3].bStartsNewDevice = true;
 
 	Out.Insert(Head, 0);
+	return Out;
+}
+
+TArray<FTUTrackSegment> ATUCoasterRide::ShowcaseLayout()
+{
+	// ===================== THE MILESTONE RIDE =====================
+	//
+	// One track that exercises as much of what has been built as a single layout
+	// honestly can, so the project has something to SHOW rather than a list of
+	// headers to describe.
+	//
+	// DERIVED FROM SmallBatchLayout, NOT AUTHORED FRESH, and that is the whole
+	// reason it is safe to add. This oval closes to 0.000000 m because of its LEG
+	// LENGTHS -- and closure is the expensive property here: the first hand-drawn
+	// attempt at this shape came to 1717 m and stalled in every variant. Every
+	// change below either leaves a length alone or splits one in place, so the
+	// seam, the C2 continuity and every G figure come along already measured.
+	//
+	// What it adds is DEVICES, which is where most of the engineering went and
+	// none of which any preset was exercising:
+	//
+	//   - A FRICTION PAD on the mid-course brake. Until now `ZoneBrakeDecel` was 0
+	//     on every shipped preset, so the "a block brake is TWO machines" model --
+	//     a pad that can only remove energy, and drive tyres that push and hold --
+	//     was tested and shipped with no ride using it. Here the pad bites at
+	//     8 m/s^2 and the tyres convey at 1.5, which is an ordinary specification
+	//     and was inexpressible before the two were separated.
+	//
+	//   - A TRIM BRAKE, which the closed circuit has never had. Split out of the
+	//     fill straight rather than added to it, so the leg keeps its length. It
+	//     bounds a block and cannot hold a train, which is exactly the distinction
+	//     the signalling layer draws and nothing here demonstrated.
+	//
+	//   - DEVICES THAT ARE NOT ALL THE SAME MACHINE. Every preset ran every device
+	//     at the default 6 m/s^2 for both accel and decel, which is a chain hauling
+	//     at 0.61 g. A launch is punchy, a chain is slow and relentless, transfer
+	//     tyres creep.
+	//
+	//   - ANTI-ROLLBACK ON THE LAUNCH, which SmallBatch quietly lost: the two-train
+	//     layout sets it over leg A, and SmallBatch replaces exactly those segments
+	//     to build its platform, so its launch and climb had none. Set explicitly
+	//     here rather than by index, because that is how it went missing.
+	//
+	// AND WHAT IT DELIBERATELY DOES NOT ADD: no new geometry. A helix or an
+	// inversion is a closure problem and a G problem, not an afternoon -- and the
+	// authored vocabulary cannot express a rideable loop, which is a recorded
+	// deferral with five measured failed fixes behind it. A showcase that stalled
+	// its train would show the wrong thing.
+	TArray<FTUTrackSegment> Out = SmallBatchLayout();
+
+	// ---- The launch and the climb out, which is where a failed launch comes back
+	// down. Everything from the launch to the first turn.
+	for (FTUTrackSegment& S : Out)
+	{
+		if (S.Zone == ETUSegmentZone::Launch)
+		{
+			S.bAntiRollback = true;
+			// An LSM launch is roughly 1 g. At the old 6 m/s^2 the 136 m run needs
+			// 120 m to reach 38 m/s; at 10 it is there in 72 and holds the rest,
+			// which is what a real launch does and what the drive panel shows.
+			S.ZoneAccel = 10.f;
+		}
+	}
+
+	// ---- The devices, each specified as itself.
+	for (int32 i = 0; i < Out.Num(); ++i)
+	{
+		FTUTrackSegment& S = Out[i];
+		if (S.Zone == ETUSegmentZone::BlockBrake && S.Length > 100.f)
+		{
+			// THE MID-COURSE BRAKE, AND THE ONE PLACE THE TWO MACHINES SHOW. A
+			// train arrives here fast; the pad is what stops it, and the tyres only
+			// ever truck it forward to the stop mark afterwards.
+			S.ZoneBrakeDecel = 8.f;
+			S.ZoneDecel = 1.5f;
+			S.ZoneAccel = 1.5f;
+		}
+		else if (S.Zone == ETUSegmentZone::Lift)
+		{
+			// Transfer tyres. They creep, and a rider feels the pickup.
+			S.ZoneAccel = 1.0f;
+			S.ZoneDecel = 1.0f;
+		}
+		else if (S.Zone == ETUSegmentZone::StationLoad
+			|| S.Zone == ETUSegmentZone::StationUnload)
+		{
+			S.ZoneAccel = 1.0f;
+			S.ZoneDecel = 1.0f;
+		}
+	}
+
+	// ---- The trim, SPLIT OUT of the fill straight so the leg keeps its length.
+	//
+	// Found by its length rather than its index: this list has already been
+	// rebuilt twice by the two derivations above it, and an index would be a
+	// number that silently means something else the day either one changes.
+	for (int32 i = 0; i < Out.Num(); ++i)
+	{
+		if (Out[i].Zone != ETUSegmentZone::None
+			|| Out[i].Kind != ETUSegmentKind::Straight
+			|| Out[i].Length < 70.f || Out[i].Length > 80.f)
+		{
+			continue;
+		}
+		const float TrimLen = 40.f;
+		Out[i].Length -= TrimLen;
+
+		FTUTrackSegment Trim;
+		Trim.Kind = ETUSegmentKind::Straight;
+		Trim.Length = TrimLen;
+		Trim.Zone = ETUSegmentZone::Brake;
+		// A TRIM IS A PAD AND NOTHING ELSE -- it has no tyres, so it can shave
+		// speed off a train and can never start one. Authored above the arrival
+		// speed on purpose: a trim that stopped the train would be a block brake
+		// that cannot let go, which is a wedged ride rather than a trimmed one.
+		Trim.ZoneSpeed = 24.f;
+		Trim.ZoneBrakeDecel = 3.f;
+		Out.Insert(Trim, i);
+		break;
+	}
 	return Out;
 }
 
@@ -3082,6 +3211,7 @@ void ATUCoasterRide::StartFromTemplate(int32 Index)
 	case ETemplatePreset::OutAndBack:      Preset = ETUPresetLayout::OutAndBack; break;
 	case ETemplatePreset::TwoTrainCircuit: Preset = ETUPresetLayout::TwoTrainCircuit; break;
 	case ETemplatePreset::SmallBatch:      Preset = ETUPresetLayout::SmallBatch; break;
+	case ETemplatePreset::Showcase:        Preset = ETUPresetLayout::Showcase; break;
 	case ETemplatePreset::Blank:           Segments.Reset(); break;
 	default:                               Preset = ETUPresetLayout::Reference; break;
 	}
@@ -4679,6 +4809,49 @@ bool ATUCoasterRide::RunDocumentSmokeTest()
 		}
 	}
 
+	// ===================== THE SHOWCASE ACTUALLY RUNS =====================
+	//
+	// It is derived from a proven closed circuit and every change was chosen to be
+	// closure-safe, which is an argument rather than a measurement. This is the
+	// measurement: it closes, it completes, and the two devices it exists to
+	// demonstrate are really there.
+	//
+	// A showcase that stalled its train, or whose circuit missed the seam by a
+	// metre, would demonstrate the opposite of what it is for -- and both are
+	// silent from the cockpit.
+	{
+		Preset = ETUPresetLayout::Showcase;
+		Segments = PresetLayout(Preset);
+		ApplyPresetTrainSetup(Preset);
+		ApplyPresetWalkways();
+		RebuildFromSegments();
+
+		int32 Pads = 0, Trims = 0;
+		for (const FTUTrackSegment& S : Segments)
+		{
+			if (S.ZoneBrakeDecel > 0.f) { ++Pads; }
+			if (S.Zone == ETUSegmentZone::Brake) { ++Trims; }
+		}
+
+		if (!bTrackIsCircuit || !Profile_.bCompleted || Pads < 2 || Trims != 1)
+		{
+			UE_LOG(LogTUEvents, Error,
+				TEXT("smoke: the showcase is wrong (circuit %d, completed %d, pads %d, trims %d)"),
+				bTrackIsCircuit, Profile_.bCompleted, Pads, Trims);
+			Failures.Add(TEXT("showcase"));
+		}
+		else
+		{
+			UE_LOG(LogTUEvents, Log,
+				TEXT("smoke: the showcase closes and runs -- %d segments, %.1f m, ")
+				TEXT("top %.1f km/h, %.0f s, %.2f..%+.2f g vertical, %.2f lateral, ")
+				TEXT("%d friction pad(s), %d trim"),
+				Segments.Num(), Track.TotalLength(), Profile_.TopSpeed * 3.6,
+				Profile_.Duration, Profile_.MinVerticalG, Profile_.MaxVerticalG,
+				Profile_.MaxAbsLateralG, Pads, Trims);
+		}
+	}
+
 	// ===================== AND WHAT THE MENU WOULD LIST =====================
 	//
 	// The three states a row can be in, made to happen rather than reasoned about:
@@ -4718,7 +4891,7 @@ bool ATUCoasterRide::RunDocumentSmokeTest()
 
 	if (Failures.Num() > 0)
 	{
-		UE_LOG(LogTUEvents, Error, TEXT("smoke: %d of 9 checks failed: %s"),
+		UE_LOG(LogTUEvents, Error, TEXT("smoke: %d of 10 checks failed: %s"),
 			Failures.Num(), *FString::Join(Failures, TEXT(", ")));
 	}
 	return Failures.Num() == 0;

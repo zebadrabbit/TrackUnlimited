@@ -159,6 +159,19 @@ enum class ETUPresetLayout : uint8
 	// to board holds up only the trains BEHIND them — measured at 52 extra seconds
 	// costing the ride 5.5 s at the back and the full 52 at the front.
 	SmallBatch UMETA(DisplayName = "Small batch (unload + 3 loading positions)"),
+
+	// EVERYTHING AT ONCE, as a milestone: the small-batch platform plus the two
+	// device features no preset was exercising -- a real friction pad on the
+	// mid-course brake, and a trim brake that bounds a block without being able to
+	// hold a train. Devices are specified individually rather than all running the
+	// default 6 m/s^2, which is a chain hauling at 0.61 g.
+	//
+	// APPENDED, never inserted. A preset is serialised into a level, so moving an
+	// enumerator turns somebody's saved ride into a different one.
+	//
+	// Same geometry as the circuit it derives from, deliberately -- closure is the
+	// expensive property and it is bought by the leg lengths.
+	Showcase UMETA(DisplayName = "Showcase (every device, small-batch platform)"),
 };
 
 // Which side of the track an evacuation catwalk runs down.

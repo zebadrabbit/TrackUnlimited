@@ -125,6 +125,7 @@ public:
 
 	/** The same oval, re-zoned for small vehicles: unload plus three load positions. */
 	static TArray<FTUTrackSegment> SmallBatchLayout();
+	static TArray<FTUTrackSegment> ShowcaseLayout();
 
 	/** The train that goes with a preset — a small-batch ride has small vehicles. */
 	void ApplyPresetTrainSetup(ETUPresetLayout Which);

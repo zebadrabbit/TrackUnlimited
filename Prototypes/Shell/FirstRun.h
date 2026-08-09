@@ -183,6 +183,7 @@ enum class ETemplatePreset
     Reference,
     TwoTrainCircuit,
     SmallBatch,
+    Showcase,
     Blank,
 };
 
@@ -194,7 +195,7 @@ struct FTemplate
     ETemplatePreset Preset = ETemplatePreset::Blank;
 };
 
-inline std::size_t NumTemplates() { return 4; }
+inline std::size_t NumTemplates() { return 5; }
 
 inline FTemplate TemplateAt(std::size_t i)
 {
@@ -223,6 +224,16 @@ inline FTemplate TemplateAt(std::size_t i)
                 "and the vertical G trace shows it going negative.",
                 ETemplatePreset::OutAndBack};
     case 3:
+        return {"Showcase — every device",
+                "The launched circuit re-zoned as a milestone: a four-position platform, a "
+                "launch, a trim brake, and a mid-course block brake with a real friction "
+                "pad. Six trains, and every device specified as itself rather than all of "
+                "them sharing one rate.",
+                "Open the [P] panel and watch the mid-course brake. The pad stops the "
+                "train and the tyres truck it to the mark afterwards — two machines, "
+                "one commanded speed.",
+                ETemplatePreset::Showcase};
+    case 4:
     default:
         return {"Blank",
                 "Nothing at all. For somebody who already knows what they are doing.",
