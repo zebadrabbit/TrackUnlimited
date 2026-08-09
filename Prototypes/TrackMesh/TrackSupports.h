@@ -197,7 +197,18 @@ struct FSupportSettings
     // How far the top of a footing stands proud of the ground. Real ones are
     // mostly buried with a little showing, and something entirely below grade
     // would be invisible -- which defeats the point of drawing it.
-    double FootingProudM = 0.12;
+    // HOW MUCH OF THE PIER SHOWS. 0.12 was a guess and it was too shy: the pad
+    // is 0.57 m thick, so at 0.12 proud 79% of it was underground and what was
+    // left read as a seam in the dirt rather than as a thing the column stands
+    // on. From a low angle that lip plus the column's own shadowed side looks
+    // convincingly like seeing through a surface into a hollow -- which is what
+    // it was reported as, and the geometry was measured outward-wound both ways
+    // before this was changed rather than after.
+    //
+    // 0.30 is ordinary practice: a coaster column lands on a concrete pier that
+    // projects visibly above grade, with the baseplate and anchor bolts on top of
+    // it. Cosmetic, and MORE faithful rather than less.
+    double FootingProudM = 0.30;
 };
 
 // Shortest distance from a point to a line segment. The whole of the
