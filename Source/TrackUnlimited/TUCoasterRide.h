@@ -1284,6 +1284,35 @@ private:
 	 *  platform the block walk found, so it is right on layouts nobody has built. */
 	double ConsoleStandS() const;
 
+	// ===================== THE PROFILE SCRUBBER =====================
+	//
+	// `FProfileGraph` has had `ScrubToS` and `SToScrub` since the graph landed, with
+	// the round-trip asserted because the handle is drawn from the value it just
+	// produced and a mismatch makes it drift away from the cursor. Nothing ever
+	// dragged it.
+	//
+	// WHAT IT IS FOR is not reading a number off the trace — the extremes already
+	// carry their locations, which is the same rule twice. It is that a graph and a
+	// track are two pictures of one ride, and dragging one should move the other:
+	// you find the 4.2 g and then you are LOOKING at the piece of track that does
+	// it, which is the thing a screenshot of a trace can never do.
+	FProfileGraph Graph;
+	bool bScrubbing = false;
+
+	/** True if the press landed inside the graph, which is also what tells the
+	 *  click it has been consumed. */
+	bool PressGraph(float Mx, float My);
+
+	/** Follow the pointer while the button is down, and put the orbit focus on the
+	 *  metre being scrubbed. Called from Tick, because a drag is a thing that
+	 *  happens between events rather than at one. */
+	void TickScrub();
+
+	/** The graph's rectangle, so the draw and the hit test cannot disagree about
+	 *  where it is — the same one-answer rule the console selector needed. */
+	void GraphRect(float ViewportHeight, float& OutX, float& OutY,
+		float& OutW, float& OutH) const;
+
 	/** The platform the console is working: the pinned one, or the train's.
 	 *  ONE answer, shared by the draw and by every command, because the panel
 	 *  picking one platform while the buttons commanded all of them is the bug

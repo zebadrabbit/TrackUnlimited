@@ -2730,11 +2730,13 @@ void ATUCoasterRide::ClickPrimary()
 	if (Session.Mode() == EAppMode::MainMenu) { ClickMainMenu(); return; }
 
 	// THE CONSOLE BEFORE THE EDITOR, because in Operate it is the only thing on
-	// screen anybody is working and the editor is refusing edits anyway.
+	// screen anybody is working and the editor is refusing edits anyway. The graph
+	// after it and before the editor, because it sits along the bottom where the
+	// editor's rows do not reach.
 	if (APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr)
 	{
 		float Cx = 0.f, Cy = 0.f;
-		if (PC->GetMousePosition(Cx, Cy) && PressConsole(Cx, Cy))
+		if (PC->GetMousePosition(Cx, Cy) && (PressConsole(Cx, Cy) || PressGraph(Cx, Cy)))
 		{
 			return;
 		}
@@ -2855,6 +2857,13 @@ void ATUCoasterRide::ReleasePrimary()
 	if (HeldConsoleButton >= 0)
 	{
 		ReleaseConsole();
+		return;
+	}
+	if (bScrubbing)
+	{
+		// ENDED WHEREVER THE POINTER IS. A scrub left running because the mouse
+		// came up outside the graph is a camera that keeps following it.
+		bScrubbing = false;
 		return;
 	}
 
@@ -4472,15 +4481,92 @@ void ATUCoasterRide::DrawDiagnosticsPanel(UCanvas* Canvas)
 }
 
 
+void ATUCoasterRide::GraphRect(float ViewportHeight, float& OutX, float& OutY,
+	float& OutW, float& OutH) const
+{
+	// ONE ANSWER for where the graph is, shared by the draw and by the hit test.
+	// The console had exactly this bug — a panel deciding one thing to display
+	// while the clicks were resolved against another — and two copies of four
+	// numbers is how it starts.
+	OutW = 560.f;
+	OutH = 150.f;
+	OutX = 20.f;
+	// THE HEIGHT COMES IN rather than a canvas, so the hit test does not need one
+	// — there is no canvas outside a draw call, and a hit test that had to invent
+	// one would be the second source of truth this exists to avoid.
+	OutY = ViewportHeight - OutH - 96.f;
+}
+
+bool ATUCoasterRide::PressGraph(float Mx, float My)
+{
+	if (!bShowProfileGraph || bHideOverlays || !Profile_.bCompleted)
+	{
+		// A STALLED RIDE HAS NOTHING TO SCRUB. The graph already refuses to draw a
+		// trace from a run that did not happen, and a scrubber over a blank panel
+		// would be a control that moves the camera to a metre that means nothing.
+		return false;
+	}
+	APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr;
+	if (!PC) { return false; }
+	int32 VpW = 0, VpH = 0;
+	PC->GetViewportSize(VpW, VpH);
+
+	float Gx = 0.f, Gy = 0.f, Gw = 0.f, Gh = 0.f;
+	GraphRect(static_cast<float>(VpH), Gx, Gy, Gw, Gh);
+	if (Mx < Gx || Mx > Gx + Gw || My < Gy || My > Gy + Gh)
+	{
+		return false;
+	}
+
+	bScrubbing = true;
+	TickScrub();
+	return true;
+}
+
+void ATUCoasterRide::TickScrub()
+{
+	if (!bScrubbing)
+	{
+		return;
+	}
+	APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr;
+	float Mx = 0.f, My = 0.f;
+	if (!PC || !PC->GetMousePosition(Mx, My))
+	{
+		return;
+	}
+
+	int32 VpW = 0, VpH = 0;
+	PC->GetViewportSize(VpW, VpH);
+	float Gx = 0.f, Gy = 0.f, Gw = 0.f, Gh = 0.f;
+	GraphRect(static_cast<float>(VpH), Gx, Gy, Gw, Gh);
+
+	// NOT CLAMPED TO THE RECTANGLE, deliberately. Dragging off the end of the
+	// graph should pin to the end and keep tracking, the way every scrubber in
+	// every editor does — a drag that stops responding because the pointer left a
+	// box reads as the control having broken.
+	Graph.SetDomain(Track.TotalLength());
+	Graph.ScrubTo(Graph.ScrubToS(Gw > 0.f ? (Mx - Gx) / Gw : 0.0));
+
+	// AND THE OTHER PICTURE MOVES. The orbit focus goes to the metre under the
+	// cursor, so finding a number on the trace leaves you looking at the track
+	// that produces it. Only in orbit: the free camera is somewhere somebody flew
+	// it deliberately, and yanking it would undo that.
+	if (CameraMode == ETUCameraMode::Orbit && Track.NumSegments() > 0)
+	{
+		const FTrackFrame F = Track.EvaluateAt(Graph.ScrubbedS());
+		Orbit.Focus = {F.Position.X, F.Position.Y, F.Position.Z};
+		bOrbitFramed = true;
+	}
+}
+
 void ATUCoasterRide::DrawProfileGraph(UCanvas* Canvas)
 {
 	if (!bShowProfileGraph || !Canvas || !GEngine) { return; }
 
 	const std::vector<FRideSample>& Sample = Profile_.Samples;
-	const float Wx = 560.f;
-	const float Hy = 150.f;
-	const float Ox = 20.f;
-	const float Oy = Canvas->SizeY - Hy - 96.f;
+	float Ox = 0.f, Oy = 0.f, Wx = 0.f, Hy = 0.f;
+	GraphRect(static_cast<float>(Canvas->SizeY), Ox, Oy, Wx, Hy);
 
 	PanelTile(Canvas, Ox - 8.f, Oy - 24.f, Wx + 16.f, Hy + 58.f, PanelGround);
 
@@ -4589,6 +4675,26 @@ void ATUCoasterRide::DrawProfileGraph(UCanvas* Canvas)
 		PanelTile(Canvas, X, Oy, 1.f, Hy, PanelAmber);
 		PanelLabel(Canvas, X + 3.f, Oy + Hy - 12.f,
 			FString::Printf(TEXT("%.0f m"), S), PanelAmber);
+	}
+
+	// ---- THE SCRUBBER, drawn from the value it just produced.
+	//
+	// That is why `ScrubToS` and `SToScrub` are asserted to round-trip: this line
+	// is placed by converting the arc length BACK to a fraction, so a mismatch
+	// makes the handle drift away from the cursor as you drag — visible
+	// immediately, and impossible to reason about from the code alone.
+	if (bScrubbing || Graph.ScrubbedS() > 0.0)
+	{
+		const double Sc = Graph.ScrubbedS();
+		const float Xs = Ox + static_cast<float>(Graph.SToScrub(Sc)) * Wx;
+		PanelTile(Canvas, Xs, Oy, 1.f, Hy, PanelCyan);
+		// THE VALUE OF THE CHANNEL BEING LOOKED AT, not of all of them. One
+		// channel at a time is the rule the graph already follows, and a readout
+		// listing four numbers would be a second answer to a question the trace
+		// has already given.
+		PanelLabel(Canvas, Xs + 3.f, Oy + 2.f,
+			FString::Printf(TEXT("%.0f m   %.2f"), Sc,
+				FProfileGraph::SampleAt(Values, Total, Sc)), PanelCyan);
 	}
 
 	// ---- The heading, the extremes, and WHERE they happened.
@@ -7058,6 +7164,11 @@ void ATUCoasterRide::ToggleOverlays()
 void ATUCoasterRide::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+
+	// A DRAG IS A THING THAT HAPPENS BETWEEN EVENTS, so it is followed here rather
+	// than on a mouse-move that this input setup does not have. Above the early
+	// returns for the same reason the timer below is: it is not part of the ride.
+	TickScrub();
 
 	// WALL CLOCK, NOT THE SIM CLOCK. A paused ride still counts this down, because
 	// the person reading it is not paused -- and it sits above the early returns
