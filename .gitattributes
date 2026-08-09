@@ -1,3 +1,19 @@
+# ===================== LINE ENDINGS, FIRST BECAUSE LAST-MATCH-WINS =====================
+#
+# text=auto normalises to LF in the repository and checks out CRLF on Windows.
+# This sits at the TOP on purpose: in .gitattributes the LAST matching rule
+# wins, so putting it below the LFS block would override every `-text` there and
+# start mangling binary assets.
+#
+# Why it is here at all: TUCoasterRide.cpp had ended up with mixed CRLF and LF
+# regions, and a search for a statement ending in `);
+` walked straight past a
+# CRLF-terminated one into the next block -- which put a line outside the `if`
+# it belonged to. It compiled, it looked right, and it reported a check as
+# failed that had passed. A file with two kinds of line ending is a file where
+# text tools quietly disagree about where statements end.
+* text=auto
+
 # Git LFS tracking for Unreal Engine binary assets.
 # Run `git lfs install` once, then these are tracked automatically on add/commit.
 

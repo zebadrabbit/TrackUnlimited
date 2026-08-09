@@ -4455,6 +4455,21 @@ bool ATUCoasterRide::RunDocumentSmokeTest()
 	// different launches, which is what it did -- it passed before the boot change
 	// and failed after, with nothing about the document altered. The mode is an
 	// input, so it gets stated rather than inherited.
+	// ===================== AND IT PUTS EVERYTHING BACK =====================
+	//
+	// This writes real files into the real folders, which is the point -- the
+	// encoding and the browser's four row states only exist on disc. But those
+	// folders are the PLAYER'S: SmokeTest, SmokeInFolder and SmokeBroken were
+	// still sitting in the track list afterwards, and two of them had been added
+	// to the persistent recent list, so a test run left three tracks in somebody's
+	// menu that they never made and cannot explain.
+	//
+	// The recent list is snapshotted rather than edited back out, because the test
+	// touches it through several paths and remembering which is how one gets
+	// missed.
+	FString RecentBefore;
+	const bool bHadRecent = FFileHelper::LoadFileToString(RecentBefore, *RecentListPath());
+
 	Session.Enter(EAppMode::Build, /*bConfirmed*/ true);
 
 	const FString Path = FPaths::ProjectSavedDir() / TEXT("SmokeTest.track");
@@ -4683,6 +4698,23 @@ bool ATUCoasterRide::RunDocumentSmokeTest()
 			UTF8_TO_TCHAR(E.Name.c_str()),
 			UTF8_TO_TCHAR(FTrackBrowser::Subtitle(E).c_str()));
 	}
+
+	// Swept AFTER the rows above, which are the whole reason these exist.
+	IFileManager& Files = IFileManager::Get();
+	Files.Delete(*(FPaths::ProjectSavedDir() / TEXT("SmokeTest.track")), false, true, true);
+	Files.Delete(*(TracksDir() / TEXT("SmokeInFolder.track")), false, true, true);
+	Files.Delete(*(TracksDir() / TEXT("SmokeBroken.track")), false, true, true);
+	if (bHadRecent)
+	{
+		FFileHelper::SaveStringToFile(RecentBefore, *RecentListPath(),
+			FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+	}
+	else
+	{
+		// It did not exist before, so leaving an empty one behind is still litter.
+		Files.Delete(*RecentListPath(), false, true, true);
+	}
+	RefreshTrackList();
 
 	if (Failures.Num() > 0)
 	{
