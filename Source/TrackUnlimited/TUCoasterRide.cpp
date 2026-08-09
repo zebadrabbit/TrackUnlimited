@@ -286,12 +286,25 @@ void ATUCoasterRide::ApplyPresetTrainSetup(ETUPresetLayout Which)
 		TrainCount = 5;
 		break;
 	case ETUPresetLayout::Showcase:
-		// The same 6 m vehicles the platform positions are sized for. One more than
-		// SmallBatch runs, because the trim splits a block off the return leg -- and
-		// that buys HEADWAY rather than a holding place, so the extra train has
-		// somewhere to wait rather than somewhere new to park.
-		CarCount = 2; CarLengthM = 3.f;   // 6 m, exactly as before
-		TrainCount = 6;
+		// FIVE, WHICH IS SmallBatch'S MEASURED NUMBER, and it was six for an hour on
+		// an argument rather than a measurement: that the trim splits a block off the
+		// return leg and so buys headway for one more. It ran six and got a
+		// SIGNALLING VIOLATION.
+		//
+		// The argument was wrong in a way this project has already written down.
+		// "Trains = holding places - 1" is asserted for a ring where every block can
+		// HOLD; a trim cannot, so splitting one off the return leg puts a block in
+		// the ring that a train may not stop in, and a train dispatched into it is
+		// committed all the way to the next device. That is headway SPENT, not
+		// bought. The panel still offers 7 because the formula counts places, which
+		// is necessary and not sufficient -- the same gap the old blocks/(1+lookahead)
+		// rule had, recorded on TwoTrainCircuitLayout and repeated here anyway.
+		//
+		// So it takes the number that was MEASURED on this geometry rather than the
+		// one that was reasoned about. Six is reachable with [+ RETURN] for anybody
+		// who wants to watch it trip.
+		CarCount = 2; CarLengthM = 3.f;
+		TrainCount = 5;
 		break;
 	case ETUPresetLayout::TwoTrainCircuit:
 		CarCount = 5; CarLengthM = 3.f;   // 15 m, exactly as before
