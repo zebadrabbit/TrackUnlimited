@@ -2122,7 +2122,14 @@ void ATUCoasterRide::DrawSegmentEditor(UCanvas* Canvas)
 
 	if (Segments.Num() == 0)
 	{
-		PanelLabel(Canvas, Ox, Y, TEXT("SEGMENTS   [B] hide"), PanelDim);
+			// THE COUNT IS IN THE HEADING, because once the rows show an intersection the
+	// panel no longer looks any different for eight segments than for one — and
+	// somebody about to type a number needs to know how many it lands on.
+	PanelLabel(Canvas, Ox, Y, IsMultiSelect()
+		? FString::Printf(TEXT("SEGMENTS   %d selected  ·  [I] insert [R] remove  ·  [B] hide"),
+			Selection.Num())
+		: FString(TEXT("SEGMENTS   shift-click to select more  ·  [I] insert [R] remove  ·  [B] hide")),
+		PanelDim);
 		PanelLabel(Canvas, Ox, Y + 20.f,
 			UTF8_TO_TCHAR(EmptyStateFor(EPanelKind::SegmentList)), PanelDim);
 		return;
@@ -2201,12 +2208,25 @@ void ATUCoasterRide::DrawSegmentEditor(UCanvas* Canvas)
 	// visibility rule lives in the tested model rather than being asked again
 	// here, or the two would drift the first time a kind gained a field.
 	const EEditKind Kind = KindOf(Seg.Kind);
+	// ONCE PER DRAW, not per row. The selection is a handful, but asking the model
+	// eighteen times for the same answer is how a panel becomes the slow thing.
+	const bool bMulti = IsMultiSelect();
+	const std::vector<FFieldView> MultiFields =
+		bMulti ? BuildSelectionEditor().Fields() : std::vector<FFieldView>();
 	for (std::size_t f = 0; f < static_cast<std::size_t>(EEditField::Count); ++f)
 	{
 		const EEditField F = static_cast<EEditField>(f);
 		if (!KindUsesField(Kind, F)) { continue; }
 		if (F == EEditField::ZoneSpeed && Seg.Zone == ETUSegmentZone::None) { continue; }
 		if (F == EEditField::StartsNewDevice && Seg.Zone == ETUSegmentZone::None) { continue; }
+		// MULTI-SELECT SHOWS THE INTERSECTION, from the tested model. A field only
+		// some of the selection uses is not editable across it — writing it would
+		// give an arc's radius to a straight — so it is not offered.
+		if (bMulti && (static_cast<std::size_t>(f) >= MultiFields.size()
+			|| !MultiFields[static_cast<std::size_t>(f)].bVisible))
+		{
+			continue;
+		}
 
 		EditorRowRects.Add(FVector4(Ox, Y, Ox + W, Y + Row));
 		EditorRowField.Add(static_cast<int32>(f));
@@ -2241,9 +2261,18 @@ void ATUCoasterRide::DrawSegmentEditor(UCanvas* Canvas)
 			// THE VALUE, AND A CARET WHILE TYPING. What is shown mid-edit is the
 			// buffer rather than the stored number, because showing the stored one
 			// would make typing look like it was doing nothing.
+			// A DIFFERING VALUE SAYS SO RATHER THAN SHOWING THE FIRST ONE'S, which
+			// is the failure the model was written against: somebody edits what
+			// looks like the shared value and silently flattens seven others onto
+			// the one they happened to see. Typing over it is still allowed and
+			// still writes all of them — that is the intent — but they are told
+			// what they are replacing.
+			const std::size_t Fx = static_cast<std::size_t>(f);
+			const bool bDiffers = bMulti && Fx < MultiFields.size() && MultiFields[Fx].bDiffers;
 			Value = bFocus
 				? FieldBuffer + TEXT("_")
-				: FString::Printf(TEXT("%.4g"), ReadField(Seg, F));
+				: (bDiffers ? FString(TEXT("--  (differs)"))
+							: FString::Printf(TEXT("%.4g"), ReadField(Seg, F)));
 		}
 
 		// UNITS ARE ALWAYS SHOWN WHERE THERE IS ONE. Turns is a count and has
@@ -2273,6 +2302,72 @@ void ATUCoasterRide::DrawSegmentEditor(UCanvas* Canvas)
 	}
 }
 
+void ATUCoasterRide::SelectSegment(int32 Index, bool bExtend)
+{
+	if (!Segments.IsValidIndex(Index))
+	{
+		return;
+	}
+	// A TYPED FIELD BELONGS TO THE SEGMENT IT WAS OPENED ON. Changing the
+	// selection under a half-typed number would commit it somewhere else or lose
+	// it, and both are worse than making somebody press Enter first.
+	CancelField();
+
+	if (!bExtend)
+	{
+		Selection.Reset();
+		Selection.Add(Index);
+		SelectedSegment = Index;
+		return;
+	}
+
+	// SHIFT-CLICK TOGGLES, it does not only add. Removing one from a selection of
+	// eight is otherwise start-again, which is how people end up not using
+	// multi-select at all.
+	const int32 At = Selection.Find(Index);
+	if (At != INDEX_NONE)
+	{
+		Selection.RemoveAt(At);
+		// The primary follows: it is what [Z] frames and what the panel scrolls
+		// to, so leaving it pointing at something no longer selected would draw a
+		// row nobody has chosen.
+		SelectedSegment = Selection.Num() > 0 ? Selection.Last() : -1;
+		return;
+	}
+	Selection.Add(Index);
+	SelectedSegment = Index;
+}
+
+FSegmentEditor ATUCoasterRide::BuildSelectionEditor() const
+{
+	// BUILT OVER THE SELECTION ONLY, and compacted so the model's indices are
+	// 0..n-1. A CSV import is four thousand segments and this runs to draw a
+	// panel; converting all of them every frame to ask about six would be the O(n)
+	// mistake somewhere nobody would think to look for it.
+	std::vector<FEditSegment> Compact;
+	std::vector<std::size_t> Sel;
+	for (int32 Index : Selection)
+	{
+		if (!Segments.IsValidIndex(Index)) { continue; }
+		const FTUTrackSegment& S = Segments[Index];
+
+		FEditSegment E;
+		E.Kind = KindOf(S.Kind);
+		for (std::size_t f = 0; f < static_cast<std::size_t>(EEditField::Count); ++f)
+		{
+			const EEditField F = static_cast<EEditField>(f);
+			E.Set(F, ReadField(S, F));
+		}
+		Sel.push_back(Compact.size());
+		Compact.push_back(E);
+	}
+
+	FSegmentEditor Ed;
+	Ed.SetSegments(Compact);
+	Ed.Select(Sel);
+	return Ed;
+}
+
 void ATUCoasterRide::ClickSegmentEditor()
 {
 	APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr;
@@ -2290,9 +2385,18 @@ void ATUCoasterRide::ClickSegmentEditor()
 		{
 			// SELECTING A DIFFERENT SEGMENT BREAKS THE EDIT RUN, or typing here,
 			// clicking away and coming back would be ONE undo step covering both.
-			CancelField();
-			SelectedSegment = -1000 - Action;
-			FrameSelectedSegment();
+			//
+			// SHIFT EXTENDS, and shift is already the camera boost. Two handlers on
+			// one key both fire, which is the ambiguity FInputMap's conflict test
+			// warns about — so this dispatches on CONTEXT, exactly as [Backspace]
+			// and [.] do on a focused field. A shift that lands on a segment row is
+			// a selection; one that does not is still a boost, and nobody is flying
+			// the camera and clicking a row in the same gesture.
+			SelectSegment(-1000 - Action, bBoost);
+			// FRAMED ONLY ON A PLAIN CLICK. Re-framing on every shift-click would
+			// swing the camera across the layout while somebody is assembling a
+			// selection, which is motion sickness rather than help.
+			if (!bBoost) { FrameSelectedSegment(); }
 		}
 		else if (Session.EditsAllowed())
 		{
@@ -2405,7 +2509,40 @@ void ATUCoasterRide::CommitField()
 	}
 
 	const double V = FCString::Atod(*FieldBuffer);
-	WriteField(Segments[SelectedSegment], FocusedField, V);
+
+	// ===================== ONE NUMBER, EVERY SELECTED SEGMENT =====================
+	//
+	// This is the whole reason multi-select is worth having on a coaster: banking a
+	// turn is one number typed into eight segments, and typing it eight times is
+	// not tedium — it is eight chances to type a different one, and the result is a
+	// bank that steps rather than ramps, which the roll-rate validator will then
+	// quite correctly complain about.
+	//
+	// WRITTEN ONLY WHERE THE FIELD IS VISIBLE, from the tested intersection. A
+	// selection holding an arc and a straight has no radius in common, and writing
+	// one anyway would silently give the straight a radius it does not use — a
+	// value that does nothing until somebody changes its kind, and then does
+	// something nobody asked for.
+	const FSegmentEditor Ed = BuildSelectionEditor();
+	const std::vector<FFieldView> Fields = Ed.Fields();
+	const std::size_t Fi = static_cast<std::size_t>(FocusedField);
+	const bool bShared = Fi < Fields.size() && Fields[Fi].bVisible;
+
+	int32 Written = 0;
+	for (int32 Index : Selection)
+	{
+		if (!Segments.IsValidIndex(Index)) { continue; }
+		if (Index != SelectedSegment && !bShared) { continue; }
+		WriteField(Segments[Index], FocusedField, V);
+		++Written;
+	}
+	if (Written == 0 && Segments.IsValidIndex(SelectedSegment))
+	{
+		// The primary always takes it, even if the selection somehow did not
+		// include it — a typed number that lands nowhere is the worst outcome.
+		WriteField(Segments[SelectedSegment], FocusedField, V);
+		Written = 1;
+	}
 
 	// COMMITTED ON ENTER, NEVER PER KEYSTROKE. "3" on the way to "30" is a
 	// segment 3 m long and a rebuild nobody asked for — and on a closed circuit
@@ -2421,9 +2558,13 @@ void ATUCoasterRide::CommitField()
 	// a control that fires continuously — a spinner drag in the Details panel —
 	// and the runtime editor is not one.
 	// The editor model's own name for the field, so the undo label and the panel
-	// row cannot disagree about what a thing is called.
-	PushHistory(FString::Printf(TEXT("%s on segment %d"),
-		UTF8_TO_TCHAR(FieldName(Was)), SelectedSegment));
+	// row cannot disagree about what a thing is called. The COUNT is in the label
+	// because "roll on 8 segments" and "roll on segment 12" are different things
+	// to be about to undo.
+	PushHistory(Written > 1
+		? FString::Printf(TEXT("%s on %d segments"), UTF8_TO_TCHAR(FieldName(Was)), Written)
+		: FString::Printf(TEXT("%s on segment %d"), UTF8_TO_TCHAR(FieldName(Was)),
+			SelectedSegment));
 }
 
 void ATUCoasterRide::InsertSegment()
@@ -3716,6 +3857,10 @@ void ATUCoasterRide::ApplyHistoryDocument(const FTrackDocument& Doc)
 	// A restored document may not contain the segment that was selected, and a
 	// selection past the end is an editor drawing a row that is not there.
 	SelectedSegment = FMath::Clamp(SelectedSegment, -1, Segments.Num() - 1);
+	// A RESTORED DOCUMENT MAY BE SHORTER. A selection holding indices past the end
+	// is a panel drawing rows that are not there, and an undo is exactly when that
+	// happens — the segment somebody had selected may be the one that came back.
+	Selection.RemoveAll([this](int32 I) { return !Segments.IsValidIndex(I); });
 	CancelField();
 	RebuildFromSegments();
 	bApplyingHistory = false;
@@ -4036,6 +4181,45 @@ void ATUCoasterRide::RunDocumentSmokeTest()
 		{
 			UE_LOG(LogTUEvents, Log,
 				TEXT("smoke: a segment inserts, removes, and undo brings it back"));
+		}
+	}
+
+	// ===================== ONE NUMBER INTO SEVERAL SEGMENTS =====================
+	//
+	// The point of multi-select, asserted rather than assumed: a field typed once
+	// lands on every selected segment that shares it, and one undo takes them all
+	// back. A per-segment undo step would be eight presses to reverse one edit,
+	// which is the failure the merge key exists to prevent one level up.
+	if (Segments.Num() >= 3)
+	{
+		const float L0 = Segments[0].Length;
+		const float L1 = Segments[1].Length;
+
+		SelectSegment(0, false);
+		SelectSegment(1, true);
+		const bool bBoth = Selection.Num() == 2;
+
+		FocusedField = EEditField::Length;
+		FieldBuffer = TEXT("13.5");
+		CommitField();
+
+		const bool bWrote = FMath::IsNearlyEqual(Segments[0].Length, 13.5f)
+			&& FMath::IsNearlyEqual(Segments[1].Length, 13.5f);
+		UndoEdit();
+		const bool bBack = FMath::IsNearlyEqual(Segments[0].Length, L0)
+			&& FMath::IsNearlyEqual(Segments[1].Length, L1);
+
+		SelectSegment(0, false);
+		if (!bBoth || !bWrote || !bBack)
+		{
+			UE_LOG(LogTUEvents, Error,
+				TEXT("smoke: multi-select is wrong (two %d, wrote %d, undone %d)"),
+				bBoth, bWrote, bBack);
+		}
+		else
+		{
+			UE_LOG(LogTUEvents, Log,
+				TEXT("smoke: one number typed into two segments, and one undo takes both back"));
 		}
 	}
 

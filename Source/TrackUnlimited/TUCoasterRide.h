@@ -1284,6 +1284,40 @@ private:
 	 *  platform the block walk found, so it is right on layouts nobody has built. */
 	double ConsoleStandS() const;
 
+	// ===================== MULTI-SELECT =====================
+	//
+	// `FSegmentEditor::Fields()` has computed the INTERSECTION of a selection since
+	// the model landed — a field only some of the selected segments use is not
+	// editable across them, because writing it would silently give an arc's radius
+	// to a straight — and nothing ever selected more than one.
+	//
+	// WHY IT IS WORTH HAVING on a coaster specifically: banking a turn is one
+	// number typed into eight segments. Doing that eight times is not tedium, it is
+	// eight chances to type a different number into one of them, and the result is
+	// a bank that steps rather than ramps — which the roll-rate validator will then
+	// correctly complain about.
+	//
+	// SelectedSegment stays the PRIMARY: it is what [Z] frames, what a diagnostics
+	// row sets, and what the panel scrolls to. This is the rest of the set.
+	TArray<int32> Selection;
+
+	/** Add, remove or replace, and keep SelectedSegment as the primary. */
+	void SelectSegment(int32 Index, bool bExtend);
+
+	/** True when more than one segment is selected — the only condition the panel
+	 *  and the commit path need to branch on. */
+	bool IsMultiSelect() const { return Selection.Num() > 1; }
+
+	/**
+	 * The tested model, built over THE SELECTION ONLY.
+	 *
+	 * Not over every segment: a CSV import is four thousand of them and this is
+	 * built to draw a panel, so converting the whole list every frame to ask about
+	 * six would be the O(n) mistake in a place nobody would look for it. The
+	 * selection is a handful by definition.
+	 */
+	FSegmentEditor BuildSelectionEditor() const;
+
 	// ===================== THE PROFILE SCRUBBER =====================
 	//
 	// `FProfileGraph` has had `ScrubToS` and `SToScrub` since the graph landed, with
