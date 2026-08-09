@@ -1375,7 +1375,11 @@ void ATUCoasterRide::RebuildFromSegments()
 		// is standing where the train behind it needs to go, and the ride gridlocks
 		// without a single violation to show for it. MEASURED on this circuit,
 		// which has five: four trains run clean and five never move at all.
-		const int32 Wanted = FMath::Max(1, TrainCount);
+		// ZERO IS A REAL ANSWER, and the floor of 1 refused it. Taking every train
+		// off for maintenance is an ordinary state of a real ride, and the layout
+		// is still perfectly valid with nothing on it -- the no-train case is
+		// already handled everywhere, because a track being built has none either.
+		const int32 Wanted = FMath::Max(0, TrainCount);
 		// ===================== NOWHERE TO PUT A TRAIN IS A REAL LAYOUT =====================
 		//
 		// N holding places run N-1 trains, because one has to stay free for anything
@@ -5110,6 +5114,49 @@ void ATUCoasterRide::BeginPlay()
 		|| FParse::Param(FCommandLine::Get(), TEXT("TUBootMenu"));
 	if (bBoot)
 	{
+		// ===================== A MENU OPENS OVER NOTHING =====================
+		//
+		// The preset is built before this point, so booting to the menu was drawing
+		// it over a RUNNING RIDE: trains moving, panels full of numbers, and the
+		// camera wherever the level had it -- which on the vertical slice is under
+		// the track at the station. A first impression of the application was a
+		// screen of data seen from inside a rail.
+		//
+		// Nothing is open yet, so the document is EMPTY. Not a special case: it is
+		// the same empty document the Blank template produces, and every panel
+		// already handles it -- that was the blank-template crash, fixed, and this
+		// is the fix being reused rather than a second path.
+		// ===================== AND IT STARTS QUIET =====================
+		//
+		// Every overlay in this project was built for somebody developing it, and
+		// they all default ON because that is who has been running it. All at once
+		// on a first launch it is a screen of numbers over a wireframe, which reads
+		// as complexity rather than as depth -- the exact failure the control-layer
+		// argument is about: findable by somebody who wants it, invisible to
+		// somebody who does not.
+		//
+		// SET HERE RATHER THAN AS DEFAULTS, because a UPROPERTY default does not
+		// reach an actor already placed in a level -- the level carries its own
+		// serialised values, which is the trap this project has hit before. This is
+		// the PLAYER'S entry point specifically: PIE keeps whatever the level says,
+		// so the developer view is untouched.
+		//
+		// Nothing is disabled, only unshown. Every one of these is a keypress away
+		// and the settings page lists which.
+		bDrawTrack = false;        // the mesh is the picture now
+		bShowTelemetry = false;
+		bShowDiagnostics = false;
+		bShowRestraints = false;
+		bShowProfileGraph = false;
+		bShowSegmentEditor = false;
+		PanelView = ETUPanelView::Off;
+
+		Segments.Reset();
+		RebuildFromSegments();
+		// AND IT IS CLEAN. The rebuild above told the session what the document is;
+		// this says nobody has changed it, or the menu would offer to save nothing.
+		Session.DidCreateNew(TCHAR_TO_UTF8(*SerialiseDocument()));
+		ResetHistory();
 		BootSession();
 	}
 	else
@@ -5649,7 +5696,18 @@ void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/
 	// early in three places — hidden overlays, no panel view, no signals — so
 	// anything appended there is drawn only when the ride is in one particular
 	// state. Hence the split: the panels, and then the things above them.
-	DrawPanels(Canvas);
+	// THE RIDE'S OVERLAYS BELONG TO A RIDE. In Boot and MainMenu there is no
+	// document open, so the mode banner, the diagnostics list, the graph and the
+	// control panel are all reporting on nothing -- and drawing them under the
+	// menu is what made the first screen unreadable.
+	//
+	// The menu and the recovery offer are drawn either way, below, because those
+	// ARE the screen in those two modes.
+	const EAppMode Now = Session.Mode();
+	if (Now != EAppMode::Boot && Now != EAppMode::MainMenu)
+	{
+		DrawPanels(Canvas);
+	}
 
 	// THE MENU IS NOT AN OVERLAY, so [U] leaves it alone — hiding it would strand
 	// somebody on a screen whose only controls are the ones just hidden. It is up
