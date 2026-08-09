@@ -1340,6 +1340,30 @@ private:
 	void ReleasePrimary();
 	void DrawDragAnswer(class UCanvas* Canvas);
 
+	// ===================== THE CONSOLE IS PRESSABLE =====================
+	//
+	// The four controls a station operator actually works: dispatch, the
+	// auto/manual selector, the emergency stop, and reset. Indicators stay
+	// indicators — harness, gates and dispatch-ready report a state the crew and
+	// the interlocking own, and making those pressable would move an authority.
+	//
+	// A MOUSE HAS BOTH EDGES, and two of these are only correct because of it:
+	// dispatch is anti-tie-down so holding it must not dispatch repeatedly, and
+	// the E-stop reset is MONITORED and acts on the release. Press-to-hold and
+	// let-go-to-release model both exactly, so a click is the same signal the key
+	// sends rather than a weaker stand-in for it.
+	TArray<FVector4> ConsoleRects;
+	TArray<int32> ConsoleAction;   // 0 dispatch, 1 e-stop, 2 reset, 3 auto/manual
+
+	/** Which console button the pointer is holding down, or -1. Held rather than
+	 *  fired-and-forgotten because the release is half of two of these controls. */
+	int32 HeldConsoleButton = -1;
+
+	/** True if the press landed on a console control, which is also how the click
+	 *  falls through to the editor and the diagnostics list when it did not. */
+	bool PressConsole(float Mx, float My);
+	void ReleaseConsole();
+
 	/**
 	 * EVERY PANEL, AND NOTHING THAT GOES OVER THEM.
 	 *

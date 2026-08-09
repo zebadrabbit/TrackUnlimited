@@ -2724,6 +2724,17 @@ void ATUCoasterRide::ClickPrimary()
 	if (bConfirmingMenu) { ClickLeaveConfirm(); return; }
 	// The menu owns the click while it is up; everything else is the editor's.
 	if (Session.Mode() == EAppMode::MainMenu) { ClickMainMenu(); return; }
+
+	// THE CONSOLE BEFORE THE EDITOR, because in Operate it is the only thing on
+	// screen anybody is working and the editor is refusing edits anyway.
+	if (APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr)
+	{
+		float Cx = 0.f, Cy = 0.f;
+		if (PC->GetMousePosition(Cx, Cy) && PressConsole(Cx, Cy))
+		{
+			return;
+		}
+	}
 	// The editor gets first refusal because it is the panel somebody is working
 	// in; a click that misses every one of its rows falls through to the
 	// diagnostics list, which is the other clickable thing on screen.
@@ -2740,8 +2751,70 @@ void ATUCoasterRide::ClickPrimary()
 	}
 }
 
+bool ATUCoasterRide::PressConsole(float Mx, float My)
+{
+	for (int32 i = 0; i < ConsoleRects.Num() && i < ConsoleAction.Num(); ++i)
+	{
+		const FVector4& R = ConsoleRects[i];
+		if (Mx < R.X || Mx > R.Z || My < R.Y || My > R.W) { continue; }
+
+		HeldConsoleButton = ConsoleAction[i];
+		switch (HeldConsoleButton)
+		{
+		case 0:
+			// HELD, not fired. The permissive reads the button every scan and the
+			// anti-tie-down rule needs it to go low between trains — so this is
+			// exactly what the key does, and letting go is what completes it.
+			PressDispatch();
+			break;
+		case 1:
+			PressEmergencyStop();
+			break;
+		case 2:
+			// MONITORED RESET: the press only arms it. The reset happens on the
+			// release, which is what stops a taped button from holding a ride
+			// permanently resettable.
+			PressResetButton();
+			break;
+		case 3:
+			// A MODE, TAKEN ON THE PRESS. Nothing about a selector needs the
+			// release, and holding it should not do anything at all.
+			bManualDispatch = !bManualDispatch;
+			HeldConsoleButton = -1;
+			UE_LOG(LogTUEvents, Log, TEXT("console: dispatch is now %s"),
+				bManualDispatch ? TEXT("MANUAL") : TEXT("AUTO"));
+			break;
+		default:
+			HeldConsoleButton = -1;
+			break;
+		}
+		return true;
+	}
+	return false;
+}
+
+void ATUCoasterRide::ReleaseConsole()
+{
+	switch (HeldConsoleButton)
+	{
+	case 0: ReleaseDispatch(); break;
+	case 2: ReleaseResetButton(); break;
+	default: break;
+	}
+	HeldConsoleButton = -1;
+}
+
 void ATUCoasterRide::ReleasePrimary()
 {
+	// THE CONSOLE FIRST, ALWAYS, and unconditionally — a dispatch button left
+	// held because the pointer wandered off the control before the mouse came up
+	// is a wedged button, which is the exact failure anti-tie-down exists for.
+	if (HeldConsoleButton >= 0)
+	{
+		ReleaseConsole();
+		return;
+	}
+
 	// ===================== THE QUESTION IS ASKED BY THE GESTURE =====================
 	//
 	// `WhyCannotIDragTheTrack()` has been written, reviewed and shown to nobody
@@ -5050,9 +5123,25 @@ void ATUCoasterRide::DrawPanels(UCanvas* Canvas)
 		//
 		// Straight off an operator's panel: CONTROL POWER, RESTRAINTS, GATES,
 		// DISPATCH, E-STOP RESET, EMERGENCY STOP — each an illuminated control that
-		// shows its own state. A screen cannot be pressed, so these are indicators
-		// rather than buttons, but they are the same six facts an operator reads
-		// off the panel in front of them, and every one is live.
+		// shows its own state, and every one live.
+		//
+		// THEY ARE PRESSABLE NOW. This said "a screen cannot be pressed, so these
+		// are indicators rather than buttons", which the menu, the segment editor
+		// and the diagnostics list had already disproved three times over.
+		//
+		// AND A MOUSE HAS BOTH EDGES, WHICH IS THE PART THAT MATTERS. Two of these
+		// controls are only correct if the release is real: the dispatch button is
+		// anti-tie-down, so holding it does not dispatch train after train, and the
+		// E-stop reset is MONITORED and fires on the release rather than the press.
+		// A pointer models both exactly — press to hold, let go to release — so
+		// clicking is not a weaker stand-in for the keys here, it is the same
+		// signal arriving another way.
+		//
+		// WHAT IS STILL AN INDICATOR IS DELIBERATE. Harness, gates and dispatch
+		// ready report; they are not buttons, because in this model the CREW owns
+		// the banks and the interlocking grants the permission. Making them
+		// pressable would move an authority, which is a design change rather than
+		// a wiring one.
 		//
 		// It shows ONE platform: whichever has a train and is furthest along, which
 		// is the one an operator standing at a station console is working. Nothing
@@ -5127,6 +5216,45 @@ void ATUCoasterRide::DrawPanels(UCanvas* Canvas)
 		// lights differently from the thing it cannot yet do.
 		Lamp(Lx + 372.f, bStop && Drives->AnyUnacknowledged() ? TEXT("ACK") : TEXT("RESET"),
 			bStop, bStop && Drives->AnyUnacknowledged() ? PanelAmber : PanelCyan);
+		Ty += Row;
+
+		// ---- THE CONTROLS, as things you press ------------------------------
+		//
+		// A SECOND ROW, not lamps made clickable. On a real console the indicators
+		// and the controls are physically different objects in different places,
+		// and a lamp you can press is a lamp somebody presses by accident while
+		// pointing at what it says.
+		ConsoleRects.Reset();
+		ConsoleAction.Reset();
+		Ty += 2.f;
+
+		auto Button = [&](float Bx, float Bw, const TCHAR* Label, int32 Action,
+			const FLinearColor& Col, bool bEnabled)
+		{
+			ConsoleRects.Add(FVector4(Lx + Bx, Ty, Lx + Bx + Bw, Ty + Row - 2.f));
+			ConsoleAction.Add(Action);
+			// HELD SHOWS AS HELD. A button that looks identical pressed and
+			// released is one nobody can tell they are still holding, which for an
+			// anti-tie-down control is the whole point of it.
+			const bool bHeld = HeldConsoleButton == Action;
+			PanelTile(Canvas, Lx + Bx, Ty, Bw, Row - 2.f,
+				bHeld ? Col : FLinearColor(0.10f, 0.12f, 0.14f, 1.f));
+			PanelLabel(Canvas, Lx + Bx + 8.f, Ty + 1.f, Label,
+				bHeld ? PanelGround : (bEnabled ? Col : PanelDim));
+		};
+
+		Button(0.f, 104.f, TEXT("DISPATCH"), 0, PanelGreen,
+			Console != nullptr && Console->Process.IsReadyToDispatch());
+		// AUTO/MANUAL is the one that changes what the ride DOES rather than
+		// commanding a single action, so it reads as a mode and says which it is
+		// in — never as a button labelled with the mode you would be switching to,
+		// which is the ambiguity every toggle-labelled control has.
+		Button(116.f, 104.f, bManualDispatch ? TEXT("MANUAL") : TEXT("AUTO"), 3,
+			PanelCyan, true);
+		Button(232.f, 104.f, TEXT("E-STOP"), 1, PanelRed, !bStop);
+		Button(348.f, 104.f,
+			bStop && Drives->AnyUnacknowledged() ? TEXT("ACKNOWLEDGE") : TEXT("RESET"), 2,
+			bStop && Drives->AnyUnacknowledged() ? PanelAmber : PanelCyan, bStop);
 		Ty += Row;
 
 		// ---- THE EVENT LOG ------------------------------------------------
