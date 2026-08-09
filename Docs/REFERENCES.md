@@ -80,34 +80,30 @@ Freesound files keep their `id__username__title.wav` name **on purpose**: the ID
 and the username is the author, so a file that gets copied somewhere still carries its own
 attribution. Do not rename them.
 
-| File | Author | Freesound ID |
-|---|---|---|
-| `416080__davidlay1__air-release.wav` | davidlay1 | [416080](https://freesound.org/s/416080/) |
-| `131931__mcpable__slips-air-release-v4.wav` | mcpable | [131931](https://freesound.org/s/131931/) |
-| `131932__mcpable__slips-air-release-v3.wav` | mcpable | [131932](https://freesound.org/s/131932/) |
-| `131933__mcpable__slips-air-release-v2.wav` | mcpable | [131933](https://freesound.org/s/131933/) |
-| `131934__mcpable__slips-air-release-v1.wav` | mcpable | [131934](https://freesound.org/s/131934/) |
+| File | Title | Author | Freesound | Licence |
+|---|---|---|---|---|
+| `416080__davidlay1__air-release.wav` | Air release | davidlay1 | [416080](https://freesound.org/s/416080/) | **CC0** |
+| `131934__mcpable__slips-air-release-v1.wav` | Slips air release v1 | mcpable | [131934](https://freesound.org/s/131934/) | **CC0** |
+| `131933__mcpable__slips-air-release-v2.wav` | Slips air release v2 | mcpable | [131933](https://freesound.org/s/131933/) | **CC0** |
+| `131932__mcpable__slips-air-release-v3.wav` | Slips air release v3 | mcpable | [131932](https://freesound.org/s/131932/) | **CC0** |
+| `131931__mcpable__slips-air-release-v4.wav` | Slips air release v4 | mcpable | [131931](https://freesound.org/s/131931/) | **CC0** |
 
 Used for **brake release** in `Content/Audio/Brakes`, one picked at random per release. A coaster
 brake is spring-applied and air-released, so the hiss is the pad **letting go** rather than grabbing.
 
-### ⚠ LICENCES ARE UNVERIFIED AND MUST BE CHECKED BEFORE ANY RELEASE
+### Licences: all five verified CC0 (checked 2026-08-08)
 
-Freesound hosts material under **CC0**, **CC-BY**, **CC-BY-NC** and **CC Sampling+**, and the licence
-is per upload rather than per site. **CC-BY-NC and Sampling+ are not compatible with this
-repository**, which is MIT and expects to be redistributed and forked commercially — and neither is
-anything requiring attribution that this project fails to give.
+**Creative Commons 0 — public domain dedication. Nothing is owed, and they are compatible with this
+repository without condition**, which matters because MIT expects to be forked and redistributed
+commercially. They can ship.
 
-Nothing about the filename says which applies. Each ID above links to its own page; the licence is
-stated there. Until somebody has checked all five:
+**The credit above is kept anyway, and that is a deliberate choice rather than an obligation.** CC0
+asks for nothing; naming davidlay1 and mcpable costs a table row, and a project that only credits
+people when forced to is not one anybody should want to contribute to.
 
-- **CC0** — nothing owed, though the credit above is kept anyway.
-- **CC-BY** — usable, and the credit above is the obligation. It must survive into a packaged build,
-  not only live in this file.
-- **CC-BY-NC or Sampling+** — **must be replaced**, however good it sounds.
-
-This is the same class of constraint as the one on paid marketplace assets and manufacturer
-trademarks: the licence decides, not the quality.
+> Freesound hosts CC0, CC-BY, CC-BY-NC and Sampling+, **per upload rather than per site**, and the
+> last two would be incompatible here. Nothing in a filename says which applies, so any sound added
+> later needs the same check before it lands — the licence decides, not the quality.
 
 ## Other
 
