@@ -5324,12 +5324,21 @@ void ATUCoasterRide::DrawPanels(UCanvas* Canvas)
 		// refuses the rest, which is why these three sit beside DISPATCH rather
 		// than replacing it.
 		//
-		// Hidden when the stand-in crew is running, because a control that is
-		// pressed and then immediately overridden by a dwell timer is worse than
-		// one that is not offered.
-		if (bAttended)
+		// THE CONTROLS ARE HIDDEN WHEN THE SIMULATED CREW HAS THEM, because a
+		// control pressed and then immediately overridden by a dwell timer is worse
+		// than one that is not offered — but the ROW STILL SAYS SO. A panel that
+		// simply lacked the gate switches would read as a ride with no gates, when
+		// what is true is that somebody else is working them.
+		Ty += 2.f;
+		if (!bPlayerIsCrew)
 		{
-			Ty += 2.f;
+			PanelLabel(Canvas, Lx, Ty,
+				TEXT("PLATFORM CREW: SIMULATED  ·  gates, harness and the walk-round are theirs"),
+				PanelDim);
+			Ty += Row;
+		}
+		else
+		{
 			const bool bGatesShut = Console != nullptr && Console->Crew.Gates.IsCommandedClosed();
 			const bool bBarsDown = Console != nullptr
 				&& Console->Crew.Restraints.IsCommandedClosed();
@@ -5959,9 +5968,9 @@ void ATUCoasterRide::ServeStations(float DeltaSeconds)
 
 		P.Process.Update(P.Inputs);
 
-		if (bAttended)
+		if (bPlayerIsCrew)
 		{
-			// ===================== THE OPERATOR IS THE CREW =====================
+			// ===================== YOU ARE THE CREW =====================
 			//
 			// The banks still tick, because the HARDWARE is real whether or not
 			// anybody is standing there — a bar takes the same two seconds to

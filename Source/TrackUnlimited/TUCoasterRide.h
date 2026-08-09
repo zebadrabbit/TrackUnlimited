@@ -1364,30 +1364,37 @@ private:
 	int32 HeldConsoleButton = -1;
 
 	/**
-	 * ===================== ATTENDED: THE OPERATOR DOES THE WORK =====================
+	 * ===================== THE RIDE ALWAYS HAS A CREW =====================
 	 *
-	 * NOTHING ON A REAL RIDE HAPPENS ON ITS OWN. A person closes the gates when
-	 * the platform is clear, and a person confirms by hand that every harness is
-	 * locked and immobile. There is no safety device that does either of those
-	 * without somebody, and "automatic" has never meant otherwise: the machine
-	 * PERMITS the operator to take actions that are safe, and refuses the rest.
-	 * A loading that takes longer because a rider needs help is the ordinary case,
-	 * and it is exactly what a timer cannot express.
+	 * NOTHING ON A REAL RIDE HAPPENS ON ITS OWN. A person shuts the gates when the
+	 * platform is clear, and a person confirms BY HAND that every harness is locked
+	 * and immobile. There is no safety device that does either without somebody,
+	 * and "automatic" has never meant the machine acts by itself: it means the
+	 * machine PERMITS what is safe and refuses the rest.
 	 *
-	 * `FCommandedBank` was already built for this — its own header says GATES and
-	 * RESTRAINTS are CLOSE/OPEN selectors the operator commands and sensors then
-	 * confirm. What was missing is that `FAutoStationCrew` was pressing those
-	 * switches on a dwell clock, which that class has always described itself as a
-	 * stand-in for.
+	 * SO THIS IS NOT ATTENDED VERSUS UNATTENDED, and it was named that way for a
+	 * few hours by mistake. There is always somebody on the platform. The only
+	 * question is whether it is YOU or the simulated crew standing in for one,
+	 * and a flag called "attended" implies the ride runs with nobody there — which
+	 * is exactly the impression this whole model should not give.
 	 *
-	 * OFF BY DEFAULT, and that is not a judgement about which is right. Every
-	 * measured figure in this project — the 5.5 s a rear-position delay costs, the
-	 * 52 s a front one does, every capacity number — was taken with the crew
-	 * running, and flipping the default would invalidate all of them silently.
-	 * Attended is opt-in until those are re-measured against a human.
+	 * `FCommandedBank` was always built for you: its own header says GATES and
+	 * RESTRAINTS are CLOSE/OPEN selectors the operator commands with sensors
+	 * confirming. `FAutoStationCrew` presses those switches on a dwell clock, and
+	 * that is a stand-in FOR A PERSON rather than an absence of one.
+	 *
+	 * FALSE BY DEFAULT, and not as a judgement about which is right. Every measured
+	 * figure in this project — the 5.5 s a rear-position delay costs, the 52 s a
+	 * front one does, every capacity number — was taken with the simulated crew
+	 * working, and flipping the default would invalidate all of them silently.
+	 *
+	 * The stand-in's weak point is that its dwell is a CONSTANT, and a platform
+	 * running long is ordinary rather than exceptional. Riders, crowd capacity and
+	 * the delays that come with them are their own piece of work; until then the
+	 * dwell is authored and a delay is something you type.
 	 */
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Operations")
-	bool bAttended = false;
+	bool bPlayerIsCrew = false;
 
 	/** The operator's all-clear for THIS train: the walk-round, done and stated.
 	 *  Latched, because it is a statement about a moment, and cleared when the
