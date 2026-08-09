@@ -156,6 +156,10 @@ private:
 	 *  not invalidate layout. SetText on an unchanged string still dirties the
 	 *  widget, and this runs every frame. */
 	FString LastMode;
+
+	/** What visibility this frame has when a document IS open, captured at
+	 *  construction so hiding it for the menu can put back exactly that. */
+	ESlateVisibility OpenVisibility = ESlateVisibility::SelfHitTestInvisible;
 	FString LastDocument;
 	FString LastStatus;
 

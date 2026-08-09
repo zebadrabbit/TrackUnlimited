@@ -3883,6 +3883,12 @@ void ATUCoasterRide::ApplyAppMode(EAppMode Want)
 		break;
 	case EAppMode::Ride:
 		PanelView = ETUPanelView::Off;
+		// AND THE CAMERA IS AN ORBIT. Whatever the level serialised could be Rider,
+		// which with no trains returns early and leaves the view exactly where it
+		// was -- at the origin, inside the geometry. The mode picks the view, and a
+		// menu is no exception to that rule.
+		CameraMode = ETUCameraMode::Orbit;
+		bOrbitFramed = false;   // so the empty-scene framing below actually runs
 		CameraMode = ETUCameraMode::Rider;
 		break;
 	default:
@@ -4146,7 +4152,26 @@ void ATUCoasterRide::FrameWholeTrack()
 	{
 		B.Add({F.Position.X, F.Position.Y, F.Position.Z});
 	}
-	if (!B.IsValid()) { return; }
+	// ===================== NOTHING TO FRAME IS STILL A VIEW =====================
+	//
+	// This used to return, leaving the camera wherever the level had serialised
+	// it -- which for a menu with no document open is the origin, INSIDE whatever
+	// geometry happens to be there. The first screen was a close-up of the inside
+	// of a default material.
+	//
+	// So an empty track frames a deliberate box instead: 300 m across and lifted
+	// off the ground, which pulls the camera back far enough to be looking at the
+	// horizon rather than at anything in particular. A backdrop, not a subject.
+	if (!B.IsValid())
+	{
+		B.Add({-150.0, -150.0, 0.0});
+		B.Add({ 150.0,  150.0, 60.0});
+		// Shallower than the default -25 deg, because there is no layout below to
+		// look down at and a downward tilt on an empty scene reads as pointing at
+		// the floor.
+		Orbit.PitchDeg = -8.0;
+		Orbit.YawDeg = -35.0;
+	}
 
 	// FOV from the camera itself, aspect from the viewport, because framing that
 	// checked one axis puts a long low layout off both sides of an ultrawide —
