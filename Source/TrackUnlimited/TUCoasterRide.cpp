@@ -282,7 +282,7 @@ void ATUCoasterRide::ApplyPresetTrainSetup(ETUPresetLayout Which)
 	switch (Which)
 	{
 	case ETUPresetLayout::SmallBatch:
-		TrainLengthM = 6.f;
+		CarCount = 2; CarLengthM = 3.f;   // 6 m, exactly as before
 		TrainCount = 5;
 		break;
 	case ETUPresetLayout::Showcase:
@@ -290,15 +290,15 @@ void ATUCoasterRide::ApplyPresetTrainSetup(ETUPresetLayout Which)
 		// SmallBatch runs, because the trim splits a block off the return leg -- and
 		// that buys HEADWAY rather than a holding place, so the extra train has
 		// somewhere to wait rather than somewhere new to park.
-		TrainLengthM = 6.f;
+		CarCount = 2; CarLengthM = 3.f;   // 6 m, exactly as before
 		TrainCount = 6;
 		break;
 	case ETUPresetLayout::TwoTrainCircuit:
-		TrainLengthM = 15.f;
+		CarCount = 5; CarLengthM = 3.f;   // 15 m, exactly as before
 		TrainCount = 2;
 		break;
 	default:
-		TrainLengthM = 15.f;
+		CarCount = 5; CarLengthM = 3.f;   // 15 m, exactly as before
 		TrainCount = 1;   // every other preset has one holding place
 		break;
 	}
@@ -1355,8 +1355,14 @@ void ATUCoasterRide::RebuildFromSegments()
 		// never hold it. So the number of trains the layout can run is the number
 		// of hold-capable zones, and asking for more is refused rather than
 		// granted into open course.
+		// A TRAIN IS ITS CARS. Derived here rather than kept in step by hand: two
+		// fields that must agree are one field and a bug waiting for whichever gets
+		// written second.
+		TrainLengthM = FMath::Max(0.f, CarCount * CarLengthM);
+
 		TArray<double> HoldMidS;
 		HoldZoneIndices.Reset();
+		ShortestHoldM = 0.0;
 		for (int32 z = 0; z < Zones.Num(); ++z)
 		{
 			if (Zones[z].MaxAccel > 0.0 && Zones[z].MaxDecel > 0.0)
@@ -1368,6 +1374,8 @@ void ATUCoasterRide::RebuildFromSegments()
 				// placed there collides with one placed in the LAST block.
 				HoldMidS.Add(0.5 * (Zones[z].StartS + Zones[z].EndS));
 				HoldZoneIndices.Add(z);
+				const double Len = Zones[z].EndS - Zones[z].StartS;
+				ShortestHoldM = (ShortestHoldM <= 0.0) ? Len : FMath::Min(ShortestHoldM, Len);
 			}
 		}
 
@@ -3349,6 +3357,28 @@ bool ATUCoasterRide::PressConsole(float Mx, float My)
 			// permanently resettable.
 			PressResetButton();
 			break;
+		case 10:
+		case 11:
+		{
+			// Clamped against the same fit rule the button draws with, because a
+			// control that is merely drawn disabled is one keyboard away from being
+			// pressed anyway.
+			const int32 MaxCars = (CarLengthM > 0.f && ShortestHoldM > 0.0)
+				? FMath::Max(1, FMath::FloorToInt(
+					(ShortestHoldM - HoldNoseClearanceM) / CarLengthM))
+				: 12;
+			const int32 WasCars = CarCount;
+			CarCount = FMath::Clamp(CarCount + (HeldConsoleButton == 11 ? 1 : -1),
+				1, MaxCars);
+			HeldConsoleButton = -1;
+			if (CarCount != WasCars)
+			{
+				RebuildFromSegments();
+				UE_LOG(LogTUEvents, Log, TEXT("maintenance: %d car(s), %.1f m train"),
+					CarCount, TrainLengthM);
+			}
+			break;
+		}
 		case 8:
 		case 9:
 		{
@@ -4879,6 +4909,13 @@ bool ATUCoasterRide::RunDocumentSmokeTest()
 		// code indexed Trains[0] on exactly that combination. Asserted here because
 		// it is a crash rather than a wrong number, and because it is a state a
 		// button reaches in one press.
+		// A CAR COUNT THAT DOES NOT REPRODUCE THE MEASURED TRAIN is the one way
+		// this refactor could be silently wrong: every G figure in the docs was
+		// taken on a 15 m or a 6 m train, and cars are only a better spelling of
+		// those if they come to the same number.
+		const bool bTrainExact = FMath::IsNearlyEqual(TrainLengthM, 6.f, 0.001f)
+			&& CarCount == 2;
+
 		const int32 FullService = TrainCount;
 		TrainCount = 0;
 		RebuildFromSegments();
@@ -4895,12 +4932,12 @@ bool ATUCoasterRide::RunDocumentSmokeTest()
 		}
 
 		if (!bTrackIsCircuit || !Profile_.bCompleted || Pads < 2 || Trims != 1
-			|| !bEmptied || !bReturned)
+			|| !bEmptied || !bReturned || !bTrainExact)
 		{
 			UE_LOG(LogTUEvents, Error,
 				TEXT("smoke: the showcase is wrong (circuit %d, completed %d, pads %d, ")
-				TEXT("trims %d, shed to zero %d, returned %d)"),
-				bTrackIsCircuit, Profile_.bCompleted, Pads, Trims, bEmptied, bReturned);
+				TEXT("trims %d, shed to zero %d, returned %d, train exact %d)"),
+				bTrackIsCircuit, Profile_.bCompleted, Pads, Trims, bEmptied, bReturned, bTrainExact);
 			Failures.Add(TEXT("showcase"));
 		}
 		else
@@ -4908,10 +4945,10 @@ bool ATUCoasterRide::RunDocumentSmokeTest()
 			UE_LOG(LogTUEvents, Log,
 				TEXT("smoke: the showcase closes and runs -- %d segments, %.1f m, ")
 				TEXT("top %.1f km/h, %.0f s, %.2f..%+.2f g vertical, %.2f lateral, ")
-				TEXT("%d friction pad(s), %d trim, sheds to zero and back"),
+				TEXT("%d friction pad(s), %d trim, %d x %.1f m cars, sheds to zero and back"),
 				Segments.Num(), Track.TotalLength(), Profile_.TopSpeed * 3.6,
 				Profile_.Duration, Profile_.MinVerticalG, Profile_.MaxVerticalG,
-				Profile_.MaxAbsLateralG, Pads, Trims);
+				Profile_.MaxAbsLateralG, Pads, Trims, CarCount, CarLengthM);
 		}
 	}
 
@@ -5115,6 +5152,27 @@ void ATUCoasterRide::BeginPlay()
 	// BEFORE ANYTHING ELSE READS ONE. The scan rate is restart-flagged, and this
 	// is the only moment it can be applied — RebuildFromSegments and the first
 	// Tick are both downstream of it.
+	// ===================== THE LEVEL'S TRAIN IS STILL THE LEVEL'S =====================
+	//
+	// TrainLengthM became derived from cars, and an actor already placed in a
+	// level carries a serialised length and no car count -- so without this, a
+	// level authored with a 6 m train silently gets the 15 m default the moment
+	// the new fields appear. Same trap as the preset enum, arriving through a
+	// different door.
+	//
+	// The same rule the settings loader already applies to SimHz: THE LEVEL'S
+	// AUTHORED VALUE IS THE DEFAULT. Cars are back-filled from it rather than the
+	// length being overwritten, so the ride is unchanged and the new fields
+	// describe what it was already doing.
+	if (CarLengthM > 0.f && TrainLengthM > 0.f
+		&& !FMath::IsNearlyEqual(TrainLengthM, CarCount * CarLengthM, 0.01f))
+	{
+		CarCount = FMath::Max(1, FMath::RoundToInt(TrainLengthM / CarLengthM));
+		UE_LOG(LogTUEvents, Log,
+			TEXT("train: %.1f m authored in the level reads as %d car(s) of %.1f m"),
+			TrainLengthM, CarCount, CarLengthM);
+	}
+
 	LoadShellSettings();
 	LoadRecentList();
 	LoadBrakeSounds();
@@ -6548,6 +6606,33 @@ void ATUCoasterRide::DrawPanels(UCanvas* Canvas)
 			Ty += Row;
 			Button(0.f, 104.f, TEXT("- SHED"), 8, PanelAmber, Running > 0);
 			Button(116.f, 104.f, TEXT("+ RETURN"), 9, PanelGreen, Running < Cap);
+			Ty += Row;
+
+			// ---- CARS, which is also a shed decision ----
+			//
+			// Parks really do run shorter trains on quiet days, so this belongs
+			// beside the train count rather than in the geometry editor.
+			//
+			// THE CEILING IS THE SHORTEST DEVICE A TRAIN CAN PARK ON. Longer than
+			// that and the stop mark lands past the far end, nothing trips it, and
+			// the train crawls out of its block into the next one -- measured at
+			// seven signalling violations in four seconds. So the button stops, and
+			// says which device it is stopping against.
+			const int32 MaxCars = (CarLengthM > 0.f && ShortestHoldM > 0.0)
+				? FMath::Max(1, FMath::FloorToInt(
+					(ShortestHoldM - HoldNoseClearanceM) / CarLengthM))
+				: 12;
+			PanelLabel(Canvas, Lx, Ty, FString::Printf(
+				TEXT("CARS PER TRAIN      %d x %.1f m = %.1f m   (shortest device %.1f m)"),
+				CarCount, CarLengthM, TrainLengthM, ShortestHoldM), PanelDim);
+			Ty += Row;
+			Button(0.f, 104.f, TEXT("- CAR"), 10, PanelAmber, CarCount > 1);
+			Button(116.f, 104.f, TEXT("+ CAR"), 11, PanelGreen, CarCount < MaxCars);
+			if (CarCount >= MaxCars)
+			{
+				PanelLabel(Canvas, Lx + 232.f, Ty + 1.f,
+					TEXT("any longer and it will not fit its shortest block"), PanelDim);
+			}
 			// SAID WHEN IT BITES, not as a permanent caption. A ceiling nobody has
 			// reached is noise; one somebody is pressing against is the answer.
 			if (Running >= Cap && Cap > 0)

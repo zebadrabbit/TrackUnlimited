@@ -448,9 +448,42 @@ public:
 	 * interesting part, not the magnitude, and an earlier version of this comment
 	 * quoted a much larger apex effect from before the rolling-resistance
 	 * correction and the re-tune that followed it.
+	 *
+	 * DERIVED FROM CARS AS OF 2026-08-09, and read-only for that reason. A train
+	 * is a number of cars of a length, which is how a real one is specified and
+	 * how a park talks about it -- a 5-car train, not a 15 m train. Editing this
+	 * directly would be a second source of truth for the same number.
 	 */
-	UPROPERTY(EditAnywhere, Category = "TrackUnlimited", meta = (ClampMin = "0.0", UIMax = "30.0"))
+	UPROPERTY(VisibleAnywhere, Category = "TrackUnlimited")
 	float TrainLengthM = 15.f;
+
+	/**
+	 * HOW MANY CARS, and it is what TrainLengthM is made of.
+	 *
+	 * Cars were not modelled at all: the train was a length with nine sample
+	 * points, which is right for the PHYSICS -- gravity reads the train's mean
+	 * height and nothing downstream needs to know where a coupling is -- but wrong
+	 * for authoring, because nobody specifies a train in metres.
+	 *
+	 * Nothing below this changed. The nine sample points still span the length,
+	 * so every measured figure is reproduced exactly by the car counts the presets
+	 * now carry: 5 x 3.0 m is the 15 m train, 2 x 3.0 m is the small-batch 6 m.
+	 *
+	 * A CAR IS NOT A SEAT ROW YET. When the wing-coaster work lands, a rider
+	 * offset laterally feels roll-rate x offset that the centre seat never does --
+	 * and that needs a seat within a car, which is a level below this one.
+	 */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited", meta = (ClampMin = "1", UIMax = "12"))
+	int32 CarCount = 5;
+
+	/** Length of one car, metres. Coupled, so this is pitch rather than body. */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited", meta = (ClampMin = "0.5", UIMax = "8.0"))
+	float CarLengthM = 3.f;
+
+	/** Shortest device a train can be parked on, from the last rebuild. A train
+	 *  longer than this cannot fit inside its own block: the stop mark lands past
+	 *  the far end, nothing trips it, and the train crawls into the next block. */
+	double ShortestHoldM = 0.0;
 
 	/**
 	 * How many trains to run.
