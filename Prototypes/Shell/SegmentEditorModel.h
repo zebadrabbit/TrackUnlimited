@@ -62,6 +62,9 @@ enum class EEditField
     Roll,
     ZoneKind,
     ZoneSpeed,
+    ZoneAccel,
+    ZoneDecel,
+    ZoneBrakeDecel,
     StartsNewDevice,
     Count
 };
@@ -79,6 +82,9 @@ inline const char* FieldName(EEditField F)
     case EEditField::Roll:            return "Roll";
     case EEditField::ZoneKind:        return "Device";
     case EEditField::ZoneSpeed:       return "Device speed";
+    case EEditField::ZoneAccel:       return "Accel";
+    case EEditField::ZoneDecel:       return "Decel";
+    case EEditField::ZoneBrakeDecel:  return "Brake pad";
     default:                          return "Starts a new device";
     }
 }
@@ -104,6 +110,9 @@ inline const char* FieldUnit(EEditField F)
     case EEditField::ClimbAngle:
     case EEditField::Roll:           return "deg";
     case EEditField::ZoneSpeed:      return "m/s";
+    case EEditField::ZoneAccel:
+    case EEditField::ZoneDecel:
+    case EEditField::ZoneBrakeDecel: return "m/s2";
     default:                         return "";
     }
 }
@@ -133,6 +142,9 @@ inline bool KindUsesField(EEditKind K, EEditField F)
     case EEditField::ZoneKind:
         return true;                       // every segment can be banked and zoned
     case EEditField::ZoneSpeed:
+    case EEditField::ZoneAccel:
+    case EEditField::ZoneDecel:
+    case EEditField::ZoneBrakeDecel:
     case EEditField::StartsNewDevice:
         return true;                       // shown only when a device is set — below
     default:
@@ -311,7 +323,13 @@ private:
     static bool VisibleOn(const FEditSegment& S, EEditField F)
     {
         if (!KindUsesField(S.Kind, F)) { return false; }
-        if ((F == EEditField::ZoneSpeed || F == EEditField::StartsNewDevice) && S.Zone == 0)
+        // A DEVICE'S RATES ARE DEVICE FIELDS TOO. The pad is what makes a brake a
+        // brake -- tyres are a setpoint driven toward from EITHER side, so a block
+        // brake with no pad accelerates a train it was authored to slow.
+        const bool bDeviceField = F == EEditField::ZoneSpeed
+            || F == EEditField::ZoneAccel || F == EEditField::ZoneDecel
+            || F == EEditField::ZoneBrakeDecel || F == EEditField::StartsNewDevice;
+        if (bDeviceField && S.Zone == 0)
         {
             return false;
         }

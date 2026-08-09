@@ -2309,6 +2309,9 @@ double ATUCoasterRide::ReadField(const FTUTrackSegment& S, EEditField F) const
 	case EEditField::Turns:          return S.Turns;
 	case EEditField::Roll:           return S.RollEndDegrees;
 	case EEditField::ZoneSpeed:      return S.ZoneSpeed;
+	case EEditField::ZoneAccel:      return S.ZoneAccel;
+	case EEditField::ZoneDecel:      return S.ZoneDecel;
+	case EEditField::ZoneBrakeDecel: return S.ZoneBrakeDecel;
 	default:                         return 0.0;
 	}
 }
@@ -2325,6 +2328,9 @@ void ATUCoasterRide::WriteField(FTUTrackSegment& S, EEditField F, double V)
 	case EEditField::Turns:          S.Turns = static_cast<float>(V); break;
 	case EEditField::Roll:           S.RollEndDegrees = static_cast<float>(V); break;
 	case EEditField::ZoneSpeed:      S.ZoneSpeed = static_cast<float>(V); break;
+	case EEditField::ZoneAccel:      S.ZoneAccel = static_cast<float>(V); break;
+	case EEditField::ZoneDecel:      S.ZoneDecel = static_cast<float>(V); break;
+	case EEditField::ZoneBrakeDecel: S.ZoneBrakeDecel = static_cast<float>(V); break;
 	default: break;
 	}
 }
@@ -2451,8 +2457,13 @@ void ATUCoasterRide::DrawSegmentEditor(UCanvas* Canvas)
 	{
 		const EEditField F = static_cast<EEditField>(f);
 		if (!KindUsesField(Kind, F)) { continue; }
-		if (F == EEditField::ZoneSpeed && Seg.Zone == ETUSegmentZone::None) { continue; }
-		if (F == EEditField::StartsNewDevice && Seg.Zone == ETUSegmentZone::None) { continue; }
+		// ONE LIST, not five ifs. The rates are device fields exactly as the speed
+		// is, and the model's VisibleOn says so too -- two places that must agree,
+		// which is an argument for the list being short enough to read.
+		const bool bDeviceField = F == EEditField::ZoneSpeed
+			|| F == EEditField::ZoneAccel || F == EEditField::ZoneDecel
+			|| F == EEditField::ZoneBrakeDecel || F == EEditField::StartsNewDevice;
+		if (bDeviceField && Seg.Zone == ETUSegmentZone::None) { continue; }
 		// MULTI-SELECT SHOWS THE INTERSECTION, from the tested model. A field only
 		// some of the selection uses is not editable across it — writing it would
 		// give an arc's radius to a straight — so it is not offered.
