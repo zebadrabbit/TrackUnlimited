@@ -3917,7 +3917,11 @@ void ATUCoasterRide::LoadShellSettings()
 	// what the ride is actually doing, applying it is a no-op, and an explicit
 	// choice still wins. One rule, no exception list.
 	ShellSettings.Declare("sim.scanHz", std::to_string(SimHz));
-	ShellSettings.Declare("input.invertLookY", bInvertLookY ? "true" : "false");
+	ShellSettings.Declare("input.sensitivity", std::to_string(LookSensitivity));
+	ShellSettings.Declare("input.orbitInvertX", bOrbitInvertX ? "true" : "false");
+	ShellSettings.Declare("input.orbitInvertY", bOrbitInvertY ? "true" : "false");
+	ShellSettings.Declare("input.flyInvertX", bFlyInvertX ? "true" : "false");
+	ShellSettings.Declare("input.flyInvertY", bFlyInvertY ? "true" : "false");
 
 	FString Text;
 	if (FFileHelper::LoadFileToString(Text, *ShellSettingsPath()))
@@ -3980,7 +3984,12 @@ void ATUCoasterRide::ApplyShellSettings()
 	Session.SetAutosaveSeconds(ShellSettings.GetNumber("sim.autosaveSeconds"));
 
 	bPauseWhenUnfocused = ShellSettings.GetBool("sim.pauseUnfocused");
-	bInvertLookY = ShellSettings.GetBool("input.invertLookY");
+	LookSensitivity = FMath::Clamp(
+		static_cast<float>(ShellSettings.GetNumber("input.sensitivity")), 0.25f, 4.f);
+	bOrbitInvertX = ShellSettings.GetBool("input.orbitInvertX");
+	bOrbitInvertY = ShellSettings.GetBool("input.orbitInvertY");
+	bFlyInvertX = ShellSettings.GetBool("input.flyInvertX");
+	bFlyInvertY = ShellSettings.GetBool("input.flyInvertY");
 }
 
 void ATUCoasterRide::CheckBindingsAgainstInput(const UInputComponent* Input) const
@@ -4438,21 +4447,37 @@ void ATUCoasterRide::DrawProfileGraph(UCanvas* Canvas)
 
 void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/)
 {
-	// THE GRAPH RIDES ON THE SAME CALLBACK rather than registering a second
-	// delegate. Two registrations can be added, removed and ordered
-	// independently, and the failure — one panel drawing over the other
-	// depending on which was registered first — is the kind that only appears
-	// on somebody else's machine.
+	// ===================== Z-ORDER IS DRAW ORDER, AND IT WAS BACKWARDS =====================
 	//
-	// Drawn FIRST so the control panel, which is the operator's, is never
-	// obscured by the author's graph.
-	// THE MENU IS NOT AN OVERLAY, so [F2] leaves it alone — hiding it would strand
-	// somebody on a screen whose only controls are the ones just hidden.
+	// EVERYTHING RIDES ON ONE CALLBACK rather than registering a second delegate.
+	// Two registrations can be added, removed and ordered independently, and the
+	// failure — one panel drawing over the other depending on which was registered
+	// first — is the kind that only appears on somebody else's machine.
+	//
+	// The cost of that is that draw ORDER is the only z-order there is, and the
+	// three things that must be ON TOP were being drawn FIRST: the drag answer
+	// appeared under the segment editor and the diagnostics list, and the unsaved
+	// -changes confirm carried a comment claiming it was last when it was third.
+	//
+	// They cannot simply move to the bottom of DrawPanels, because that returns
+	// early in three places — hidden overlays, no panel view, no signals — so
+	// anything appended there is drawn only when the ride is in one particular
+	// state. Hence the split: the panels, and then the things above them.
+	DrawPanels(Canvas);
+
+	// THE MENU IS NOT AN OVERLAY, so [U] leaves it alone — hiding it would strand
+	// somebody on a screen whose only controls are the ones just hidden. It is up
+	// here for that as much as for the z-order.
 	DrawMainMenu(Canvas);
 	DrawDragAnswer(Canvas);
-	// LAST, so it is on top of whatever it is asking about — and it rebuilds the
-	// row list, so a click while it is up can only hit its own three answers.
+	// LAST, and now genuinely: it is on top of whatever it is asking about, and it
+	// rebuilds the row list, so a click while it is up can only hit its own three
+	// answers.
 	DrawLeaveConfirm(Canvas);
+}
+
+void ATUCoasterRide::DrawPanels(UCanvas* Canvas)
+{
 	if (bHideOverlays) { return; }
 
 	DrawSegmentEditor(Canvas);
@@ -7043,11 +7068,15 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 			bFreeInitialised = true;
 		}
 
-		// FREE-FLY IS HEAD-TURNING: mouse down looks down, uninverted.
-		const float PitchSign = bInvertLookY ? -1.f : 1.f;
-		FreeRotation.Yaw += LookYaw * 2.2f;
+		// FREE-FLY IS HEAD-TURNING: mouse down looks down, uninverted. The two
+		// signs flip from THAT rather than from a raw axis, which is what makes
+		// "invert" mean the same thing to somebody who has never read this file.
+		const float Sens = FMath::Clamp(LookSensitivity, 0.25f, 4.f) * 2.2f;
+		const float FlyX = bFlyInvertX ? -1.f : 1.f;
+		const float FlyY = bFlyInvertY ? -1.f : 1.f;
+		FreeRotation.Yaw += LookYaw * Sens * FlyX;
 		FreeRotation.Pitch =
-			FMath::Clamp(FreeRotation.Pitch + LookPitch * 2.2f * PitchSign, -87.f, 87.f);
+			FMath::Clamp(FreeRotation.Pitch + LookPitch * Sens * FlyY, -87.f, 87.f);
 		FreeRotation.Roll = 0.f; // a free camera that rolls is a lost camera
 
 		const FVector Forward = FreeRotation.Vector();
@@ -7068,12 +7097,17 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 		// else, so the framing maths never learns which way round Unreal's Y is.
 		if (!bOrbitFramed) { FrameWholeTrack(); }
 
-		Orbit.AddYaw(LookYaw * 2.2);
+		const double OrbitSens = FMath::Clamp(LookSensitivity, 0.25f, 4.f) * 2.2;
+		Orbit.AddYaw(LookYaw * OrbitSens * (bOrbitInvertX ? -1.0 : 1.0));
 		// ORBIT IS SUBJECT-DRAGGING, SO PITCH IS NEGATED. You are pulling the
 		// thing you are looking at, not turning your head: mouse down swings the
 		// camera up and over the top of the subject, which is what every DCC tool
 		// does and what the raw axis did backwards.
-		Orbit.AddPitch(-LookPitch * 2.2 * (bInvertLookY ? -1.0 : 1.0));   // clamped, not wrapped
+		//
+		// The invert flips from THAT convention, not from the raw axis — so
+		// somebody who ticks it gets the opposite of what they were just feeling,
+		// which is the only reading of the word that is useful.
+		Orbit.AddPitch(-LookPitch * OrbitSens * (bOrbitInvertY ? -1.0 : 1.0));   // clamped, not wrapped
 		Orbit.Pan(MoveRight * DeltaSeconds * 120.0, MoveUp * DeltaSeconds * 120.0);
 
 		const FCamVec P = Orbit.Position();

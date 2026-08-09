@@ -285,13 +285,46 @@ inline std::vector<FSettingEntry> SettingsSchema()
             Add(E);
         }
 
+        // ===================== SENSITIVITY, AND INVERSION PER CAMERA =====================
+        //
+        // This was ONE bool flipping both cameras' Y, on the argument that
+        // "somebody who wants Y inverted wants it inverted". That argument did not
+        // survive its first user: orbit felt backwards and free-fly felt right,
+        // which is exactly the case one knob cannot express.
+        //
+        // The DEFAULTS still encode each camera's own convention — orbit drags the
+        // SUBJECT, free-fly turns your HEAD, and they are meant to disagree — so
+        // these flip from there rather than from a single raw axis.
+        //
+        // `input.invertLookY` is deliberately not carried forward. Keys are
+        // permanent, so it is not reused for something else; anybody who set it
+        // keeps the line in their file untouched by the unknown-key rule, and it
+        // simply stops being read.
         FSettingEntry E;
         E.Page = ESettingPage::Controls;
-        E.Key = "input.invertLookY"; E.Label = "Invert look (Y)";
-        E.Help = "Flips BOTH cameras from their own convention — orbit drags the subject, "
-                 "free-fly turns your head, and they are meant to disagree.";
-        E.Kind = ESettingKind::Bool; E.Default = "false";
+        E.Key = "input.sensitivity"; E.Label = "Mouse sensitivity";
+        E.Help = "Multiplies both look cameras. 1.0 is the shipped feel.";
+        E.Kind = ESettingKind::Scalar; E.Min = 0.25; E.Max = 4.0; E.Step = 0.05;
+        E.Default = "1";
         Add(E);
+
+        const char* Inverts[][3] = {
+            {"input.orbitInvertX", "Invert orbit (X)",
+             "The Build-mode camera, which swings around what you are looking at."},
+            {"input.orbitInvertY", "Invert orbit (Y)",
+             "Orbit drags the SUBJECT, so mouse down swings the camera up over the top of it."},
+            {"input.flyInvertX",   "Invert free-fly (X)",
+             "The camera you steer yourself, on [C]."},
+            {"input.flyInvertY",   "Invert free-fly (Y)",
+             "Free-fly turns your HEAD, so mouse down looks down."},
+        };
+        for (const auto& I : Inverts)
+        {
+            E = FSettingEntry(); E.Page = ESettingPage::Controls;
+            E.Key = I[0]; E.Label = I[1]; E.Help = I[2];
+            E.Kind = ESettingKind::Bool; E.Default = "false";
+            Add(E);
+        }
     }
 
     // ---- SIMULATION. Entirely ours, and the page that makes this a tool.

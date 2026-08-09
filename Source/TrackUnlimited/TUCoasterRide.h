@@ -141,12 +141,35 @@ public:
 	 * free-fly you are turning your own HEAD, so pulling down looks down. Every
 	 * DCC tool and every flight sim respectively does it that way round.
 	 *
-	 * So the shipped default is not "no inversion anywhere" — it is each camera's
-	 * own convention, and this knob flips BOTH from there. One setting for the
-	 * whole application, because somebody who wants Y inverted wants it inverted.
+	 * So the shipped DEFAULT is each camera's own convention, and these flip from
+	 * there rather than from a raw axis.
+	 *
+	 * PER CAMERA AND PER AXIS, WHICH IT WAS NOT. This was one bool flipping both
+	 * cameras' Y, on the stated argument that "somebody who wants Y inverted wants
+	 * it inverted" — and that did not survive its first user, who found orbit
+	 * backwards and free-fly right. That is precisely the case one knob cannot
+	 * express, and the disagreement the paragraph above describes is the reason
+	 * why: they are two different gestures, so a preference about one of them is
+	 * not evidence about the other.
 	 */
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Camera")
-	bool bInvertLookY = false;
+	bool bOrbitInvertX = false;
+
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Camera")
+	bool bOrbitInvertY = false;
+
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Camera")
+	bool bFlyInvertX = false;
+
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Camera")
+	bool bFlyInvertY = false;
+
+	/** Multiplies both look cameras. Applied at the axis rather than baked into
+	 *  the 2.2 degrees-per-count each camera uses, so the shipped feel stays the
+	 *  documented one and this is a multiplier on it. */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Camera",
+		meta = (ClampMin = "0.25", ClampMax = "4.0"))
+	float LookSensitivity = 1.f;
 
 	/**
 	 * Rider eye height above the heartline, metres.
@@ -1316,6 +1339,16 @@ private:
 	double DragAnswerSeconds = 0.0;
 	void ReleasePrimary();
 	void DrawDragAnswer(class UCanvas* Canvas);
+
+	/**
+	 * EVERY PANEL, AND NOTHING THAT GOES OVER THEM.
+	 *
+	 * Split out of `DrawControlPanel` because draw order is the only z-order a
+	 * single debug-draw callback has, and this returns early in three places — so
+	 * the things that must be on top cannot simply be appended to it. The caller
+	 * draws this, then the menu, the drag answer and the confirm.
+	 */
+	void DrawPanels(class UCanvas* Canvas);
 
 	/**
 	 * THE SEGMENT EDITOR, AS A RUNTIME PANEL.
