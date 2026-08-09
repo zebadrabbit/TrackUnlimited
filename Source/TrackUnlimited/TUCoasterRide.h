@@ -474,6 +474,17 @@ public:
 	int32 TrainCount = 1;
 
 	/**
+	 * HOW MANY PLACES A TRAIN CAN BE PARKED, from the last rebuild.
+	 *
+	 * The capacity rule lives inside RebuildFromSegments and nothing outside could
+	 * see it, so the maintenance panel had no way to say what the ceiling IS -- it
+	 * could only refuse a press and not explain it. N places run N-1 trains,
+	 * because one has to stay free or every train is standing where the train
+	 * behind it needs to go.
+	 */
+	int32 HoldingPlaces = 0;
+
+	/**
 	 * Let a train that runs out of energy roll BACK down the hill instead of
 	 * stopping dead where it ran out.
 	 *

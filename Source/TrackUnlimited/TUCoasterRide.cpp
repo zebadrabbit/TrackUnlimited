@@ -1395,6 +1395,7 @@ void ATUCoasterRide::RebuildFromSegments()
 		// the honest answer rather than a special case. Track with nowhere to park is
 		// track somebody is still building.
 		const int32 Places = HoldMidS.Num();
+		HoldingPlaces = Places;   // so the panel can say what the ceiling is
 		const int32 Capacity = Places == 0 ? 0 : FMath::Max(1, Places - 1);
 		const int32 Running = FMath::Min(Wanted, Capacity);
 		if (Places == 0)
@@ -1825,6 +1826,13 @@ void ATUCoasterRide::RebuildFromSegments()
 	//
 	// Which is the cross-check doing its job on its first run, against a line that
 	// had been quietly wrong since before any of this existed.
+	// NO TRAINS IS NOW REACHABLE WITH HOLDING PLACES PRESENT, which it never was.
+	// The old floor of 1 meant a track with somewhere to park always had something
+	// parked, so this block could index Trains[0] safely; SHED in the maintenance
+	// panel takes the last one off and leaves the places behind. Same shape as the
+	// blank-template crash -- a guard that was true by accident rather than by
+	// construction.
+	if (!Trains.IsEmpty() && Trains[0].IsValid())
 	{
 		// Mid of the first holding device, which is where it was placed to begin
 		// with. Recomputed from HoldZoneIndices rather than reaching for the local
@@ -3341,6 +3349,29 @@ bool ATUCoasterRide::PressConsole(float Mx, float My)
 			// permanently resettable.
 			PressResetButton();
 			break;
+		case 8:
+		case 9:
+		{
+			// A REBUILD, because trains are PLACED at their holding devices rather
+			// than spawned wherever there is room -- which is also why shedding one
+			// re-seats the others rather than leaving a gap. Taking a train off is
+			// physically that: the ride stops, it comes off, the rest are re-spaced.
+			//
+			// NOT AN EDIT, so no history step. The document is the TRACK, and how
+			// many trains are on it this morning is not a change to the geometry --
+			// undoing a shed train would be undoing an operational decision.
+			const int32 Cap = HoldingPlaces == 0 ? 0 : FMath::Max(1, HoldingPlaces - 1);
+			const int32 Was = FMath::Clamp(TrainCount, 0, Cap);
+			TrainCount = FMath::Clamp(Was + (HeldConsoleButton == 9 ? 1 : -1), 0, Cap);
+			HeldConsoleButton = -1;
+			if (TrainCount != Was)
+			{
+				RebuildFromSegments();
+				UE_LOG(LogTUEvents, Log, TEXT("maintenance: %d train(s) in service"),
+					TrainCount);
+			}
+			break;
+		}
 		case 3:
 			// A MODE, TAKEN ON THE PRESS. Nothing about a selector needs the
 			// release, and holding it should not do anything at all.
@@ -4841,6 +4872,21 @@ bool ATUCoasterRide::RunDocumentSmokeTest()
 		ApplyPresetWalkways();
 		RebuildFromSegments();
 
+		// ---- AND EVERY TRAIN CAN COME OFF ----
+		//
+		// SHED in the maintenance panel can now empty a track that still has places
+		// to park on, which the old floor of 1 made impossible -- and the placement
+		// code indexed Trains[0] on exactly that combination. Asserted here because
+		// it is a crash rather than a wrong number, and because it is a state a
+		// button reaches in one press.
+		const int32 FullService = TrainCount;
+		TrainCount = 0;
+		RebuildFromSegments();
+		const bool bEmptied = Trains.Num() == 0;
+		TrainCount = FullService;
+		RebuildFromSegments();
+		const bool bReturned = Trains.Num() == FullService;
+
 		int32 Pads = 0, Trims = 0;
 		for (const FTUTrackSegment& S : Segments)
 		{
@@ -4848,11 +4894,13 @@ bool ATUCoasterRide::RunDocumentSmokeTest()
 			if (S.Zone == ETUSegmentZone::Brake) { ++Trims; }
 		}
 
-		if (!bTrackIsCircuit || !Profile_.bCompleted || Pads < 2 || Trims != 1)
+		if (!bTrackIsCircuit || !Profile_.bCompleted || Pads < 2 || Trims != 1
+			|| !bEmptied || !bReturned)
 		{
 			UE_LOG(LogTUEvents, Error,
-				TEXT("smoke: the showcase is wrong (circuit %d, completed %d, pads %d, trims %d)"),
-				bTrackIsCircuit, Profile_.bCompleted, Pads, Trims);
+				TEXT("smoke: the showcase is wrong (circuit %d, completed %d, pads %d, ")
+				TEXT("trims %d, shed to zero %d, returned %d)"),
+				bTrackIsCircuit, Profile_.bCompleted, Pads, Trims, bEmptied, bReturned);
 			Failures.Add(TEXT("showcase"));
 		}
 		else
@@ -4860,7 +4908,7 @@ bool ATUCoasterRide::RunDocumentSmokeTest()
 			UE_LOG(LogTUEvents, Log,
 				TEXT("smoke: the showcase closes and runs -- %d segments, %.1f m, ")
 				TEXT("top %.1f km/h, %.0f s, %.2f..%+.2f g vertical, %.2f lateral, ")
-				TEXT("%d friction pad(s), %d trim"),
+				TEXT("%d friction pad(s), %d trim, sheds to zero and back"),
 				Segments.Num(), Track.TotalLength(), Profile_.TopSpeed * 3.6,
 				Profile_.Duration, Profile_.MinVerticalG, Profile_.MaxVerticalG,
 				Profile_.MaxAbsLateralG, Pads, Trims);
@@ -6472,6 +6520,41 @@ void ATUCoasterRide::DrawPanels(UCanvas* Canvas)
 				Console != nullptr && Console->bOperatorAllClear
 					? TEXT("ALL CLEAR GIVEN") : TEXT("ALL CLEAR"), 6,
 				PanelCyan, Console != nullptr && !Console->bOperatorAllClear);
+			Ty += Row;
+		}
+
+		// ---- TRAINS IN SERVICE, which is a MAINTENANCE decision ------------
+		//
+		// Adding and removing trains is not something an operator does mid-shift --
+		// it is a morning or an overnight job, and it happens because a train is due
+		// an inspection or the queue does not justify running them all. So it lives
+		// in the maintenance view rather than beside DISPATCH.
+		//
+		// THE CEILING IS SAFETY AND IS NOT NEGOTIABLE FROM HERE. N holding places
+		// run N-1 trains; the button simply stops, because a control that let you
+		// ask for an unsafe number and then quietly gave you a safe one would be
+		// lying about what the ride is doing. Downward there is no limit at all --
+		// zero trains is a ride with everything in the shed, which is an ordinary
+		// state and was refused until today.
+		if (bMaint)
+		{
+			Ty += 4.f;
+			PanelTile(Canvas, Lx, Ty + 5.f, W - Pad * 2.f, 1.f, PanelRule);
+			const int32 Cap = HoldingPlaces == 0 ? 0 : FMath::Max(1, HoldingPlaces - 1);
+			const int32 Running = FMath::Clamp(TrainCount, 0, Cap);
+			PanelLabel(Canvas, Lx, Ty, FString::Printf(
+				TEXT("TRAINS IN SERVICE   %d of %d   (%d holding place(s), one stays free)"),
+				Running, Cap, HoldingPlaces), PanelDim);
+			Ty += Row;
+			Button(0.f, 104.f, TEXT("- SHED"), 8, PanelAmber, Running > 0);
+			Button(116.f, 104.f, TEXT("+ RETURN"), 9, PanelGreen, Running < Cap);
+			// SAID WHEN IT BITES, not as a permanent caption. A ceiling nobody has
+			// reached is noise; one somebody is pressing against is the answer.
+			if (Running >= Cap && Cap > 0)
+			{
+				PanelLabel(Canvas, Lx + 232.f, Ty + 1.f,
+					TEXT("at capacity - add a block brake to park another"), PanelDim);
+			}
 			Ty += Row;
 		}
 
