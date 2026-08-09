@@ -1964,7 +1964,9 @@ private:
 	/** `-TUSmokeTest`: boot, write a real file, read it back, prove the ride is
 	 *  the same one. Off unless asked for, and the first half of the packaged
 	 *  smoke test the build script's card is waiting on. */
-	void RunDocumentSmokeTest();
+	/** True if every check passed. The caller turns that into the process exit
+	 *  status, because a smoke test that only logs cannot gate anything. */
+	bool RunDocumentSmokeTest();
 
 public:
 

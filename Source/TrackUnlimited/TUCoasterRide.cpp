@@ -4422,8 +4422,18 @@ void ATUCoasterRide::CheckDocumentRoundTrip() const
 		Segments.Num());
 }
 
-void ATUCoasterRide::RunDocumentSmokeTest()
+bool ATUCoasterRide::RunDocumentSmokeTest()
 {
+	// EVERY CHECK RUNS, and the verdict is the AND of all of them. Returning at
+	// the first failure would report one broken thing and hide the other eight,
+	// which on a build somebody is waiting on is the difference between one
+	// round trip and nine. The four below that DO return early are the ones
+	// where continuing is meaningless -- if the document will not save, the
+	// checks that open it are testing nothing.
+	// NAMED, NOT COUNTED. A verdict of FAILED with nothing beside it sends
+	// somebody back to read the whole log to find out which of nine checks it
+	// was, which is the same defect as a validator that says a track is invalid.
+	TArray<FString> Failures;
 	// THE SMOKE TEST THE PACKAGING CARD ASKS FOR, or its first half: boot, write a
 	// real file, read it back, and prove the ride on the other side is the same
 	// one. `-TUSmokeTest` on the command line, so it never runs for a player.
@@ -4432,6 +4442,21 @@ void ATUCoasterRide::RunDocumentSmokeTest()
 	// -tripping the text in memory, because the parts it exists to cover are the
 	// ones that only exist on disc: the encoding, the folder, and whether opening
 	// really does replace the segment list with what was written.
+	// ===================== IT TESTS THE DOCUMENT, SO IT SETS THE MODE =====================
+	//
+	// EditsAllowed() is true in BUILD and nowhere else, and this runs at BeginPlay
+	// -- which since the boot fix means it runs in MAIN MENU, because a non-PIE
+	// launch now boots the way a packaged build does. So insert, remove and the
+	// multi-select commit were all correctly REFUSED, and three checks failed on a
+	// ride that is fine.
+	//
+	// Not a workaround: a test of the document layer that inherits whatever mode
+	// the shell happens to be in is a test that reports different things on
+	// different launches, which is what it did -- it passed before the boot change
+	// and failed after, with nothing about the document altered. The mode is an
+	// input, so it gets stated rather than inherited.
+	Session.Enter(EAppMode::Build, /*bConfirmed*/ true);
+
 	const FString Path = FPaths::ProjectSavedDir() / TEXT("SmokeTest.track");
 	const int32 Before = Segments.Num();
 	const FString TextBefore = SerialiseDocument();
@@ -4439,12 +4464,12 @@ void ATUCoasterRide::RunDocumentSmokeTest()
 	if (!SaveDocumentTo(Path))
 	{
 		UE_LOG(LogTUEvents, Error, TEXT("smoke: save failed"));
-		return;
+		return false;
 	}
 	if (!OpenDocumentFrom(Path))
 	{
 		UE_LOG(LogTUEvents, Error, TEXT("smoke: opening what we just wrote failed"));
-		return;
+		return false;
 	}
 
 	const FString TextAfter = SerialiseDocument();
@@ -4453,7 +4478,7 @@ void ATUCoasterRide::RunDocumentSmokeTest()
 		UE_LOG(LogTUEvents, Error,
 			TEXT("smoke: the ride changed across a save and open — %d segments became %d"),
 			Before, Segments.Num());
-		return;
+		return false;
 	}
 	// AND THE SESSION AGREES IT IS SAVED. A file on disc that the shell still
 	// reports as unsaved is the dirty-marker bug arriving from the other side.
@@ -4461,7 +4486,7 @@ void ATUCoasterRide::RunDocumentSmokeTest()
 	{
 		UE_LOG(LogTUEvents, Error,
 			TEXT("smoke: saved and opened, but the session does not think so"));
-		return;
+		return false;
 	}
 	UE_LOG(LogTUEvents, Log,
 		TEXT("smoke: %d segments saved, opened and unchanged; document is %s, clean"),
@@ -4492,6 +4517,7 @@ void ATUCoasterRide::RunDocumentSmokeTest()
 			UE_LOG(LogTUEvents, Error,
 				TEXT("smoke: undo/redo did not round-trip (changed %d, back %d, forward %d)"),
 				Edited != Original, bBack, bForward);
+			Failures.Add(TEXT("undo/redo"));
 		}
 		else
 		{
@@ -4523,6 +4549,7 @@ void ATUCoasterRide::RunDocumentSmokeTest()
 			UE_LOG(LogTUEvents, Error,
 				TEXT("smoke: insert/remove/undo is wrong (grew %d, shrank %d, back %d, gone %d)"),
 				bGrew, bShrank, bCameBack, bGone);
+			Failures.Add(TEXT("insert/remove"));
 		}
 		else
 		{
@@ -4562,6 +4589,7 @@ void ATUCoasterRide::RunDocumentSmokeTest()
 			UE_LOG(LogTUEvents, Error,
 				TEXT("smoke: multi-select is wrong (two %d, wrote %d, undone %d)"),
 				bBoth, bWrote, bBack);
+			Failures.Add(TEXT("multi-select"));
 		}
 		else
 		{
@@ -4589,6 +4617,7 @@ void ATUCoasterRide::RunDocumentSmokeTest()
 			UE_LOG(LogTUEvents, Error,
 				TEXT("smoke: preset walkways are wrong (authored %d, derived %d)"),
 				Walkways.Num(), static_cast<int32>(WalkwaySpans.size()));
+			Failures.Add(TEXT("preset walkways"));
 		}
 		else
 		{
@@ -4626,6 +4655,7 @@ void ATUCoasterRide::RunDocumentSmokeTest()
 			UE_LOG(LogTUEvents, Error,
 				TEXT("smoke: new-blank is wrong (empty %d, build %d, clean %d, first %d, undone %d)"),
 				bEmpty, bBuild, bClean, bFirst, bGone);
+			Failures.Add(TEXT("new-blank"));
 		}
 		else
 		{
@@ -4653,6 +4683,13 @@ void ATUCoasterRide::RunDocumentSmokeTest()
 			UTF8_TO_TCHAR(E.Name.c_str()),
 			UTF8_TO_TCHAR(FTrackBrowser::Subtitle(E).c_str()));
 	}
+
+	if (Failures.Num() > 0)
+	{
+		UE_LOG(LogTUEvents, Error, TEXT("smoke: %d of 9 checks failed: %s"),
+			Failures.Num(), *FString::Join(Failures, TEXT(", ")));
+	}
+	return Failures.Num() == 0;
 }
 
 FString ATUCoasterRide::ShellSettingsPath() const
@@ -4877,7 +4914,28 @@ void ATUCoasterRide::BeginPlay()
 
 	if (FParse::Param(FCommandLine::Get(), TEXT("TUSmokeTest")))
 	{
-		RunDocumentSmokeTest();
+		// ===================== IT HAS TO FAIL THE BUILD, NOT JUST SAY SO =====================
+		//
+		// Until now this logged its findings and carried on, which is fine when a
+		// person is reading the output and useless to anything automated: a run
+		// with nine failures in it exited 0, and the packaged build it was meant to
+		// gate would have shipped.
+		//
+		// AND IT QUITS. A packaged game with no window to close sits there for ever
+		// waiting for input nobody is going to give it, which reads as a hang rather
+		// than as a test.
+		//
+		// THE `PASSED` LINE IS LOAD-BEARING, and it is not decoration beside the
+		// exit code. A packaged build whose default map has no ATUCoasterRide in it
+		// never reaches this function at all -- BeginPlay does not run, nothing is
+		// tested, and the process exits 0 looking exactly like a pass. So the script
+		// requires this line to be PRESENT rather than trusting the status. A test
+		// that cannot tell success from never-having-run is worse than no test,
+		// because it is believed.
+		const bool bPassed = RunDocumentSmokeTest();
+		UE_LOG(LogTUEvents, Display, TEXT("smoke: %s"),
+			bPassed ? TEXT("PASSED") : TEXT("FAILED"));
+		FPlatformMisc::RequestExitWithStatus(/*Force*/ false, bPassed ? 0 : 1);
 	}
 
 	// THE CABINET GETS POWER, and the ride opens the way a real one does: an

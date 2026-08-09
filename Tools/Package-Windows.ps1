@@ -35,7 +35,10 @@ param(
     [string] $EnginePath,
     [ValidateSet('Development', 'Shipping')]
     [string] $Configuration = 'Development',
-    [string] $Output
+    [string] $Output,
+
+    # Run the packaged build's own smoke test and fail if it does not pass.
+    [switch] $SmokeTest
 )
 
 $ErrorActionPreference = 'Stop'
@@ -114,20 +117,80 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host ""
 Write-Host "Packaged to $Output" -ForegroundColor Green
+
+if (-not $SmokeTest) {
+    Write-Host ""
+    Write-Host "Pass -SmokeTest to run it. Without that this only proves it COMPILED and COOKED." -ForegroundColor DarkGray
+    return
+}
+
+# ---- The packaged smoke test.
+#
+# The half the packaging card was waiting on. -TUSmokeTest already existed and
+# had only ever run in the editor, which is the one place the failures it exists
+# to catch cannot happen: OnConstruction runs there, uncooked assets resolve
+# there, and the map you have open is the map you get.
+$Exe = Get-ChildItem -Path $Output -Filter 'TrackUnlimited.exe' -Recurse -File |
+       Select-Object -First 1
+if (-not $Exe) { throw "Packaged TrackUnlimited.exe not found under $Output." }
+
+# -nullrhi and -nosound so it runs without a GPU or an audio device, which is
+# what a CI agent has. -unattended so nothing waits for a dialog.
+$SmokeArgs = @('-TUSmokeTest', '-unattended', '-nullrhi', '-nosound',
+               '-stdout', '-FullStdOutLogOutput')
+
+Write-Host ""
+Write-Host "Smoke test: $($Exe.FullName)" -ForegroundColor Cyan
+$Log = & $Exe.FullName @SmokeArgs 2>&1
+$Status = $LASTEXITCODE
+$Log | Where-Object { $_ -match 'smoke:' } | ForEach-Object { Write-Host "  $_" }
+
+# ---- TWO CONDITIONS, AND THE SECOND IS THE ONE THAT MATTERS.
+#
+# MEASURED, NOT ASSUMED: a run that reported FAILED still exited 0 under
+# UnrealEditor-Cmd in -game. RequestExitWithStatus asks for a graceful shutdown
+# and the status does not survive it there. Whether a packaged build does better
+# is untested -- so the exit code is treated as a hint and the VERDICT LINE is
+# the authority. Forcing the exit instead would guarantee the code and risk
+# truncating the log that carries the reason, which is the worse trade.
+#
+# A build whose default map has no ATUCoasterRide in it never runs BeginPlay, so
+# the test never executes and the process exits 0 -- indistinguishable from a
+# pass by status alone. So the verdict LINE must be present, not merely
+# non-failing. A check that cannot tell success from never-having-run is worse
+# than no check, because it gets believed.
+$Verdict = $Log | Where-Object { $_ -match 'smoke: (PASSED|FAILED)' } | Select-Object -Last 1
+if (-not $Verdict) {
+    $Tail = ($Log | Select-Object -Last 25) -join "`n"
+    throw @"
+The smoke test never reported a verdict (process exit $Status).
+
+That is NOT a pass. It means the run never reached ATUCoasterRide::BeginPlay --
+most likely the packaged build opened a map with no ride actor in it. Check
+GameDefaultMap in Config/DefaultEngine.ini and MapsToCook in DefaultGame.ini.
+
+Last of the output:
+$Tail
+"@
+}
+if ($Status -ne 0 -or $Verdict -notmatch 'PASSED') {
+    throw "Smoke test FAILED (exit $Status). The 'smoke:' lines above say which check."
+}
+
+Write-Host ""
+Write-Host "Smoke test passed." -ForegroundColor Green
 Write-Host @"
 
-THE SMOKE TEST IS NOT AUTOMATED YET. Run the .exe, confirm it boots and that a
-preset layout loads and runs. The packaging card lists what usually breaks
-first:
+WHAT THIS DOES AND DOES NOT COVER. It proves the packaged build boots, loads a
+map with the ride in it, and that the document layer survives cooking -- save,
+open, undo, redo, insert, remove, multi-select, the presets and the browser's
+four row states. It does NOT look at anything on screen. These still want an eye:
 
-  - OnConstruction drives the editor preview and does NOT run in a packaged
-    game. Anything that only rebuilds there will be missing.
   - DrawDebug is compiled out in Shipping, so the ride-profile traces, the
     block-boundary gates and the restraint boxes disappear rather than fail.
-  - Assets referenced only from the editor are cooked out unless explicitly
-    referenced.
-  - Background throttling: an unfocused window runs the sim SLOWLY. That is now
-    safe — the step is fixed, so it stays bit-identical — but whether a packaged
-    build should slow, pause or run at full rate is still an open product
-    decision on that card.
+  - OnConstruction drives the editor preview and does NOT run in a packaged
+    game. Anything that only rebuilds there will be missing.
+  - Assets referenced only from the editor are cooked out unless referenced.
+  - Background throttling: whether an unfocused packaged build should slow,
+    pause or run at full rate is still an open product decision on that card.
 "@ -ForegroundColor DarkGray
