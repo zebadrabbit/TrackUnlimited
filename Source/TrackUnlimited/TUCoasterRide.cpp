@@ -761,39 +761,23 @@ TArray<FTUTrackSegment> ATUCoasterRide::ShowcaseLayout()
 		}
 	}
 
-	// ---- THE HELIX FINALE, AND IT IS FREE =====================================
+	// ---- THE HELIX FINALE, WITHDRAWN UNTIL IT IS MEASURED ON SIX TRAINS -------
 	//
-	// A FULL CIRCLE RETURNS TO ITS OWN START POINT AND HEADING. So one inserted
-	// inside a constant-radius turn changes NOTHING about closure -- the seam is
-	// untouched, and none of the hand-solved leg lengths this layout inherits have
-	// to move. That is the whole reason it is expressible here at all: a helix
-	// authored anywhere else displaces the return leg, and re-closing it is a
-	// solver pass rather than an afternoon.
+	// A full circle inserted inside a constant-radius turn is closure-neutral and
+	// curvature-continuous, and that part was right: 1288.0 -> 1507.9 m, seam
+	// unmoved, vertical G unchanged. What it was NOT checked against is the thing
+	// a 20% longer lap actually changes -- the interlocking with six trains on it,
+	// which reported a detection disagreement and latched the E-stop.
 	//
-	// AND THERE IS NO CURVATURE STEP, which is the other thing that usually costs.
-	// It is added at the radius the track is ALREADY turning at, so the joint is
-	// continuous by construction and the easements either side are the ones the
-	// turn already had. Authoring a helix into straight track would jump from R =
-	// infinity to R = 35 in one joint, which at 18 m/s is 0.94 g arriving in no
-	// distance at all.
+	// The ride profile that passed is a SINGLE train with every signal green. It
+	// cannot see headway, and this project already knows that: capacity is a
+	// signalling property with nothing to do with geometry, which is why
+	// test_ridesignals drives it on bare numbers.
 	//
-	// FLAT, so there is no height to compensate either. A descending helix changes
-	// the leg's height and would need the drop re-solved with it; zero climb keeps
-	// the plan circle and drops the third constraint. It is also what the element
-	// usually is on a real ride -- the helix finale is a banked ground-level turn
-	// that gives sustained lateral rather than airtime.
-	//
-	// THE LAST arc, which is the turnaround at station height: the train is slowest
-	// at the top of the hill, and spending 220 m of flat track there instead would
-	// be the one place the ride cannot afford it.
-	for (int32 i = Out.Num() - 1; i >= 0; --i)
-	{
-		if (Out[i].Kind != ETUSegmentKind::Arc || !(Out[i].Radius > 0.f)) { continue; }
-		// One full turn is 2*pi*R of arc length at radius R, by definition -- read
-		// from the segment rather than typed, so it follows the turn it extends.
-		Out[i].Length += static_cast<float>(2.0 * PI * Out[i].Radius);
-		break;
-	}
+	// To bring it back: run the six-train circuit for several laps with the extra
+	// 220 m in, and assert no violation and no counter disagreement -- the check
+	// test_twotrains.cpp already performs, on a layout that does not yet include
+	// this one. That is the missing consumer, not a missing fix.
 
 	// ---- The trim, SPLIT OUT of the fill straight so the leg keeps its length.
 	//
