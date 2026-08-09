@@ -298,6 +298,20 @@ enum class ETUCameraMode : uint8
 	// non-ride view did.
 	Chase UMETA(DisplayName = "Chase"),
 
+	// STANDING AT THE CONSOLE, on the platform, where an operator actually works.
+	//
+	// APPENDED, NOT INSERTED. This is a uint8 UENUM serialised into every level
+	// that has a ride in it; inserting in the middle would silently renumber every
+	// camera already chosen.
+	//
+	// It gives up the view Operate's orbit was chosen for — far enough back to see
+	// the train AND the block ahead of it — and that is the right trade rather than
+	// a regression: a real operator cannot see the mid-course brake either. They
+	// read it off the block schematic, which the panel already draws, and the
+	// difference is that here the schematic stops being a nicety and becomes the
+	// instrument. Orbit is still one press away for when you want the god's eye.
+	Console UMETA(DisplayName = "Console (at the platform)"),
+
 	// Detached and flown by hand. The ride carries on without you, which is the
 	// point — standing beside the loop watching a train come through is a thing
 	// only a free camera can do.

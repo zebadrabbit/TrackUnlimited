@@ -1270,6 +1270,10 @@ private:
 	/** Frame the station, which is where an operator stands. */
 	void FrameStation();
 
+	/** Where along the track the console camera stands. Derived from the first
+	 *  platform the block walk found, so it is right on layouts nobody has built. */
+	double ConsoleStandS() const;
+
 	/**
 	 * THE MAIN MENU. The first screen anyone sees, and the first thing that makes
 	 * this an application rather than a project.
@@ -1358,6 +1362,37 @@ private:
 	/** Which console button the pointer is holding down, or -1. Held rather than
 	 *  fired-and-forgotten because the release is half of two of these controls. */
 	int32 HeldConsoleButton = -1;
+
+	/**
+	 * ===================== ATTENDED: THE OPERATOR DOES THE WORK =====================
+	 *
+	 * NOTHING ON A REAL RIDE HAPPENS ON ITS OWN. A person closes the gates when
+	 * the platform is clear, and a person confirms by hand that every harness is
+	 * locked and immobile. There is no safety device that does either of those
+	 * without somebody, and "automatic" has never meant otherwise: the machine
+	 * PERMITS the operator to take actions that are safe, and refuses the rest.
+	 * A loading that takes longer because a rider needs help is the ordinary case,
+	 * and it is exactly what a timer cannot express.
+	 *
+	 * `FCommandedBank` was already built for this — its own header says GATES and
+	 * RESTRAINTS are CLOSE/OPEN selectors the operator commands and sensors then
+	 * confirm. What was missing is that `FAutoStationCrew` was pressing those
+	 * switches on a dwell clock, which that class has always described itself as a
+	 * stand-in for.
+	 *
+	 * OFF BY DEFAULT, and that is not a judgement about which is right. Every
+	 * measured figure in this project — the 5.5 s a rear-position delay costs, the
+	 * 52 s a front one does, every capacity number — was taken with the crew
+	 * running, and flipping the default would invalidate all of them silently.
+	 * Attended is opt-in until those are re-measured against a human.
+	 */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Operations")
+	bool bAttended = false;
+
+	/** The operator's all-clear for THIS train: the walk-round, done and stated.
+	 *  Latched, because it is a statement about a moment, and cleared when the
+	 *  train goes so the next one needs its own. */
+	bool bOperatorAllClear = false;
 
 	/** True if the press landed on a console control, which is also how the click
 	 *  falls through to the editor and the diagnostics list when it did not. */

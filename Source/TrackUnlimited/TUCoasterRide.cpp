@@ -2038,9 +2038,13 @@ void ATUCoasterRide::CycleCameraMode()
 {
 	switch (CameraMode)
 	{
-	case ETUCameraMode::Rider: CameraMode = ETUCameraMode::Chase; break;
-	case ETUCameraMode::Chase: CameraMode = ETUCameraMode::Free; break;
-	case ETUCameraMode::Free:  CameraMode = ETUCameraMode::Orbit; break;
+	case ETUCameraMode::Rider:   CameraMode = ETUCameraMode::Chase; break;
+	case ETUCameraMode::Chase:   CameraMode = ETUCameraMode::Free; break;
+	case ETUCameraMode::Free:    CameraMode = ETUCameraMode::Orbit; break;
+	// ORBIT THEN CONSOLE, so the god's-eye view and the place you actually work
+	// are adjacent: standing at the console gives up sight of the block ahead,
+	// and one press back is how you get it when you want it.
+	case ETUCameraMode::Orbit:   CameraMode = ETUCameraMode::Console; break;
 	default: CameraMode = ETUCameraMode::Rider; break;
 	}
 	// Re-seed on the way in, so the free camera starts from wherever you were
@@ -2784,6 +2788,35 @@ bool ATUCoasterRide::PressConsole(float Mx, float My)
 			UE_LOG(LogTUEvents, Log, TEXT("console: dispatch is now %s"),
 				bManualDispatch ? TEXT("MANUAL") : TEXT("AUTO"));
 			break;
+		case 4:
+		case 5:
+		{
+			// COMMANDED, NOT SET. The switch says what the operator wants; the
+			// bank takes its travel time and the sensors say when it got there,
+			// which is the whole reason "commanded closed but car 3 is not locked"
+			// is expressible at all.
+			//
+			// EVERY PLATFORM, because there is one operator and one console here.
+			// A multi-position platform with a console each is the first thing this
+			// will have to split, and it is the same limitation the dispatch
+			// button already carries.
+			for (FTUPlatform& P : Platforms)
+			{
+				FCommandedBank& Bank = HeldConsoleButton == 4 ? P.Crew.Gates
+															  : P.Crew.Restraints;
+				Bank.Command(!Bank.IsCommandedClosed());
+			}
+			HeldConsoleButton = -1;
+			break;
+		}
+		case 6:
+			// THE WALK-ROUND, and it only ever goes one way. Un-declaring an
+			// all-clear is not a thing an operator does — if something is wrong
+			// after they have given it, the control for that is the E-stop.
+			bOperatorAllClear = true;
+			HeldConsoleButton = -1;
+			UE_LOG(LogTUEvents, Log, TEXT("console: all clear given"));
+			break;
 		default:
 			HeldConsoleButton = -1;
 			break;
@@ -2991,6 +3024,31 @@ void ATUCoasterRide::ConfirmLeaveToMenu(bool bDiscard)
 	RefreshTrackList();
 	Session.Enter(EAppMode::MainMenu, true);
 	ApplyAppMode(EAppMode::MainMenu);
+}
+
+double ATUCoasterRide::ConsoleStandS() const
+{
+	// THE FIRST PLATFORM, which the block walk already derived — nothing here is
+	// authored or searched for, so the console stands in the right place on a
+	// layout nobody has built yet.
+	double End = 0.0;
+	for (int32 i = 0; i < Segments.Num(); ++i)
+	{
+		const double L = static_cast<double>(Segments[i].Length);
+		if (Segments[i].Zone == ETUSegmentZone::Station
+			|| Segments[i].Zone == ETUSegmentZone::StationLoad
+			|| Segments[i].Zone == ETUSegmentZone::StationUnload)
+		{
+			// A THIRD OF THE WAY IN, not the start: a console sits beside the
+			// train it is dispatching, and the platform's leading edge is where
+			// the train is leaving from rather than where it stands.
+			return End + L * 0.34;
+		}
+		End += L;
+	}
+	// NO PLATFORM IS A TEST RIG, and the start of the track is the honest answer
+	// rather than an arbitrary metre in the middle of a launch.
+	return 0.0;
 }
 
 void ATUCoasterRide::FrameStation()
@@ -5257,6 +5315,40 @@ void ATUCoasterRide::DrawPanels(UCanvas* Canvas)
 			bStop && Drives->AnyUnacknowledged() ? PanelAmber : PanelCyan, bStop);
 		Ty += Row;
 
+		// ---- THE OPERATOR'S OWN ROW, when there is an operator -------------
+		//
+		// NOTHING ON A REAL RIDE HAPPENS ON ITS OWN. A person shuts the gates when
+		// the platform is clear and a person confirms by hand that every harness is
+		// locked; there is no safety device that does either without somebody.
+		// "Automatic" never meant otherwise — the machine PERMITS what is safe and
+		// refuses the rest, which is why these three sit beside DISPATCH rather
+		// than replacing it.
+		//
+		// Hidden when the stand-in crew is running, because a control that is
+		// pressed and then immediately overridden by a dwell timer is worse than
+		// one that is not offered.
+		if (bAttended)
+		{
+			Ty += 2.f;
+			const bool bGatesShut = Console != nullptr && Console->Crew.Gates.IsCommandedClosed();
+			const bool bBarsDown = Console != nullptr
+				&& Console->Crew.Restraints.IsCommandedClosed();
+
+			// SELECTORS SAY WHERE THEY ARE, never what they would do next. A switch
+			// labelled with its opposite is the oldest ambiguity on any panel.
+			Button(0.f, 104.f, bGatesShut ? TEXT("GATES SHUT") : TEXT("GATES OPEN"), 4,
+				PanelGreen, Console != nullptr);
+			Button(116.f, 104.f, bBarsDown ? TEXT("BARS DOWN") : TEXT("BARS UP"), 5,
+				PanelGreen, Console != nullptr);
+			// THE WALK-ROUND. Not derived from anything and it must not be: it is a
+			// person having walked the train and looked at every car. Latched for
+			// this train, and the next one needs its own.
+			Button(232.f, 220.f,
+				bOperatorAllClear ? TEXT("ALL CLEAR GIVEN") : TEXT("ALL CLEAR"), 6,
+				PanelCyan, Console != nullptr && !bOperatorAllClear);
+			Ty += Row;
+		}
+
 		// ---- THE EVENT LOG ------------------------------------------------
 		//
 		// The difference between a status display and a RECORD. Everything above
@@ -5866,7 +5958,49 @@ void ATUCoasterRide::ServeStations(float DeltaSeconds)
 			&& P.Process.GetRole() == EStationRole::Load && TrainLoaded[Who];
 
 		P.Process.Update(P.Inputs);
-		P.Crew.Serve(P.Process, P.Inputs, DeltaSeconds, bAlready);
+
+		if (bAttended)
+		{
+			// ===================== THE OPERATOR IS THE CREW =====================
+			//
+			// The banks still tick, because the HARDWARE is real whether or not
+			// anybody is standing there — a bar takes the same two seconds to
+			// travel on a quiet Tuesday. What is gone is the clock deciding when
+			// the switches get thrown.
+			P.Crew.Restraints.Tick(DeltaSeconds, P.Crew.StuckGroup);
+			P.Crew.Gates.Tick(DeltaSeconds, P.Crew.StuckGate);
+
+			// AND THE CONTACTS COME FROM THE SWITCH POSITIONS, not from a timer
+			// and not from a second set of buttons. Each is what its own field
+			// comment already says it is:
+			//
+			//   bLoadComplete   — "everyone seated, airgates shut". The operator
+			//                     shuts the gates when the platform is clear, so
+			//                     the gates BEING shut is that statement.
+			//   bUnloadComplete — bars up is what lets riders out, so commanding
+			//                     the restraints open is the operator saying the
+			//                     train may empty.
+			//   bPlatformClear  — the walk-round. Nothing derives this: it is a
+			//                     person having looked, and it has its own button.
+			P.Inputs.bRestraintsLocked = P.Crew.Restraints.IsClosedAndLocked();
+			P.Inputs.bUnloadComplete = !P.Crew.Restraints.IsCommandedClosed();
+			P.Inputs.bLoadComplete = P.Crew.Gates.IsClosedAndLocked()
+				&& P.Crew.Restraints.IsCommandedClosed();
+			P.Inputs.bPlatformClear = bOperatorAllClear;
+		}
+		else
+		{
+			P.Crew.Serve(P.Process, P.Inputs, DeltaSeconds, bAlready);
+		}
+
+		// THE ALL-CLEAR IS ABOUT ONE TRAIN. Cleared the moment this one is on its
+		// way, so the next arrival needs its own walk-round rather than inheriting
+		// a statement somebody made about a different train.
+		if (P.Process.GetPhase() == EStationPhase::Departing
+			|| P.Process.GetPhase() == EStationPhase::Empty)
+		{
+			bOperatorAllClear = false;
+		}
 
 		// Boarded here, and it stays boarded. Set on readiness rather than on the
 		// load contact so it survives being re-checked at the next position, which
@@ -7214,6 +7348,38 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 			+ FVector(0.f, 0.f, MoveUp * Speed);
 
 		Camera->SetWorldLocationAndRotation(FreeLocation, FreeRotation.Quaternion());
+	}
+	else if (CameraMode == ETUCameraMode::Console)
+	{
+		// ===================== WHERE AN OPERATOR STANDS =====================
+		//
+		// Beside the platform at eye height, looking along the track the way the
+		// train leaves. Not a free camera parked there: the position is DERIVED
+		// from the station zone the block walk already found, so it is right on
+		// every layout including the ones that do not exist yet.
+		//
+		// Offset to the rider's LEFT of the heartline, which is +Lateral in the
+		// prototypes' frame — a console sits beside the train, not on it.
+		const double S = ConsoleStandS();
+		const FTrackFrame F = Track.EvaluateAt(S);
+		const FVector Base = ToWorld(F.Position);
+		// A DIRECTION, NOT A POINT — the actor transform's rotation without its
+		// translation, which is what ToLocalDirection exists to keep separate.
+		const FVector Side = GetActorTransform().TransformVectorNoScale(
+			ToLocalDirection(F.Lateral));
+		const FVector Along = GetActorTransform().TransformVectorNoScale(
+			ToLocalDirection(F.Tangent));
+
+		// 2.5 m to the side and 1.6 m up: standing at a waist-high desk beside the
+		// train, which is what every station photograph this was corrected against
+		// shows. Height is from the HEARTLINE, so it is eye level rather than
+		// track level.
+		const FVector Eye = Base + Side * (2.5 * MetresToUU) + FVector(0.f, 0.f, 1.6f * MetresToUU);
+		// LOOKING DOWN THE TRACK, slightly toward it. An operator watches the train
+		// and the way out, which is the same direction.
+		const FVector Aim = Base + Along * (18.0 * MetresToUU);
+		const FRotator Face = (Aim - Eye).Rotation();
+		Camera->SetWorldLocationAndRotation(Eye, Face.Quaternion());
 	}
 	else if (CameraMode == ETUCameraMode::Orbit)
 	{
