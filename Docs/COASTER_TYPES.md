@@ -129,6 +129,61 @@ second orientation frame that everything measuring G has to be taught about.
 in the whole taxonomy where the *rider* has an input, which nothing in the control model expresses —
 a fifth party alongside safety, control, show and the operator. Interesting, and separate.
 
+## What NoLimits 2 actually did, and what it proves
+
+Looked at directly (Coaster Properties, 2026-08-08) rather than guessed at, because the evidence
+sharpens the conclusion.
+
+### The Style list is a rolling-stock catalogue
+
+Roughly thirty entries, and almost all of them are **manufacturer product lines** — Gerstlauer
+Euro-Fighter, Infinity, Bobsled and Spinning; Maurer Söhne X-Car; Mack Launch; Gravity Group
+Timberliner. Underneath the list there are exactly two other controls: **Worn Type** and **Rail
+Type**.
+
+So a "style" in NL2 resolves to **a train model plus a rail profile**. That is the art and the
+vehicle — which is what this document argues a type should be, arrived at independently and then
+confirmed.
+
+**Three entries make the point better than any argument:**
+
+```
+Hyper Coaster (4 seats across)
+Hyper Coaster (4 seats staggered)
+Hyper Coaster (4 seats staggered with scoops)
+```
+
+Three catalogue rows differing by **seat arrangement**, which is the lateral seat offset above. They
+have spent three list items on what is one number per seat. Likewise "Classic Steel Looping Coaster"
+and "(Modern)": one shape, two art sets.
+
+### Why we cannot copy it, and would not want to
+
+**Constraint 5 forbids real manufacturer names**, so that list is not available to this project at
+all. But the better reason is that a catalogue is a treadmill: every new product line is a permanent
+entry and a mesh somebody owes, and none of it exposes the parameters underneath. Nothing lets
+somebody build a style *between* two entries, or one that does not exist yet.
+
+**A list of thirty presets is what you ship when the parameters are private.** Make them public and
+the list becomes a convenience rather than the interface.
+
+### Two things in the other tabs matter more than the styles
+
+**The Mode tab is the fatal choice, in a dropdown.** Operation Mode offers `Closed Circuit
+(Standard)`, `Shuttle Mode`, and **`Scripted Block System`** — as peers. Scripting is a MODE that
+replaces the block system, which is exactly what `PlcProgram`'s per-block override exists to avoid,
+and what CLAUDE.md already calls the NL2 lesson. It is worth knowing that this was visible in their
+UI the whole time.
+
+**Spline Position validates the offset directly.** It offers `Center of Rails`, `Heartline of
+Current Coaster Style`, and `Custom` with a **C.o.R. Offset X and Y**. So NL2 already carries a
+heartline offset *on the style*, with a custom lateral component — the same parameter proposed
+above, including the lateral one this document argues is the wing coaster's real requirement. They
+reached the same place and then hid it behind thirty presets rather than leading with it.
+
+**And `Run Backwards` is a per-TRAIN checkbox**, not a track property — which is the same conclusion
+`Docs/DIRECTION_AND_ROUTES.md` reaches from the other direction.
+
 ## The decision: a type is a PRESET, never a branch
 
 **No `ECoasterType` that the physics or the signalling reads.** The moment a type forks behaviour,
@@ -149,6 +204,12 @@ The degrees of freedom in pile 3 *are* real code, but they are properties of a *
 type: a spinning car is a car with a yaw freedom, and a type is just a preset that switches it on.
 
 ## What the picker should be
+
+**A HANDFUL OF GENERIC PRESETS, NOT A CATALOGUE.** The names have to be original anyway
+(constraint 5), and that turns out to be the better design rather than a compromise: a small set of
+honest starting points — "inverted, two across", "hyper, four across" — which set fields that stay
+visible and editable. Somebody's custom style is then just values, there is no list to maintain, and
+nothing rots when a manufacturer releases something new.
 
 A new-project chooser that sets four things and then gets out of the way:
 
