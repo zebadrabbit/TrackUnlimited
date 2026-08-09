@@ -113,6 +113,8 @@ ATUCoasterRide::ATUCoasterRide()
 	SpineMesh = MakeTrackMesh(TEXT("SpineMesh"));
 	TieMesh = MakeTrackMesh(TEXT("TieMesh"));
 	SupportMesh = MakeTrackMesh(TEXT("SupportMesh"));
+	CatwalkDeckMesh = MakeTrackMesh(TEXT("CatwalkDeckMesh"));
+	CatwalkRailMesh = MakeTrackMesh(TEXT("CatwalkRailMesh"));
 
 	// Seeded so a freshly placed actor has a ride in it. Everything about that
 	// ride is data in the Details panel rather than code, which is the whole
@@ -211,6 +213,53 @@ TArray<FTUTrackSegment> ATUCoasterRide::PresetLayout(ETUPresetLayout Which)
 	case ETUPresetLayout::TwoTrainCircuit: return TwoTrainCircuitLayout();
 	case ETUPresetLayout::SmallBatch:      return SmallBatchLayout();
 	default:                               return ReferenceLayout();
+	}
+}
+
+void ATUCoasterRide::ApplyPresetWalkways()
+{
+	// ===================== A PRESET CATWALKS ITS DEVICES =====================
+	//
+	// `ETUWalkway` is authored, and every shipped preset authored NONE — so the
+	// evacuation model, whose whole job is deciding whether a stopped train can be
+	// reached, had no route to reason about on any ride this project ships.
+	//
+	// DERIVED FROM THE ZONES RATHER THAN TYPED AS ARC LENGTHS, and that is the
+	// better answer as well as the cheaper one. A real ride catwalks its lift, its
+	// launch, its brake runs and its station — the places a train stops and staff
+	// need to reach it — which is exactly the set of powered runs. Absolute arc
+	// lengths typed into a preset would also drift the first time a segment
+	// upstream changed length, which is the cost the FTUWalkway header already
+	// warns about.
+	//
+	// Authoring is untouched: this only ever runs on an explicit preset load, the
+	// same rule the train follows, so somebody who has drawn their own walkways
+	// keeps them.
+	Walkways.Reset();
+
+	double S = 0.0;
+	double RunStart = 0.0;
+	bool bInRun = false;
+	for (int32 i = 0; i < Segments.Num(); ++i)
+	{
+		const bool bWants = Segments[i].Zone != ETUSegmentZone::None;
+		if (bWants && !bInRun) { RunStart = S; bInRun = true; }
+		S += static_cast<double>(Segments[i].Length);
+		const bool bEnds = bInRun && (!bWants || i == Segments.Num() - 1);
+		if (bEnds)
+		{
+			FTUWalkway W;
+			W.StartS = static_cast<float>(RunStart);
+			// A run that ended because the NEXT segment is unpowered stops at the
+			// start of this one; one that ended at the last segment runs to the end.
+			W.EndS = static_cast<float>(bWants ? S : S - static_cast<double>(Segments[i].Length));
+			// BOTH SIDES. A station is boarded from one side and evacuated from
+			// whichever is reachable, and a lift hill in the real world has a walkway
+			// on both flanks — the authored field exists for the cases that do not.
+			W.Side = ETUWalkway::Both;
+			if (W.EndS > W.StartS) { Walkways.Add(W); }
+			bInRun = false;
+		}
 	}
 }
 
@@ -1757,6 +1806,7 @@ void ATUCoasterRide::PostEditChangeProperty(FPropertyChangedEvent& Event)
 		bLoadPreset = false;
 		Segments = PresetLayout(Preset);
 		ApplyPresetTrainSetup(Preset);
+		ApplyPresetWalkways();
 	}
 
 	// ===================== EDITS ARE A MODE QUESTION =====================
@@ -3036,6 +3086,7 @@ void ATUCoasterRide::StartFromTemplate(int32 Index)
 	{
 		Segments = PresetLayout(Preset);
 		ApplyPresetTrainSetup(Preset);
+		ApplyPresetWalkways();
 	}
 
 	Session.Enter(EAppMode::Build);
@@ -4513,6 +4564,34 @@ void ATUCoasterRide::RunDocumentSmokeTest()
 		{
 			UE_LOG(LogTUEvents, Log,
 				TEXT("smoke: one number typed into two segments, and one undo takes both back"));
+		}
+	}
+
+	// ===================== A PRESET BRINGS ITS EVACUATION ROUTE =====================
+	//
+	// Every shipped preset authored NO walkways, so the evacuation model — whose
+	// whole job is deciding whether a stopped train can be reached — had no route
+	// to reason about on any ride here. Asserted on a real template rather than
+	// reasoned about, because "the spans are empty" is exactly the kind of nothing
+	// that goes unnoticed.
+	{
+		StartFromTemplate(1);   // the launched circuit: launch, brakes, a station
+		const bool bSpans = Walkways.Num() > 0;
+		const bool bDerived = WalkwaySpans.size() == static_cast<std::size_t>(Walkways.Num());
+		double Catwalked = 0.0;
+		for (const FTUWalkway& W : Walkways) { Catwalked += W.EndS - W.StartS; }
+
+		if (!bSpans || !bDerived)
+		{
+			UE_LOG(LogTUEvents, Error,
+				TEXT("smoke: preset walkways are wrong (authored %d, derived %d)"),
+				Walkways.Num(), static_cast<int32>(WalkwaySpans.size()));
+		}
+		else
+		{
+			UE_LOG(LogTUEvents, Log,
+				TEXT("smoke: the preset catwalks %d powered runs, %.0f m of route"),
+				Walkways.Num(), Catwalked);
 		}
 	}
 
@@ -7015,6 +7094,8 @@ void ATUCoasterRide::RebuildTrackMesh()
 		if (SpineMesh) { SpineMesh->ClearAllMeshSections(); }
 		if (TieMesh) { TieMesh->ClearAllMeshSections(); }
 		if (SupportMesh) { SupportMesh->ClearAllMeshSections(); }
+		if (CatwalkDeckMesh) { CatwalkDeckMesh->ClearAllMeshSections(); }
+		if (CatwalkRailMesh) { CatwalkRailMesh->ClearAllMeshSections(); }
 		return;
 	}
 
@@ -7074,6 +7155,42 @@ void ATUCoasterRide::RebuildTrackMesh()
 	else if (SupportMesh)
 	{
 		SupportMesh->ClearAllMeshSections();
+	}
+
+	// ===================== AND THE WALKWAY ALONG IT =====================
+	//
+	// The spans were derived a few hundred lines up and handed to the EVACUATION
+	// model, which has decided whether a stopped train can be reached ever since
+	// — over a walkway nobody could see. Drawing it makes "every train is
+	// reachable" something you can check at a glance, and a gap in the route a
+	// hole rather than a log line.
+	//
+	// THE SAME WALK THE TRACK USED, at the mesher's spacing rather than the
+	// placer's: a deck follows the track closely and a catwalk sampled every metre
+	// would visibly cut the corners the rails do not.
+	if (bBuildCatwalks && !WalkwaySpans.empty())
+	{
+		const FCatwalkMesh Walk = BuildCatwalks(WalkTrack(Track, Settings.SampleSpacing),
+			WalkwaySpans, Profile);
+		PushMeshSection(CatwalkDeckMesh, Walk.Deck);
+		PushMeshSection(CatwalkRailMesh, Walk.Rail);
+
+		// REPORTED, NEVER REPAIRED. A catwalk too steeply banked to walk on is
+		// still drawn, because the author asked for it and dropping the geometry
+		// would hide the thing being complained about.
+		for (const FMeshFinding& F : Walk.Finding)
+		{
+			UE_LOG(LogTUEvents, Warning, TEXT("catwalk at %.1f m: %s"),
+				F.S, UTF8_TO_TCHAR(F.What.c_str()));
+		}
+		UE_LOG(LogTemp, Log,
+			TEXT("TrackUnlimited: catwalk %d triangles over %d span(s)"),
+			static_cast<int32>(Walk.NumTriangles()), static_cast<int32>(WalkwaySpans.size()));
+	}
+	else
+	{
+		if (CatwalkDeckMesh) { CatwalkDeckMesh->ClearAllMeshSections(); }
+		if (CatwalkRailMesh) { CatwalkRailMesh->ClearAllMeshSections(); }
 	}
 
 	// AFTER the sections exist, because SetMaterial on a component with no

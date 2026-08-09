@@ -35,6 +35,7 @@
 #include "Shell/SessionState.h"
 #include "Shell/Settings.h"
 #include "Shell/TrackBrowser.h"
+#include "TrackMesh/TrackCatwalk.h"
 #include "TrackMesh/TrackSupports.h"
 #include "BlockSignal/ShowBus.h"
 #include "BlockSignal/SimDigest.h"
@@ -127,6 +128,12 @@ public:
 
 	/** The train that goes with a preset — a small-batch ride has small vehicles. */
 	void ApplyPresetTrainSetup(ETUPresetLayout Which);
+
+	/** A preset catwalks its devices. Every shipped preset authored NO walkways, so
+	 *  the evacuation model had no route to reason about on any ride here; derived
+	 *  from the powered runs rather than typed as arc lengths, because that is where
+	 *  a real ride puts them and it survives an upstream segment changing length. */
+	void ApplyPresetWalkways();
 
 	/** Where to watch from. */
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Camera")
@@ -583,6 +590,26 @@ private:
 	 *  same whether or not anything is drawn. */
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Mesh")
 	bool bBuildSupports = true;
+
+	/**
+	 * THE CATWALK, in two sections because it is two materials — deck plate and
+	 * tube handrail do not look alike, and NoLimits 2 independently gives them
+	 * separate colour pickers.
+	 *
+	 * `ETUWalkway` has been authored per segment since the evacuation model was
+	 * written and derived into spans on every rebuild; `Evacuation.h` consumes
+	 * them to decide whether a stopped train can be REACHED. None of it was ever
+	 * drawn — so a safety system has been reasoning about a walkway nobody could
+	 * see, and a gap in an evacuation route was a log line rather than a hole.
+	 */
+	UPROPERTY(VisibleAnywhere, Category = "TrackUnlimited|Mesh")
+	TObjectPtr<class UProceduralMeshComponent> CatwalkDeckMesh;
+
+	UPROPERTY(VisibleAnywhere, Category = "TrackUnlimited|Mesh")
+	TObjectPtr<class UProceduralMeshComponent> CatwalkRailMesh;
+
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Mesh")
+	bool bBuildCatwalks = true;
 
 	/**
 	 * Off leaves the wireframe as the only view, which is what every screenshot
