@@ -2632,6 +2632,131 @@ void ATUCoasterRide::CancelField()
 	FieldBuffer.Empty();
 }
 
+FString ATUCoasterRide::SidecarPath() const
+{
+	// ONE FIXED NAME, not one per document. Recovery has to find it at boot with
+	// nothing to go on — the whole point is that the application did not shut
+	// down, so nobody wrote down which file was open — and a folder full of
+	// sidecars named after documents is a search rather than a question.
+	return FPaths::ConvertRelativePathToFull(
+		FPaths::ProjectSavedDir() / TEXT("Recovered.track"));
+}
+
+void ATUCoasterRide::BootSession()
+{
+	// ===================== BOOT IS A REAL STATE =====================
+	//
+	// Not a loading screen: it is where a crashed session's sidecar is discovered,
+	// and that HAS to happen before anything can be opened, because opening a
+	// document is what would overwrite the evidence. `FSession::MayEnter` enforces
+	// it — nothing leaves Boot while a recovery is pending.
+	Session.Enter(EAppMode::Boot);
+
+	FString Text;
+	if (FFileHelper::LoadFileToString(Text, *SidecarPath()) && !Text.IsEmpty())
+	{
+		// OFFERED, NEVER APPLIED. A recovery that opened itself would silently
+		// discard whatever somebody did deliberately after the crash — and the
+		// case where they relaunch specifically to start again is not rare.
+		Session.FoundSidecarAtBoot(TCHAR_TO_UTF8(*SidecarPath()), TCHAR_TO_UTF8(*Text));
+		UE_LOG(LogTUEvents, Log, TEXT("boot: a recovered session is waiting"));
+		return;
+	}
+
+	Session.Enter(EAppMode::MainMenu);
+	RefreshTrackList();
+}
+
+void ATUCoasterRide::AnswerRecovery(bool bAccept)
+{
+	if (!Session.HasRecovery())
+	{
+		return;
+	}
+	if (bAccept)
+	{
+		const FString Text(UTF8_TO_TCHAR(Session.RecoveredText().c_str()));
+		FTrackDocument Doc;
+		std::string Error;
+		if (ParseTrackJson(TCHAR_TO_UTF8(*Text), Doc, Error))
+		{
+			Segments.Reset(static_cast<int32>(Doc.Segments.size()));
+			for (const FAuthoredSegment& A : Doc.Segments)
+			{
+				Segments.Add(FromAuthored(A));
+			}
+			// ACCEPTED IS DIRTY, because it is: what was recovered has never been
+			// saved, and presenting it as clean would let somebody close it and
+			// lose the same work a second time — the worst outcome available to a
+			// feature whose entire job is not losing it. `AcceptRecovery` sets
+			// that up; the rebuild below observes the text and the comparison does
+			// the rest.
+			Session.AcceptRecovery();
+			RebuildFromSegments();
+			ResetHistory();
+			Session.Enter(EAppMode::MainMenu);
+			Session.Enter(EAppMode::Build);
+			CameraMode = ETUCameraMode::Orbit;
+			FrameWholeTrack();
+			UE_LOG(LogTUEvents, Log, TEXT("boot: recovered %d segments, unsaved"),
+				Segments.Num());
+			return;
+		}
+		// A SIDECAR THAT WILL NOT PARSE IS STILL EVIDENCE. Declining leaves it on
+		// disc rather than deleting it, so somebody can look at the file itself.
+		UE_LOG(LogTUEvents, Warning, TEXT("boot: the recovered session will not load — %s"),
+			UTF8_TO_TCHAR(Error.c_str()));
+	}
+
+	Session.DeclineRecovery();
+	// DELETED ONLY ON A DECLINE, and only after the person said so. Anything else
+	// is the application deciding on their behalf what was worth keeping.
+	if (!bAccept)
+	{
+		IPlatformFile& Files = FPlatformFileManager::Get().GetPlatformFile();
+		Files.DeleteFile(*SidecarPath());
+	}
+	Session.Enter(EAppMode::MainMenu);
+	RefreshTrackList();
+}
+
+void ATUCoasterRide::DrawRecoveryOffer(UCanvas* Canvas)
+{
+	if (!Canvas || !GEngine || !Session.HasRecovery())
+	{
+		return;
+	}
+
+	// THE FIRST THING ANYBODY SEES AFTER A CRASH, so it says what happened and
+	// what the two answers do rather than asking a yes/no about a noun.
+	const float Ox = 70.f;
+	float Y = 110.f;
+	PanelTile(Canvas, Ox - 18.f, Y - 16.f, 600.f, 150.f, PanelGround);
+	PanelLabel(Canvas, Ox, Y, TEXT("A SESSION WAS NOT CLOSED"), PanelAmber);
+	Y += 26.f;
+	PanelLabel(Canvas, Ox, Y,
+		TEXT("TrackUnlimited saved a copy of what you were working on."), PanelText);
+	Y += 18.f;
+	PanelLabel(Canvas, Ox, Y,
+		FString::Printf(TEXT("%s"), *FPaths::GetCleanFilename(SidecarPath())), PanelDim);
+	Y += 26.f;
+	PanelLabel(Canvas, Ox, Y,
+		TEXT("Recovering opens it UNSAVED, so save it somewhere you want it."), PanelDim);
+	Y += 18.f;
+	PanelLabel(Canvas, Ox, Y,
+		TEXT("Discarding deletes the copy. Nothing else is touched."), PanelDim);
+	Y += 26.f;
+
+	MenuRowRects.Reset();
+	MenuRowAction.Reset();
+	MenuRowRects.Add(FVector4(Ox, Y, Ox + 150.f, Y + 20.f));
+	MenuRowAction.Add(-6);
+	PanelLabel(Canvas, Ox, Y, TEXT("[ Recover it ]"), PanelCyan);
+	MenuRowRects.Add(FVector4(Ox + 180.f, Y, Ox + 320.f, Y + 20.f));
+	MenuRowAction.Add(-7);
+	PanelLabel(Canvas, Ox + 180.f, Y, TEXT("[ Discard it ]"), PanelAmber);
+}
+
 void ATUCoasterRide::DrawMainMenu(UCanvas* Canvas)
 {
 	if (!Canvas || !GEngine || Session.Mode() != EAppMode::MainMenu) { return; }
@@ -2708,6 +2833,22 @@ void ATUCoasterRide::DrawMainMenu(UCanvas* Canvas)
 	MenuRowRects.Add(FVector4(Ox, Y, Ox + W, Y + Row));
 	MenuRowAction.Add(-1);
 	PanelLabel(Canvas, Ox + 12.f, Y, TEXT("Open a track file..."), PanelText);
+	Y += Row;
+
+	// ---- SETTINGS AND QUIT, which the card names and which a first screen has
+	// to have: the two things somebody does here that are not opening a track.
+	MenuRowRects.Add(FVector4(Ox, Y, Ox + W, Y + Row));
+	MenuRowAction.Add(-8);
+	PanelLabel(Canvas, Ox + 12.f, Y, TEXT("Settings"), PanelText);
+	Y += Row;
+	MenuRowRects.Add(FVector4(Ox, Y, Ox + W, Y + Row));
+	MenuRowAction.Add(-9);
+	// QUIT IS LAST AND SAYS WHAT IT CHECKS. It is the only control here that
+	// can lose work, and a menu whose exit reads like its other rows is one
+	// somebody leaves by accident.
+	PanelLabel(Canvas, Ox + 12.f, Y, Session.IsDirty()
+		? TEXT("Quit  -  there is unsaved work")
+		: TEXT("Quit"), Session.IsDirty() ? PanelAmber : PanelText);
 	Y += Row + 8.f;
 	PanelLabel(Canvas, Ox, Y,
 		TEXT("click to choose   ·   [Tab] once a track is open   ·   [M] back here"),
@@ -2866,6 +3007,9 @@ void ATUCoasterRide::ClickPrimary()
 
 	// THE CONFIRM OWNS THE CLICK ABOVE EVERYTHING, because a question about losing
 	// work must not be dismissable by clicking past it into the thing underneath.
+	// The recovery offer is above even that: it is asked before anything is open,
+	// and answering it is the only way out of Boot.
+	if (Session.HasRecovery()) { ClickLeaveConfirm(); return; }
 	if (bConfirmingMenu) { ClickLeaveConfirm(); return; }
 	// The menu owns the click while it is up; everything else is the editor's.
 	if (Session.Mode() == EAppMode::MainMenu) { ClickMainMenu(); return; }
@@ -3071,6 +3215,8 @@ void ATUCoasterRide::ClickLeaveConfirm()
 			}
 			break;
 		case -4: ConfirmLeaveToMenu(true); break;
+		case -6: AnswerRecovery(true); break;
+		case -7: AnswerRecovery(false); break;
 		default: ConfirmLeaveToMenu(false); break;
 		}
 		return;
@@ -3095,8 +3241,29 @@ void ATUCoasterRide::ClickMainMenu()
 		{
 			StartFromTemplate(Action);
 		}
-		else if (Action == -1)
-		{
+			else if (Action == -8)
+			{
+				// THE SAME SCREEN [O] OPENS, hosted by the frame. One settings
+				// screen reached two ways, rather than a menu-flavoured copy.
+				ToggleSettings();
+			}
+			else if (Action == -9)
+			{
+				// ASKED, because quitting from a dirty session is the one exit that
+				// loses work. The session already returns the question; this puts it
+				// on screen rather than inventing an answer.
+				if (Session.IsDirty())
+				{
+					bConfirmingMenu = true;
+					bQuitAfterConfirm = true;
+				}
+				else if (APlayerController* Q = GetWorld()->GetFirstPlayerController())
+				{
+					Q->ConsoleCommand(TEXT("quit"));
+				}
+			}
+			else if (Action == -1)
+			{
 			// THE OS FILE DIALOG IS EDITOR-ONLY, and that is a real limit rather
 			// than an oversight: IDesktopPlatform does not ship in a packaged
 			// game. The browser list above is the primary path precisely because
@@ -3171,8 +3338,21 @@ void ATUCoasterRide::OpenMainMenu()
 void ATUCoasterRide::ConfirmLeaveToMenu(bool bDiscard)
 {
 	bConfirmingMenu = false;
+	const bool bQuitting = bQuitAfterConfirm;
+	bQuitAfterConfirm = false;
 	if (!bDiscard)
 	{
+		return;
+	}
+	if (bQuitting)
+	{
+		// THE SAME QUESTION, A DIFFERENT EXIT. Quitting and going back to the
+		// menu both discard the document, so they share one prompt rather than
+		// having two that read the same and behave differently.
+		if (APlayerController* Q = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr)
+		{
+			Q->ConsoleCommand(TEXT("quit"));
+		}
 		return;
 	}
 	// CONFIRMED HERE AND ONLY HERE, because the question was actually put on
@@ -3736,6 +3916,10 @@ bool ATUCoasterRide::SaveDocumentTo(const FString& InPath)
 	// Session's comparison is still the one thing that decides dirty; this only
 	// stops FTrackHistory's own IsDirty being a second answer that is wrong.
 	if (History) { History->MarkSaved(); }
+	// THE SIDECAR HAS DONE ITS JOB. A real save supersedes it, and leaving it
+	// behind means the next launch offers to recover work that is already on
+	// disc — which teaches people to click past the one dialog that matters.
+	FPlatformFileManager::Get().GetPlatformFile().DeleteFile(*SidecarPath());
 	Browser.Touch(TCHAR_TO_UTF8(*Path));
 	WriteRecentList();
 
@@ -4416,6 +4600,42 @@ void ATUCoasterRide::BeginPlay()
 	ResetHistory();
 	CheckDocumentRoundTrip();
 
+	// ===================== WHERE THE APPLICATION STARTS =====================
+	//
+	// AN ACTOR PLACED IN A LEVEL HAS ALREADY SKIPPED BOOT, because the LEVEL is
+	// the document — that is why the constructor puts the session straight into
+	// Build, and why the Details panel can accept a number at all.
+	//
+	// A PACKAGED SHELL STARTS SOMEWHERE ELSE: boot, then the menu, then whatever
+	// you choose. Compile-time rather than a runtime test, because it is a
+	// property of the build and not of the world — and `-TUBootMenu` makes the
+	// packaged flow reachable in the editor, since a path only exercised in a
+	// build nobody has made yet is a path nobody has tried.
+#if WITH_EDITOR
+	const bool bBoot = FParse::Param(FCommandLine::Get(), TEXT("TUBootMenu"));
+#else
+	const bool bBoot = true;
+#endif
+	if (bBoot)
+	{
+		BootSession();
+	}
+	else
+	{
+		// ===================== THE MODE DECIDES THE VIEW, INCLUDING AT THE START =====================
+		//
+		// That rule is what makes a mode a mode rather than a label, and it was
+		// applied on every CHANGE and never once at startup -- so a level opened
+		// straight into Build kept whatever camera was serialised, which is Rider.
+		// With no train moving that is a view from inside the track at the station,
+		// at z = 0, looking at the inside of a rail.
+		//
+		// Build gets orbit, and the orbit branch frames the whole track on its first
+		// tick because nothing has framed it yet -- so this is up, back, and looking
+		// at what you have. [F] and [Z] adjust from there.
+		ApplyAppMode(Session.Mode());
+	}
+
 	if (FParse::Param(FCommandLine::Get(), TEXT("TUSmokeTest")))
 	{
 		RunDocumentSmokeTest();
@@ -4923,6 +5143,10 @@ void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/
 	// here for that as much as for the z-order.
 	DrawMainMenu(Canvas);
 	DrawDragAnswer(Canvas);
+	// ABOVE THE MENU, because nothing may be opened while it is up: opening a
+	// document is what would overwrite the evidence, and the session refuses to
+	// leave Boot until this is answered.
+	DrawRecoveryOffer(Canvas);
 	// LAST, and now genuinely: it is on top of whatever it is asking about, and it
 	// rebuilds the row list, so a click while it is up can only hit its own three
 	// answers.
@@ -7348,6 +7572,29 @@ void ATUCoasterRide::ToggleOverlays()
 void ATUCoasterRide::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+
+	// ===================== AUTOSAVE, WHICH NOW HAS SOMEBODY TO TELL =====================
+	//
+	// Deliberately unwired until today: it writes a SIDECAR for crash recovery to
+	// OFFER at boot, and until boot existed there was nothing that could ever
+	// offer it. Writing files nobody can recover from is half a feature.
+	//
+	// It NEVER TOUCHES THE DOCUMENT. Writing over somebody's file on a timer is
+	// data loss with extra steps — it destroys the last known-good state to
+	// preserve one they did not ask for — so this is a separate file, and the
+	// session owns WHEN while this owns HOW.
+	//
+	// On the wall clock and above the early returns: a paused ride is still a
+	// session somebody is working in.
+	if (Session.TickAutosave(static_cast<double>(DeltaSeconds)))
+	{
+		const FString Text = SerialiseDocument();
+		if (!Text.IsEmpty())
+		{
+			FFileHelper::SaveStringToFile(Text, *SidecarPath(),
+				FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM);
+		}
+	}
 
 	// A DRAG IS A THING THAT HAPPENS BETWEEN EVENTS, so it is followed here rather
 	// than on a mouse-move that this input setup does not have. Above the early

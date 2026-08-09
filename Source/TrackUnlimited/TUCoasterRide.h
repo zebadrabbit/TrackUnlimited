@@ -1402,6 +1402,20 @@ private:
 	 * real dialog.
 	 */
 	bool bConfirmingMenu = false;
+
+	/** The confirm is shared between going back to the menu and quitting, because
+	 *  both discard the document and two prompts that read the same and behave
+	 *  differently is worse than one that remembers which it was asked for. */
+	bool bQuitAfterConfirm = false;
+
+	/** Where the crash sidecar lives. ONE fixed name: recovery has to find it at
+	 *  boot with nothing to go on, since nobody wrote down what was open. */
+	FString SidecarPath() const;
+
+	/** Boot: discover a sidecar before anything can overwrite it, then the menu. */
+	void BootSession();
+	void AnswerRecovery(bool bAccept);
+	void DrawRecoveryOffer(class UCanvas* Canvas);
 	void ConfirmLeaveToMenu(bool bDiscard);
 	void DrawLeaveConfirm(class UCanvas* Canvas);
 	void ClickLeaveConfirm();

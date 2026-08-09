@@ -222,6 +222,12 @@ public:
     bool HasRecovery() const { return !RecoveryPath.empty(); }
     const std::string& RecoveryFile() const { return RecoveryPath; }
 
+    // WHAT WAS RECOVERED, so the shell can put it into the document if the person
+    // accepts. Readable rather than only applicable, because this layer owns WHEN
+    // and the shell owns HOW — `AcceptRecovery` marks the session, and turning the
+    // text back into segments is the shell's job and needs the text.
+    const std::string& RecoveredText() const { return RecoveryText; }
+
     // The person said yes. The recovered text becomes the CURRENT document and the
     // session is DIRTY — because it is: what was recovered has never been saved,
     // and a recovery that presented itself as clean would let somebody close it
