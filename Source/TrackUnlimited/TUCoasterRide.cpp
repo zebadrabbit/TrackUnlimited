@@ -3921,8 +3921,20 @@ void ATUCoasterRide::ApplyAppMode(EAppMode Want)
 		// which with no trains returns early and leaves the view exactly where it
 		// was -- at the origin, inside the geometry. The mode picks the view, and a
 		// menu is no exception to that rule.
+		// AND IT IS PLACED HERE, not left to the camera tick -- that returns before
+		// it ever reaches the camera when there is no train, which at a menu over an
+		// empty document is always. The result was a first screen from inside the
+		// floor.
+		//
+		// A fixed pose rather than a framing, because there is nothing to frame: back,
+		// up, and looking at the horizon over open ground.
 		CameraMode = ETUCameraMode::Orbit;
-		bOrbitFramed = false;   // so the empty-scene framing below actually runs
+		bOrbitFramed = false;
+		if (Camera)
+		{
+			Camera->SetRelativeLocation(FVector(-6000.f, -4500.f, 2200.f));
+			Camera->SetRelativeRotation(FRotator(-6.f, 36.f, 0.f));
+		}
 		CameraMode = ETUCameraMode::Rider;
 		break;
 	default:
@@ -8653,6 +8665,13 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 		DragAnswerSeconds -= static_cast<double>(DeltaSeconds);
 	}
 
+	// ===================== THE CURSOR IS NOT THE TRAIN'S =====================
+	//
+	// This guard is right -- everything below it needs a train -- and it sat ABOVE
+	// ApplyCursorMode, which needs nothing at all. Harmless until the menu became
+	// a document with no train in it, and then the one screen that is nothing but
+	// things to click was the one screen with no pointer.
+	ApplyCursorMode();
 	if (Trains.Num() == 0 || !Trains[0].IsValid())
 	{
 		return;
@@ -8943,7 +8962,6 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 	//
 	// ZEROED RATHER THAN SKIPPED, so a drag starts from where the mouse is
 	// instead of applying everything it travelled while the button was up.
-	ApplyCursorMode();
 	PollMovementKeys();
 	if (!bDraggingLook && Session.Mode() != EAppMode::Ride)
 	{
