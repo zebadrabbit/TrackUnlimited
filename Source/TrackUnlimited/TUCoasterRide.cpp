@@ -4834,16 +4834,27 @@ void ATUCoasterRide::BeginPlay()
 	// the document — that is why the constructor puts the session straight into
 	// Build, and why the Details panel can accept a number at all.
 	//
-	// A PACKAGED SHELL STARTS SOMEWHERE ELSE: boot, then the menu, then whatever
-	// you choose. Compile-time rather than a runtime test, because it is a
-	// property of the build and not of the world — and `-TUBootMenu` makes the
-	// packaged flow reachable in the editor, since a path only exercised in a
-	// build nobody has made yet is a path nobody has tried.
-#if WITH_EDITOR
-	const bool bBoot = FParse::Param(FCommandLine::Get(), TEXT("TUBootMenu"));
-#else
-	const bool bBoot = true;
-#endif
+	// A GAME SESSION STARTS SOMEWHERE ELSE: boot, then the menu, then whatever you
+	// choose.
+	//
+	// THE TEST IS THE WORLD, NOT THE BUILD, and it was WITH_EDITOR until a
+	// standalone launch walked straight past the menu into Build. That macro does
+	// not mean "an editor is running" - it means editor support was COMPILED IN,
+	// and Play > Standalone Game runs the very same editor binary in another
+	// process. So it was true there, and the comment that used to sit here claimed
+	// a property of the BUILD when the question has always been a property of the
+	// LAUNCH.
+	//
+	// PIE is the one case that skips boot, and skipping is right there for the
+	// reason above: you pressed play on a level you are editing, so the level IS
+	// the document and there is nothing for a menu to open. Standalone is not that
+	// - it is the packaged flow being rehearsed, which is the whole point of the
+	// mode, so it should boot exactly as the shipped build does.
+	//
+	// `-TUBootMenu` stays and now covers only PIE.
+	const UWorld* const BootWorld = GetWorld();
+	const bool bBoot = (BootWorld && BootWorld->WorldType != EWorldType::PIE)
+		|| FParse::Param(FCommandLine::Get(), TEXT("TUBootMenu"));
 	if (bBoot)
 	{
 		BootSession();
