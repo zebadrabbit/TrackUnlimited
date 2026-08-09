@@ -25,5 +25,14 @@ public class TrackUnlimited : ModuleRules
 			// lives in an FSlateStyleSet, which UMG widgets consume through
 			// FButtonStyle/FTextBlockStyle exactly as Slate widgets do.
 			"Slate", "SlateCore", "UMG" });
+
+		// THE OS FILE DIALOG, WHICH IS EDITOR-ONLY AND SAYS SO HERE TOO.
+		// IDesktopPlatform does not ship in a packaged game; the menu's open row
+		// reveals the tracks folder there instead, and the browser list is the
+		// primary path in both because it works everywhere.
+		if (Target.bBuildEditor)
+		{
+			PrivateDependencyModuleNames.Add("DesktopPlatform");
+		}
 	}
 }

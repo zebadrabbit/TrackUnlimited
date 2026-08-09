@@ -20,6 +20,14 @@
 #include "Engine/Canvas.h"
 #include "Engine/Engine.h"
 #include "Engine/Font.h"
+#if WITH_EDITOR
+// EDITOR ONLY, and the include is guarded for the same reason the call is: the
+// module does not exist in a packaged build, so an unguarded include is a link
+// error in the one configuration nobody compiles until release day.
+#include "DesktopPlatformModule.h"
+#include "Framework/Application/SlateApplication.h"
+#include "IDesktopPlatform.h"
+#endif
 #include "Misc/App.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
@@ -2832,7 +2840,16 @@ void ATUCoasterRide::DrawMainMenu(UCanvas* Canvas)
 	Y += 10.f;
 	MenuRowRects.Add(FVector4(Ox, Y, Ox + W, Y + Row));
 	MenuRowAction.Add(-1);
+	// THE ROW SAYS WHICH ACTION IT IS. In a packaged build it opens a folder
+	// rather than a file dialog, and a control labelled as the thing it is not
+	// is worse than one labelled plainly.
+#if WITH_EDITOR
 	PanelLabel(Canvas, Ox + 12.f, Y, TEXT("Open a track file..."), PanelText);
+#else
+	PanelLabel(Canvas, Ox + 12.f, Y,
+		TEXT("Open the tracks folder...   (drop a .track in it and it appears here)"),
+		PanelText);
+#endif
 	Y += Row;
 
 	// ---- SETTINGS AND QUIT, which the card names and which a first screen has
@@ -3273,10 +3290,44 @@ void ATUCoasterRide::ClickMainMenu()
 			// by calling this unguarded would compile in the editor and fail to
 			// link in the thing anybody actually downloads.
 #if WITH_EDITOR
-			UE_LOG(LogTUEvents, Log, TEXT("open: needs the desktop file dialog"));
+				// THE EDITOR HAS ONE, so it gets one. Guarded rather than avoided:
+				// calling this unguarded compiles here and fails to LINK in the thing
+				// anybody downloads.
+				if (IDesktopPlatform* Desktop = FDesktopPlatformModule::Get())
+				{
+					TArray<FString> Picked;
+					const void* ParentWindow = FSlateApplication::IsInitialized()
+						? FSlateApplication::Get().FindBestParentWindowHandleForDialogs(nullptr)
+						: nullptr;
+					if (Desktop->OpenFileDialog(ParentWindow, TEXT("Open a track"), TracksDir(),
+						FString(), TEXT("TrackUnlimited track|*.track"),
+						EFileDialogFlags::None, Picked) && Picked.Num() > 0)
+					{
+						if (OpenDocumentFrom(Picked[0]))
+						{
+							// OPEN LANDS IN RIDE, the same as a recent row: the ACTION
+							// picks the mode, and somebody opening a downloaded track
+							// wants a ride rather than an editor they did not ask for.
+							Session.Enter(EAppMode::Ride);
+							ApplyAppMode(EAppMode::Ride);
+						}
+					}
+				}
 #else
-			UE_LOG(LogTUEvents, Warning,
-				TEXT("open: a packaged build has no OS file dialog yet; use the recent list"));
+				// AND A PACKAGED BUILD GETS THE ANSWER IT CAN ACTUALLY GIVE.
+				//
+				// IDesktopPlatform does not ship, and an in-application file browser
+				// is a real piece of work for a job the operating system already does
+				// well. So this OPENS THE TRACKS FOLDER: put a file in it and it is a
+				// row in the list, which is the primary path anyway.
+				//
+				// A dead control that logged a warning nobody sees was the alternative,
+				// and "the button does nothing" is the single most common complaint
+				// about any shell.
+				FPlatformFileManager::Get().GetPlatformFile()
+					.CreateDirectoryTree(*TracksDir());
+				FPlatformProcess::ExploreFolder(*TracksDir());
+				RefreshTrackList();
 #endif
 		}
 		else
