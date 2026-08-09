@@ -74,6 +74,41 @@ one place.
 | **NFPA 160** | Why flame effects are not fired by the show controller. |
 | **DMX512** | Universes, slots, start codes, and the 44 Hz packet ceiling. |
 
+## Sound
+
+Freesound files keep their `id__username__title.wav` name **on purpose**: the ID is the permalink
+and the username is the author, so a file that gets copied somewhere still carries its own
+attribution. Do not rename them.
+
+| File | Author | Freesound ID |
+|---|---|---|
+| `416080__davidlay1__air-release.wav` | davidlay1 | [416080](https://freesound.org/s/416080/) |
+| `131931__mcpable__slips-air-release-v4.wav` | mcpable | [131931](https://freesound.org/s/131931/) |
+| `131932__mcpable__slips-air-release-v3.wav` | mcpable | [131932](https://freesound.org/s/131932/) |
+| `131933__mcpable__slips-air-release-v2.wav` | mcpable | [131933](https://freesound.org/s/131933/) |
+| `131934__mcpable__slips-air-release-v1.wav` | mcpable | [131934](https://freesound.org/s/131934/) |
+
+Used for **brake release** in `Content/Audio/Brakes`, one picked at random per release. A coaster
+brake is spring-applied and air-released, so the hiss is the pad **letting go** rather than grabbing.
+
+### ⚠ LICENCES ARE UNVERIFIED AND MUST BE CHECKED BEFORE ANY RELEASE
+
+Freesound hosts material under **CC0**, **CC-BY**, **CC-BY-NC** and **CC Sampling+**, and the licence
+is per upload rather than per site. **CC-BY-NC and Sampling+ are not compatible with this
+repository**, which is MIT and expects to be redistributed and forked commercially — and neither is
+anything requiring attribution that this project fails to give.
+
+Nothing about the filename says which applies. Each ID above links to its own page; the licence is
+stated there. Until somebody has checked all five:
+
+- **CC0** — nothing owed, though the credit above is kept anyway.
+- **CC-BY** — usable, and the credit above is the obligation. It must survive into a packaged build,
+  not only live in this file.
+- **CC-BY-NC or Sampling+** — **must be replaced**, however good it sounds.
+
+This is the same class of constraint as the one on paid marketplace assets and manufacturer
+trademarks: the licence decides, not the quality.
+
 ## Other
 
 - **Okabe–Ito palette** — the colourblind-safe qualitative palette used for analysis traces.

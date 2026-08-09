@@ -29,8 +29,10 @@
 #include "IDesktopPlatform.h"
 #endif
 #include "Misc/App.h"
+#include "Kismet/GameplayStatics.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Sound/SoundBase.h"
 #include "UObject/ConstructorHelpers.h"
 
 // The ride's own event stream. Its own category so it can be filtered on its
@@ -4809,6 +4811,7 @@ void ATUCoasterRide::BeginPlay()
 	// Tick are both downstream of it.
 	LoadShellSettings();
 	LoadRecentList();
+	LoadBrakeSounds();
 
 	RebuildFromSegments();
 
@@ -7086,6 +7089,139 @@ void ATUCoasterRide::ApplyTrackStyle()
 	Paint(TieMaterial, TieMesh, S.TieColour);
 }
 
+void ATUCoasterRide::LoadBrakeSounds()
+{
+	// BY PATH, AND MISSING IS FINE. The .wav files sit in Content/Audio/Brakes and
+	// become USoundWave assets when the editor imports them; until somebody has
+	// done that these resolve to null and the ride is simply quiet. A ride that
+	// refused to run without its sound effects would have made an audio asset a
+	// hard dependency of the simulation, which is exactly backwards — the same
+	// rule the frame widget already follows.
+	static const TCHAR* Names[] = {
+		TEXT("/Game/Audio/Brakes/416080__davidlay1__air-release.416080__davidlay1__air-release"),
+		TEXT("/Game/Audio/Brakes/131931__mcpable__slips-air-release-v4.131931__mcpable__slips-air-release-v4"),
+		TEXT("/Game/Audio/Brakes/131932__mcpable__slips-air-release-v3.131932__mcpable__slips-air-release-v3"),
+		TEXT("/Game/Audio/Brakes/131933__mcpable__slips-air-release-v2.131933__mcpable__slips-air-release-v2"),
+		TEXT("/Game/Audio/Brakes/131934__mcpable__slips-air-release-v1.131934__mcpable__slips-air-release-v1"),
+	};
+
+	BrakeReleaseSounds.Reset();
+	for (const TCHAR* Path : Names)
+	{
+		if (USoundBase* S = LoadObject<USoundBase>(nullptr, Path))
+		{
+			BrakeReleaseSounds.Add(S);
+		}
+	}
+	if (BrakeReleaseSounds.Num() == 0)
+	{
+		// SAID ONCE, at Log rather than Warning. Not having imported them yet is
+		// an ordinary state, not a fault — but silence with no explanation is the
+		// kind of thing somebody spends an hour on.
+		UE_LOG(LogTUEvents, Log,
+			TEXT("brakes: no release sounds imported. Drop Content/Audio/Brakes/*.wav "
+				 "into the Content Browser and they are picked up next play."));
+	}
+	else
+	{
+		UE_LOG(LogTUEvents, Log, TEXT("brakes: %d release sounds"),
+			BrakeReleaseSounds.Num());
+	}
+}
+
+void ATUCoasterRide::ServeBrakeReleaseSound()
+{
+	if (!bBrakeReleaseSound || !Drives || BrakeReleaseSounds.Num() == 0)
+	{
+		return;
+	}
+
+	// ===================== THE EDGE, NOT THE STATE =====================
+	//
+	// A release is a TRANSITION: the pad was holding and now it is not. Watching
+	// the level instead would hiss continuously for as long as a brake was open,
+	// which is every brake on the ride most of the time.
+	//
+	// Output rather than Commanded, because Output is what the train actually
+	// feels — and on a drive with a ramp the two differ by exactly the interval
+	// during which the valve is opening, which is the sound.
+	const std::size_t N = Drives->Num();
+	if (static_cast<std::size_t>(LastDriveOutput.Num()) != N)
+	{
+		// Sized here rather than at rebuild, and seeded from the CURRENT output so
+		// the first frame after a rebuild is not one enormous chord of every brake
+		// on the ride releasing at once.
+		LastDriveOutput.Init(0.f, static_cast<int32>(N));
+		for (std::size_t d = 0; d < N; ++d)
+		{
+			LastDriveOutput[static_cast<int32>(d)] = static_cast<float>(Drives->Output(d));
+		}
+		return;
+	}
+
+	// Below this a pad is holding; above it, air has moved. Well clear of the
+	// crawl speeds a drive trucks a train at, so trucking is not a release.
+	const float Threshold = 0.05f;
+
+	for (std::size_t d = 0; d < N; ++d)
+	{
+		const float Now = static_cast<float>(Drives->Output(d));
+		const float Was = LastDriveOutput[static_cast<int32>(d)];
+		LastDriveOutput[static_cast<int32>(d)] = Now;
+
+		if (!(Was <= Threshold && Now > Threshold))
+		{
+			continue;
+		}
+		if (!ZoneSpans.IsValidIndex(static_cast<int32>(d)))
+		{
+			continue;
+		}
+		const FTUZoneSpan& Z = ZoneSpans[static_cast<int32>(d)];
+
+		// ONLY THE THINGS WITH PADS. A lift chain and a launch have no friction
+		// brake to vent, so giving them a hiss would be a sound effect explaining
+		// a mechanism that is not there — and this project's whole argument is
+		// that what you see and hear is what the machine is doing.
+		const bool bHasPad = Z.Kind == ETUSegmentZone::Brake
+			|| Z.Kind == ETUSegmentZone::BlockBrake
+			|| Z.Kind == ETUSegmentZone::Station
+			|| Z.Kind == ETUSegmentZone::StationLoad
+			|| Z.Kind == ETUSegmentZone::StationUnload;
+		if (!bHasPad)
+		{
+			continue;
+		}
+
+		// ===================== WHERE THE VALVE IS =====================
+		//
+		// At the STOP MARK, because that is where a held train stands and
+		// therefore where the calipers gripping it are — not the middle of the
+		// zone, which on a 67 m brake run is nowhere near the train.
+		//
+		// And BELOW THE RAILS, along the frame's own Up rather than the world's:
+		// the exhaust port hangs under the track, so through an inversion it
+		// should be above you in world terms. Following the frame gets that for
+		// free; a world-space offset would put it in the wrong place exactly where
+		// somebody would notice.
+		double AtS = 0.5 * (Z.StartS + Z.EndS);
+		if (StopMarks.IsValid() && d < StopMarks->Num())
+		{
+			AtS = StopMarks->PositionOf(d);
+		}
+		const FTrackFrame F = Track.EvaluateAt(AtS);
+		const FVector Where = ToWorld(F.Position - F.Up * static_cast<double>(BrakeValveDropM));
+
+		// RANDOM, so five brakes releasing in a lap do not sound like one brake
+		// releasing five times. Nothing here needs to be reproducible: it is the
+		// one part of the ride that does not feed a measurement, and the sim clock
+		// is untouched by it.
+		const int32 Pick = FMath::RandRange(0, BrakeReleaseSounds.Num() - 1);
+		UGameplayStatics::PlaySoundAtLocation(this, BrakeReleaseSounds[Pick], Where,
+			BrakeReleaseVolume);
+	}
+}
+
 void ATUCoasterRide::RebuildTrackMesh()
 {
 	if (!bBuildTrackMesh || Track.TotalLength() <= 0.0)
@@ -7657,6 +7793,11 @@ void ATUCoasterRide::SimStep(double DeltaSeconds)
 	if (Drives)
 	{
 		Drives->Tick(DeltaSeconds);
+
+		// STRAIGHT AFTER THE TICK, because that is the statement that moves Output
+		// and the release is an edge on it. SHOW READS, IT DOES NOT ASK: nothing
+		// here can change whether a brake released, only notice that it did.
+		ServeBrakeReleaseSound();
 		for (int32 t = 0; t < Trains.Num(); ++t)
 		{
 			for (std::size_t z = 0; z < Drives->Num(); ++z)

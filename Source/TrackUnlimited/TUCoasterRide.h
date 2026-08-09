@@ -611,6 +611,51 @@ private:
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Mesh")
 	bool bBuildCatwalks = true;
 
+	// ===================== THE BRAKES LET GO, AND YOU HEAR IT =====================
+	//
+	// A coaster brake is SPRING-APPLIED AND AIR-RELEASED — fail-safe, which is why
+	// a zone commanded to zero bites and why a Cat 0 stop stops trains rather than
+	// merely ceasing to drive them. The consequence for sound is the one people get
+	// backwards: the hiss is not the brake GRABBING, it is the brake LETTING GO.
+	// Air only moves when the pad opens.
+	//
+	// SHOW, NOT CONTROL. This subscribes to a transition the ride already makes and
+	// writes to a speaker; it asks the ride for nothing and cannot be refused,
+	// which is exactly what Tier 3 is. Nothing here is allowed to affect whether a
+	// brake releases — only to notice that it did.
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Sound")
+	bool bBrakeReleaseSound = true;
+
+	/** How loud, and how far it carries. A blow-off is sharp and local — you hear
+	 *  it from the queue, not across the park. */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Sound",
+		meta = (ClampMin = "0.0", ClampMax = "4.0"))
+	float BrakeReleaseVolume = 1.f;
+
+	/**
+	 * WHERE THE VALVE IS: below the rails, on the spine.
+	 *
+	 * Metres below the rail centreline. The calipers hang under the track and the
+	 * exhaust port with them, so an emitter at heartline height would put the hiss
+	 * where the riders are rather than where the hardware is — which on an inverted
+	 * section would be exactly backwards, since the offset follows the frame's own
+	 * Up rather than the world's.
+	 */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Sound",
+		meta = (ClampMin = "0.0", ClampMax = "3.0"))
+	float BrakeValveDropM = 0.55f;
+
+	/** One per drive, last frame's output. The release is an EDGE, and an edge
+	 *  needs the previous value — the same shape `FStateWatch` uses for every other
+	 *  transition this ride reports. */
+	TArray<float> LastDriveOutput;
+
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<class USoundBase>> BrakeReleaseSounds;
+
+	void LoadBrakeSounds();
+	void ServeBrakeReleaseSound();
+
 	/**
 	 * Off leaves the wireframe as the only view, which is what every screenshot
 	 * before Phase 4 was taken with. Measured: a 1288 m circuit at these defaults
