@@ -14,6 +14,7 @@ somebody adds a type.
 - [Already expressible](#already-expressible)
 - [One parameter away](#one-parameter-away)
 - [Genuinely new — a degree of freedom each](#genuinely-new--a-degree-of-freedom-each)
+- [What NoLimits 2 actually did, and what it proves](#what-nolimits-2-actually-did-and-what-it-proves)
 - [The decision: a type is a PRESET, never a branch](#the-decision-a-type-is-a-preset-never-a-branch)
 - [What the picker should be](#what-the-picker-should-be)
 - [Sequencing](#sequencing)
