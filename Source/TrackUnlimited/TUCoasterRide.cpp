@@ -1194,8 +1194,33 @@ void ATUCoasterRide::RebuildFromSegments()
 		// without a single violation to show for it. MEASURED on this circuit,
 		// which has five: four trains run clean and five never move at all.
 		const int32 Wanted = FMath::Max(1, TrainCount);
-		const int32 Running = FMath::Min(Wanted, FMath::Max(1, HoldMidS.Num() - 1));
-		if (Running < Wanted)
+		// ===================== NOWHERE TO PUT A TRAIN IS A REAL LAYOUT =====================
+		//
+		// N holding places run N-1 trains, because one has to stay free for anything
+		// to move -- and the floor of 1 was there so a layout with exactly one place
+		// still runs a train rather than none.
+		//
+		// BUT IT APPLIED WITH ZERO PLACES TOO, and then Place(HoldMidS[0]) indexed an
+		// empty array. A blank track with one straight on it is exactly that layout,
+		// which is what somebody gets from the menu's Blank template and their first
+		// [I] -- so the very first thing a new author does crashed the editor.
+		//
+		// The floor is conditional now: no holding device means no train, which is
+		// the honest answer rather than a special case. Track with nowhere to park is
+		// track somebody is still building.
+		const int32 Places = HoldMidS.Num();
+		const int32 Capacity = Places == 0 ? 0 : FMath::Max(1, Places - 1);
+		const int32 Running = FMath::Min(Wanted, Capacity);
+		if (Places == 0)
+		{
+			// SAID PLAINLY AND WITHOUT ALARM. This is the normal state of a track
+			// being built, not a fault -- so it names the next step rather than
+			// reporting a failure.
+			UE_LOG(LogTemp, Log,
+				TEXT("TrackUnlimited: no train yet — nowhere to park one. Give a segment a "
+					"station or a block brake and a train appears on it."));
+		}
+		else if (Running < Wanted)
 		{
 			UE_LOG(LogTemp, Warning,
 				TEXT("TrackUnlimited: %d trains asked for, %d run — the layout has %d place(s) "
@@ -1509,6 +1534,24 @@ void ATUCoasterRide::RebuildFromSegments()
 	// the profile answers "what does this layout do to a rider", not "what does
 	// the signalling do to a timetable". A profile measured through a red would
 	// report a stall at the first block brake and call the ride broken.
+	//
+	// AND THERE MAY BE NO TRAIN AT ALL, which is not an error: a track with no
+	// station or block brake has nowhere to park one, and that is the ordinary
+	// state of a layout somebody is halfway through building. `Trains[0]` on that
+	// crashed, which meant the first segment placed on a blank track took the
+	// editor down with it.
+	//
+	// A DEFAULT PROFILE IS THE RIGHT ANSWER rather than a skipped assignment: it
+	// carries bCompleted = false, which every reader already handles, because a
+	// ride that did not happen is a case the graph and the diagnostics panel were
+	// built around. There is nothing new to teach them.
+	if (Trains.IsEmpty() || !Trains[0].IsValid())
+	{
+		Profile_ = FRideProfile();
+		LastDeviceFindings.clear();
+		BuildDiagnostics();
+		return;
+	}
 	Profile_ = RunRideProfile(*Trains[0], Track, 1.0);
 
 	// ===================== WHAT THE DEVICES WILL ACTUALLY DO =====================
@@ -2994,11 +3037,25 @@ void ATUCoasterRide::StartFromTemplate(int32 Index)
 		ApplyPresetTrainSetup(Preset);
 	}
 
-	Session.DidCreateNew(std::string());
-	ResetHistory();
 	Session.Enter(EAppMode::Build);
 	CameraMode = ETUCameraMode::Orbit;
 	RebuildFromSegments();
+
+	// ===================== A NEW DOCUMENT IS NOT A MODIFIED ONE =====================
+	//
+	// REBUILT FIRST, AND THE BASELINE TAKEN AFTER. `DidCreateNew` used to run
+	// before the rebuild with an EMPTY string, and the rebuild then `Observe`d the
+	// real serialised text -- so saved was "" and current was a document, and every
+	// template landed in Build already reporting unsaved changes.
+	//
+	// Nobody had touched it. The frame showed the asterisk, and going back to the
+	// menu asked whether to discard work that did not exist -- which is precisely
+	// how people learn to click through the one prompt that matters.
+	//
+	// Same order as an open, and for the same reason: dirty is a COMPARISON, so
+	// the baseline has to be what the document actually is.
+	Session.DidCreateNew(TCHAR_TO_UTF8(*SerialiseDocument()));
+	ResetHistory();
 	FrameWholeTrack();
 
 	// WHAT TO TRY FIRST, next to the thing it describes. Not a tutorial sequence
@@ -4455,6 +4512,42 @@ void ATUCoasterRide::RunDocumentSmokeTest()
 		{
 			UE_LOG(LogTUEvents, Log,
 				TEXT("smoke: one number typed into two segments, and one undo takes both back"));
+		}
+	}
+
+	// ===================== MENU -> NEW -> AN EMPTY LAYOUT =====================
+	//
+	// The whole first-run path in one check: a blank template leaves NO segments,
+	// lands in Build, and is CLEAN -- nobody has edited anything yet. That last
+	// one is the part that was wrong: the baseline was taken before the rebuild,
+	// so every new document reported unsaved changes from its first frame.
+	//
+	// And an empty track has to be somewhere you can start: [I] on nothing is the
+	// only way to get a first segment, so it is asserted rather than assumed.
+	{
+		const std::size_t Blank = NumTemplates() - 1;   // the blank one is last
+		StartFromTemplate(static_cast<int32>(Blank));
+
+		const bool bEmpty = Segments.Num() == 0;
+		const bool bBuild = Session.Mode() == EAppMode::Build;
+		const bool bClean = !Session.IsDirty();
+
+		SelectedSegment = -1;
+		InsertSegment();
+		const bool bFirst = Segments.Num() == 1;
+		UndoEdit();
+		const bool bGone = Segments.Num() == 0;
+
+		if (!bEmpty || !bBuild || !bClean || !bFirst || !bGone)
+		{
+			UE_LOG(LogTUEvents, Error,
+				TEXT("smoke: new-blank is wrong (empty %d, build %d, clean %d, first %d, undone %d)"),
+				bEmpty, bBuild, bClean, bFirst, bGone);
+		}
+		else
+		{
+			UE_LOG(LogTUEvents, Log,
+				TEXT("smoke: new blank opens empty, in BUILD, clean, and [I] gives it a first segment"));
 		}
 	}
 
