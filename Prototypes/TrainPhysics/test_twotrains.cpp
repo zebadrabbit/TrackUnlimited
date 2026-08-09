@@ -41,6 +41,7 @@
 
 #include <cassert>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <memory>
 #include <vector>
@@ -2041,7 +2042,7 @@ struct FBatchResult
 // front one that dispatches. Train indices run the other way, 0 being the train
 // at the front. Getting those two backwards is what the first run of this test
 // did, and it looks exactly like a bug in the sequencing rather than in the test.
-FBatchResult RunSmallBatch(double SlowLoadSeconds, std::size_t SlowPosition)
+FBatchResult RunSmallBatchAt(const std::vector<double>& LoadAt)
 {
     const std::vector<FItem> Items = SmallBatchLayout();
     const FCircuit Shape = BuildCircuitFrom(nullptr, Items);
@@ -2069,9 +2070,13 @@ FBatchResult RunSmallBatch(double SlowLoadSeconds, std::size_t SlowPosition)
     FTrackSensors Marks(C.StopMarkS);
     FTrackDrives Drives = OpenDrives(*Owned[0], C);
     std::vector<FPlatform> Platforms = BuildPlatforms(C);
+    // ONE DWELL PER POSITION, and in this rig that is one per TRAIN: three
+    // positions, three trains, each position serves exactly one of them. So a
+    // vector here is the whole of "every train loads for a different length of
+    // time" without the crew having to be re-armed mid-run.
     for (std::size_t p = 0; p < Platforms.size(); ++p)
     {
-        Platforms[p].Crew.LoadSeconds = p == SlowPosition ? SlowLoadSeconds : 8.0;
+        Platforms[p].Crew.LoadSeconds = p < LoadAt.size() ? LoadAt[p] : 8.0;
     }
 
     // Train 0 at the FRONT position, 2 at the rear, so index order is travel order
@@ -2248,6 +2253,15 @@ void TestTheSmallBatchCircuitIsTheSameOvalAndStillCloses()
     }
 }
 
+// The original shape, kept because every published figure was taken through it
+// and a wrapper is cheaper than re-verifying them all.
+FBatchResult RunSmallBatch(double SlowLoadSeconds, std::size_t SlowPosition)
+{
+    std::vector<double> Load(3, 8.0);
+    if (SlowPosition < Load.size()) { Load[SlowPosition] = SlowLoadSeconds; }
+    return RunSmallBatchAt(Load);
+}
+
 void TestASmallBatchPlatformWorksThreeTrainsAtOnce()
 {
     // THE SHAPE THIS WAS BUILT FOR, and most of it turns out to be emergent rather
@@ -2397,6 +2411,129 @@ void TestWhereASlowLoadStartsCosting()
     assert(Budget[2] < 2.0);              // the front has none, by construction
     assert(Budget[1] > Budget[2] + 5.0);  // and each position back has more
     assert(Budget[0] > Budget[1] + 5.0);
+}
+
+
+// ===================== A DWELL IS A DISTRIBUTION, NOT A FIGURE =====================
+//
+// Everything above holds the load time CONSTANT and varies it deliberately. A real
+// platform does not work that way: most loads are quick, some run long because a
+// party is slow or a bar will not latch, and what an operations team lives with is
+// the SPREAD rather than the mean.
+//
+// THE SHAPE HERE IS INVENTED AND IS LABELLED AS SUCH. This project has no dwell
+// data from a real park and will not pretend to. What is measured is the
+// platform's SENSITIVITY to variation of a given shape — a property of the layout
+// and the interlocking rather than of anybody's ridership — so swapping the curve
+// for measured data later answers the same question better without changing it.
+//
+// Deterministic on purpose: a fixed LCG, so a regression is a real change rather
+// than a different draw.
+struct FDwellDraw
+{
+    std::uint64_t State = 0x9E3779B97F4A7C15ull;
+
+    double Next01()
+    {
+        State = State * 6364136223846793005ull + 1442695040888963407ull;
+        return static_cast<double>((State >> 11) & ((1ull << 53) - 1))
+               / static_cast<double>(1ull << 53);
+    }
+
+    // MOST LOADS ARE QUICK AND A FEW ARE NOT, which is the only property of a real
+    // dwell curve this needs. Cubed uniform: half the draws land within 6 s of the
+    // floor, and the tail reaches the long ones without a cliff.
+    double Next(double Floor, double Tail)
+    {
+        const double U = Next01();
+        return Floor + Tail * U * U * U;
+    }
+};
+
+struct FVariationResult
+{
+    double MeanCost = 0.0;
+    double WorstCost = 0.0;
+    int Costly = 0;
+};
+
+// Vary ONE position and hold the others at the ordinary dwell, which is what
+// isolates the effect. Varying all three at once mixes the answers together and
+// reports the front's, because the front has no budget to absorb anything with.
+FVariationResult VaryOnePosition(std::size_t Position, int Runs, double Base)
+{
+    FDwellDraw Rng;
+    FVariationResult V;
+    double Total = 0.0;
+    for (int i = 0; i < Runs; ++i)
+    {
+        std::vector<double> Load(3, 8.0);
+        Load[Position] = Rng.Next(8.0, 45.0);
+
+        const FBatchResult R = RunSmallBatchAt(Load);
+        // EVERY DRAW IS STILL A SAFE RIDE, and that is half the reason to run
+        // these at all: each one is a differently-timed sequence through the same
+        // interlocking, and none of them may violate.
+        assert(R.Violations == 0);
+        assert(R.UnsecuredFrames == 0);
+        assert(!R.bShared);
+
+        const double Cost = R.LeftPlatformAt[2] - Base;
+        Total += Cost;
+        V.WorstCost = std::fmax(V.WorstCost, Cost);
+        if (Cost > 0.5) { ++V.Costly; }
+    }
+    V.MeanCost = Total / Runs;
+    return V;
+}
+
+void TestOrdinaryVariationIsAbsorbedAtTheBackAndNotTheFront()
+{
+    std::printf("What ordinary variation costs, by position\n");
+
+    const FBatchResult Even = RunSmallBatchAt(std::vector<double>(3, 8.0));
+    const double Base = Even.LeftPlatformAt[2];
+
+    const int Runs = 40;
+    FVariationResult V[3];
+    for (std::size_t Pos = 0; Pos < 3; ++Pos)
+    {
+        V[Pos] = VaryOnePosition(Pos, Runs, Base);
+    }
+
+    static const char* Name[3] = {"rear  ", "middle", "front "};
+    for (std::size_t Pos = 0; Pos < 3; ++Pos)
+    {
+        std::printf("    %s  %2d of %d loads cost anything   mean %5.1f s   worst %5.1f s\n",
+                    Name[Pos], V[Pos].Costly, Runs, V[Pos].MeanCost, V[Pos].WorstCost);
+    }
+    // FLUSHED, because the assertions below abort and a block-buffered stdout
+    // loses the numbers that say why — the one moment they matter.
+    std::fflush(stdout);
+
+    // ===================== THE RESULT, AND IT IS NOT WHAT I EXPECTED =====================
+    //
+    // The first version of this varied all three positions at once and asserted
+    // that ordinary variation is "mostly absorbed". It is not: 54 of 64 runs cost
+    // something, because a run costs whatever its FRONT draw costs and the front
+    // has no budget at all. That assertion was a guess and the measurement said
+    // otherwise, which is the whole reason to run it.
+    //
+    // Stated properly: THE PLATFORM ABSORBS VARIATION AT THE BACK AND NONE AT THE
+    // FRONT. It is the budget result again, in the language an operator thinks in
+    // — and the operational reading is sharper than "put slow parties at the
+    // back". It is that the FRONT POSITION IS WHERE PREDICTABILITY IS WORTH MOST,
+    // because every second of variance there is a second off the whole platform.
+    assert(V[2].Costly > (Runs * 3) / 4);   // the front pays for nearly every draw
+    assert(V[0].Costly < Runs / 4);         // the back pays for hardly any
+
+    // Asserted as an ORDERING as well, for the same reason the budget test is:
+    // three magic counts would need re-deriving on any layout change, where the
+    // shape is the thing being claimed.
+    assert(V[0].Costly <= V[1].Costly);
+    assert(V[1].Costly <= V[2].Costly);
+    assert(V[0].MeanCost <= V[1].MeanCost);
+    assert(V[1].MeanCost <= V[2].MeanCost);
 }
 
 
@@ -2702,6 +2839,7 @@ int main()
     TestTheSmallBatchCircuitIsTheSameOvalAndStillCloses();
     TestASmallBatchPlatformWorksThreeTrainsAtOnce();
     TestWhereASlowLoadStartsCosting();
+    TestOrdinaryVariationIsAbsorbedAtTheBackAndNotTheFront();
     TestAnEmergencyStopStopsTheRideNotTheTrains();
     TestTheCircuitCarriesFourTrains();
     TestTheActorsOwnLoopRunsTwoTrains();
