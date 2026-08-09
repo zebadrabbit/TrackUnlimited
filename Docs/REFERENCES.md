@@ -74,6 +74,11 @@ one place.
 | **NFPA 160** | Why flame effects are not fired by the show controller. |
 | **DMX512** | Universes, slots, start codes, and the 44 Hz packet ceiling. |
 
+> **Licences live in `NOTICE.md`, not here.** This page is about what outside work
+> SHAPED the design and what it contributed; NOTICE.md is the legal record of what
+> is redistributed and under what terms. Two different questions, and keeping them
+> apart is what stops one being answered with the other.
+
 ## Sound
 
 Freesound files keep their `id__username__title.wav` name **on purpose**: the ID is the permalink

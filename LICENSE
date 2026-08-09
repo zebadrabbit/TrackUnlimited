@@ -1,3 +1,18 @@
+TrackUnlimited is MIT licensed. The terms below cover the code and everything
+original to this project.
+
+THIRD-PARTY CONTENT IS NOT COVERED BY THEM. Some files under Content/ come from
+elsewhere and carry their own licences -- see NOTICE.md, which lists them per
+file with author and source. That file ships with the application, because
+attribution living only in a git repository does not reach somebody who
+downloads a build.
+
+Stated here rather than left implied: a licence file that claims more than it
+can is worse than a complicated one, because it is the thing a downstream user
+relies on.
+
+----------------------------------------------------------------------------
+
 MIT License
 
 Copyright (c) 2026 zebadrabbit
