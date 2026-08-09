@@ -2962,8 +2962,24 @@ std::vector<FItem> ShowcaseCircuitLayout(bool bWithHelix)
     // which is an ordinary specification and the whole reason the two rates are
     // separate fields.
     AddStraight(Out, 130.0, EZone::BlockBrake, 20.0, false, 1.5, 1.5, 8.0);
+    const std::size_t Turn2 = Out.size();
     AddBankedTurn(Out, R, bWithHelix ? Arc + 2.0 * Pi * R : Arc, Ease,
                   BankDegreesFor(18.1, R));
+    if (bWithHelix)
+    {
+        // KICKER TYRES OUT OF THE MID-COURSE, and they are what makes the helix
+        // carryable rather than a four-train ceiling. The wedge the sweep found
+        // is real physics: a train restarting from a standing hold at the MCBR
+        // gets a few metres of tyre push and cannot coast 400 m of banked helix
+        // -- it stalls at rest on open course. Real rides bolt drive tyres to
+        // the brake's exit for exactly this; here that is the turn's own entry
+        // easement carrying a Launch zone. A Launch cannot hold a train, so the
+        // capacity table does not move, and it is a zone on EXISTING geometry,
+        // so the closure does not either.
+        Out[Turn2].Zone = EZone::Launch;
+        Out[Turn2].Speed = 22.0;
+        Out[Turn2].Accel = 10.0;
+    }
     AddStraight(Out, 24.0);
     AddStraight(Out, 37.5, EZone::BlockBrake, 6.0);
     AddStraight(Out, 27.0, EZone::Lift, 4.0, false, 1.0, 1.0);
@@ -3046,15 +3062,17 @@ void TestTheShowcaseCapacityAndTheHelix()
             // assertion holds the harness to its own measurement; the actor's trip
             // still needs reproducing before capacity claims transfer.
             //
-            // THE HELIX IS CLEAN TO FOUR and wedges at five, and the wedge is
-            // PHYSICS, not signalling: a train released from a standing hold at
-            // the mid-course gets ~65 m of 1.5 m/s^2 tyres, leaves at ~14 m/s,
-            // and cannot coast 400 m of banked helix — it stalls at rest on open
-            // course. Which is why a real mid-course brake sits HIGH with a drop
-            // after it: gravity does the re-launch, not the tyres. Reported, not
-            // asserted, because it is a property of this layout's authored rates
-            // and moves the day somebody gives the mid-course real conveyance.
-            const bool bAsserted = (Variant == 0 && N <= 6) || (Variant == 1 && N <= 4);
+            // THE HELIX CARRIES SIX WITH THE KICKER, having wedged at five
+            // without it. The wedge was PHYSICS, not signalling: a train
+            // restarting from a standing hold at the mid-course got a few metres
+            // of tyre push and stalled at rest halfway round 400 m of banked
+            // helix — which is why a real MCBR sits high with a drop after it,
+            // and why the ones that do not get drive tyres bolted to their exit.
+            // The kicker is that: the turn's own entry easement carrying a
+            // Launch zone. Measured before and after: helix-5 went 0 laps -> 11,
+            // helix-6 went 1 -> 11, and seven runs at 7 laps where the PLAIN
+            // layout gridlocks at one.
+            const bool bAsserted = N <= 6;
             if (bAsserted)
             {
                 assert(R.Violations == 0);

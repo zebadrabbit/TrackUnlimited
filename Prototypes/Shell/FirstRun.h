@@ -225,10 +225,10 @@ inline FTemplate TemplateAt(std::size_t i)
                 ETemplatePreset::OutAndBack};
     case 3:
         return {"Showcase — every device",
-                "The launched circuit re-zoned as a milestone: a four-position platform, a "
-                "launch, a trim brake, and a mid-course block brake with a real friction "
-                "pad. Six trains, and every device specified as itself rather than all of "
-                "them sharing one rate.",
+                "The launched circuit as a milestone: a four-position platform, a launch, "
+                "a trim, a mid-course block brake with a real friction pad, kicker tyres "
+                "out of it, and a full helix finale round the last turn. Every device "
+                "specified as itself, and the fleet measured against the interlocking.",
                 "Open the [P] panel and watch the mid-course brake. The pad stops the "
                 "train and the tyres truck it to the mark afterwards — two machines, "
                 "one commanded speed.",

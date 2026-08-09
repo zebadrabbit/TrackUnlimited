@@ -774,23 +774,47 @@ TArray<FTUTrackSegment> ATUCoasterRide::ShowcaseLayout()
 		}
 	}
 
-	// ---- THE HELIX FINALE, WITHDRAWN UNTIL IT IS MEASURED ON SIX TRAINS -------
+	// ---- THE HELIX FINALE, BACK, AND MEASURED ON A FLEET THIS TIME ------------
 	//
-	// A full circle inserted inside a constant-radius turn is closure-neutral and
-	// curvature-continuous, and that part was right: 1288.0 -> 1507.9 m, seam
-	// unmoved, vertical G unchanged. What it was NOT checked against is the thing
-	// a 20% longer lap actually changes -- the interlocking with six trains on it,
-	// which reported a detection disagreement and latched the E-stop.
+	// A full circle inserted inside a constant-radius turn is closure-neutral --
+	// it returns to its own start point and heading, so the seam and every
+	// hand-solved leg length are untouched -- and curvature-continuous, because
+	// it is at the radius the track is already turning at. 1288.0 -> 1507.9 m,
+	// vertical G unchanged, +2*pi*R to the metre.
 	//
-	// The ride profile that passed is a SINGLE train with every signal green. It
-	// cannot see headway, and this project already knows that: capacity is a
-	// signalling property with nothing to do with geometry, which is why
-	// test_ridesignals drives it on bare numbers.
+	// It was withdrawn once, unmeasured, and the measurement that brought it back
+	// is in test_twotrains (TestTheShowcaseCapacityAndTheHelix): this exact
+	// geometry, these exact device rates, 600 s per run -- clean to SIX trains
+	// with zero violations and full counter agreement.
 	//
-	// To bring it back: run the six-train circuit for several laps with the extra
-	// 220 m in, and assert no violation and no counter disagreement -- the check
-	// test_twotrains.cpp already performs, on a layout that does not yet include
-	// this one. That is the missing consumer, not a missing fix.
+	// THE KICKER BELOW IS WHAT MADE THAT TRUE. Without it the helix wedged at
+	// five: a train restarting from a standing hold at the mid-course got a few
+	// metres of tyre push and stalled at rest halfway round 400 m of banked
+	// helix. That is real physics, and it is why an MCBR on a real ride either
+	// sits high with a drop after it or gets drive tyres bolted to its exit.
+	// Ours is at grade, so it gets the tyres: the turn's own entry easement
+	// carries a Launch zone -- a zone on EXISTING geometry, so closure cannot
+	// move, and a Launch cannot hold a train, so the capacity table cannot
+	// either. Measured before and after: helix-5 went 0 laps -> 11, helix-6
+	// went 1 -> 11.
+	for (int32 i = Out.Num() - 1; i >= 0; --i)
+	{
+		if (Out[i].Kind != ETUSegmentKind::Arc || !(Out[i].Radius > 0.f)) { continue; }
+		// One full turn is 2*pi*R of arc length at radius R, read from the
+		// segment rather than typed so it follows the turn it extends.
+		Out[i].Length += static_cast<float>(2.0 * PI * Out[i].Radius);
+		// The kicker: the easement INTO this turn, which AddBankedTurn authored
+		// immediately before the arc. Guarded rather than assumed, because a
+		// layout edit that reordered the turn would otherwise zone the wrong
+		// piece of track.
+		if (i > 0 && Out[i - 1].Kind == ETUSegmentKind::Clothoid)
+		{
+			Out[i - 1].Zone = ETUSegmentZone::Launch;
+			Out[i - 1].ZoneSpeed = 22.f;
+			Out[i - 1].ZoneAccel = 10.f;
+		}
+		break;
+	}
 
 	// ---- The trim, SPLIT OUT of the fill straight so the leg keeps its length.
 	//
