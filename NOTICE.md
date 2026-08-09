@@ -4,7 +4,7 @@
 **not** cover the files listed here — each carries its own licence, and this page
 is where those live.
 
-**This file ships.** Attribution that only exists in a git repository does not
+**This file ships**, copied beside the executable by `Tools/Package-Windows.ps1`. Attribution that only exists in a git repository does not
 reach somebody who downloads a build, and most content licences require it to.
 Anything added below must also appear in the application's credits.
 

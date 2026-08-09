@@ -116,6 +116,27 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host ""
+# ---- THE ATTRIBUTION SHIPS WITH THE BUILD.
+#
+# Most content licences require the credit to reach whoever has the software,
+# and a NOTICE.md that exists only in a git repository reaches nobody who
+# downloaded a zip. This is the whole of the obligation for CC-BY and the usual
+# way it is met -- a THIRD-PARTY-NOTICES file beside the executable.
+#
+# Copied rather than staged through UAT because these are repository files, not
+# cooked content, and adding them to the pak would put attribution somewhere
+# only the application can read.
+foreach ($Doc in 'LICENSE', 'NOTICE.md') {
+    $Src = Join-Path $RepoRoot $Doc
+    if (Test-Path $Src) {
+        Copy-Item $Src -Destination $Output -Force
+    } else {
+        # Loud, because shipping without it is a licence breach rather than an
+        # untidy archive.
+        Write-Warning "$Doc not found at $Src -- the build will ship with no attribution."
+    }
+}
+
 Write-Host "Packaged to $Output" -ForegroundColor Green
 
 if (-not $SmokeTest) {
