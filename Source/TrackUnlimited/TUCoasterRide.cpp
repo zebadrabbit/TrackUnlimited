@@ -7064,9 +7064,12 @@ void ATUCoasterRide::RebuildTrackMesh()
 			Track.GetHeartlineHeight(), Profile, FSupportSettings(),
 			FlatGround(-GroundOffsetM));
 		PushMeshSection(SupportMesh, BuildSupportMesh(Plan));
+		// THE FOOTINGS ARE COUNTED SEPARATELY because they do not correspond one to
+		// one: at-grade track gets a pad and no column, which is the station.
 		UE_LOG(LogTemp, Log,
-			TEXT("TrackUnlimited: %d support legs, longest unsupported run %.1f m"),
-			static_cast<int32>(Plan.Leg.size()), Plan.LongestGapM);
+			TEXT("TrackUnlimited: %d support legs on %d footings, longest unsupported run %.1f m"),
+			static_cast<int32>(Plan.Leg.size()), static_cast<int32>(Plan.Footing.size()),
+			Plan.LongestGapM);
 	}
 	else if (SupportMesh)
 	{

@@ -131,7 +131,26 @@ void TestATGRADEIsNotAFindingBecauseThatIsAStation()
 
     assert(P.Leg.empty());
     assert(P.Finding.empty());
-    std::printf("  at-grade track is silent: a station is not a placement failure\n");
+
+    // AND IT GETS THE FOOTER PLATE THE RULE ALWAYS PROMISED. The MinHeightM branch
+    // has said "wants a footer plate, not a tower" since it was written, and then
+    // placed nothing — which was invisible while nothing was drawn and obvious the
+    // moment legs were: the lowest run of a layout floated with no column and no
+    // pad, which is the one part of a real coaster nobody has ever seen
+    // unsupported.
+    //
+    // SILENT STILL MEANS SILENT. The two assertions above are about REPORTING and
+    // are unchanged: a station getting a pad is not a placement failure.
+    assert(!P.Footing.empty());
+    for (const FSupportFooting& F : P.Footing)
+    {
+        // The pad reaches from the track down past the ground it sits on, so track
+        // a few centimetres up gets a footing rather than a film.
+        assert(F.Thickness > 0.1);
+        assert(F.Width > S.LegDiameterM);
+    }
+    std::printf("  at-grade track is silent and gets %zu footer plates, no columns\n",
+                P.Footing.size());
 }
 
 void TestINVERTEDTrackIsREFUSEDRatherThanSpeared()
@@ -346,11 +365,19 @@ void TestSupportsBecomeGeometry()
     const int Sides = 8;
     const FMeshBuffer M = BuildSupportMesh(Built, Sides);
 
-    // ONE CAPPED TUBE PER LEG, and the count is exact rather than "about right":
-    // a tube of N sides is 2N wall triangles plus two N-triangle cap fans.
-    const std::size_t PerLeg = static_cast<std::size_t>(Sides) * 4;
-    assert(M.Index.size() / 3 == Built.Leg.size() * PerLeg);
-    std::printf("  %zu legs -> %zu triangles\n", Built.Leg.size(), M.Index.size() / 3);
+    // ONE CAPPED TUBE PER LEG AND PER FOOTING, and the count is exact rather than
+    // "about right": a tube of N sides is 2N wall triangles plus two N-triangle
+    // cap fans.
+    const std::size_t PerTube = static_cast<std::size_t>(Sides) * 4;
+    const std::size_t Tubes = Built.Leg.size() + Built.Footing.size();
+    assert(M.Index.size() / 3 == Tubes * PerTube);
+
+    // EVERY LEG LANDS ON SOMETHING. A column that stops in the dirt is what made
+    // this worth building, so it is asserted rather than assumed: at least one
+    // footing per leg, and more wherever at-grade track has a pad and no column.
+    assert(Built.Footing.size() >= Built.Leg.size());
+    std::printf("  %zu legs, %zu footings -> %zu triangles\n",
+                Built.Leg.size(), Built.Footing.size(), M.Index.size() / 3);
 
     // ---- WATERTIGHT. Every edge shared by exactly two triangles, welded by
     // position because the UV seam splits vertices that are geometrically one.
@@ -387,12 +414,13 @@ void TestSupportsBecomeGeometry()
     }
     const double Volume = V6 / 6.0;
 
-    double Expected = 0.0;
-    for (const FSupportLeg& L : Built.Leg)
+    auto Prism = [&](double Radius, double Height)
     {
-        const double R = L.Diameter * 0.5;
-        Expected += 0.5 * Sides * R * R * std::sin(TrackMeshTwoPi / Sides) * L.Height();
-    }
+        return 0.5 * Sides * Radius * Radius * std::sin(TrackMeshTwoPi / Sides) * Height;
+    };
+    double Expected = 0.0;
+    for (const FSupportLeg& L : Built.Leg) { Expected += Prism(L.Diameter * 0.5, L.Height()); }
+    for (const FSupportFooting& F : Built.Footing) { Expected += Prism(F.Width * 0.5, F.Thickness); }
     std::printf("  volume %.6f m^3, %d-gon prisms %.6f m^3\n", Volume, Sides, Expected);
     assert(Volume > 0.0 && "an outward-wound closed mesh has positive signed volume");
     assert(std::fabs(Volume - Expected) < 1e-6);

@@ -71,6 +71,35 @@ struct FSupportLeg
     double Height() const { return Top.Z - Foot.Z; }
 };
 
+// ===================== EVERY LEG LANDS ON SOMETHING =====================
+//
+// A column does not stop in the dirt. It lands on a concrete spread footing, and
+// the track that is too low for a column still lands on one — the MinHeightM rule
+// above already says so in words ("the track is essentially on the ground and
+// wants a footer plate, not a tower") and then placed nothing at all.
+//
+// That was visible the moment the legs were drawn: the lowest run of a layout
+// floated with no column and no pad, which is the one part of a real coaster
+// nobody has ever seen unsupported.
+//
+// A SEPARATE LIST RATHER THAN A FIELD ON THE LEG, because the two do not
+// correspond one to one: at-grade track has a footing and NO leg, which is the
+// case that prompted this. Keeping them apart also leaves `Plan.Leg` meaning
+// exactly what it meant before — the assertion that at-grade track produces no
+// column and no finding is still true and still bites.
+struct FSupportFooting
+{
+    // The centre of the TOP face. For a column that is the ground under its foot;
+    // for at-grade track it is the track's own attachment point, because the pad
+    // IS the support there.
+    FVec3 Top;
+    double Width = 1.0;       // across, and a footing is much wider than its column
+    double Thickness = 0.45;  // down from Top
+
+    FVec3 Bottom() const { return FVec3{Top.X, Top.Y, Top.Z - Thickness}; }
+};
+
+
 // Why a support was NOT placed. Reported, never repaired — the fix is a track
 // edit or a person putting one somewhere this cannot see, and a placer that
 // quietly skipped would leave a ride floating with no explanation.
@@ -102,6 +131,11 @@ struct FSupportPlan
 {
     std::vector<FSupportLeg> Leg;
 
+    // ONE PER LEG, PLUS THE ONES WITH NO LEG. A column lands on a footing, and
+    // track too low for a column lands on one directly -- which is what the
+    // MinHeightM rule has always said in words and never produced.
+    std::vector<FSupportFooting> Footing;
+
     // Findings, MERGED INTO RUNS. A long inverted stretch is one problem with a
     // length, not forty copies of the same sentence — the same lesson the
     // acceleration envelope learned when every ride reported dozens of wobbles
@@ -115,10 +149,27 @@ struct FSupportPlan
 
 struct FSupportSettings
 {
-    // THE SPAN, in metres of arc length. Real steel coaster track carries roughly
-    // 6-12 m between bents depending on section and load; 9 m sits mid-range and
-    // is a knob rather than a constant for the same reason every figure in
+    // THE SPAN, in metres of arc length.
+    //
+    // CITED RATHER THAN RECALLED. This said "roughly 6-12 m" from general
+    // knowledge until Self (2024) gave it a source: that review reports a MAXIMUM
+    // SPACING OF FORTY FEET (~12.2 m) as reference practice, citing Hunt (2018).
+    // 9 m therefore sits inside a figure somebody can check rather than inside a
+    // recollection, and it is still a knob for the same reason every figure in
     // TrackProfile is.
+    //
+    //   Self, Ian. Parametric Design and Optimization of Roller Coaster Support
+    //   Structures Considering Sustainability and Maintenance. MS thesis,
+    //   Architectural Engineering, Penn State, defended 27 February 2024.
+    //   https://etda.libraries.psu.edu/catalog/27672izs5144
+    //   Docs/REFERENCES.md records what was and was not taken from it.
+    //
+    // ponytail: UNIFORM SPACING, and the same source says that is not what a real
+    // design does -- its topology optimisation clustered supports where ride
+    // G-FORCES ARE HIGHEST, which it found rather than imposed. This project
+    // already computes G at every arc length, so modulating the span by it is a
+    // refinement with a citation behind it rather than a guess. Uniform until
+    // somebody wants the difference.
     double SpanM = 9.0;
 
     // A column shorter than this is not a column — the track is essentially on the
@@ -131,6 +182,22 @@ struct FSupportSettings
     double ClearanceM = 1.5;
 
     double LegDiameterM = 0.25;
+
+    // A SPREAD FOOTING IS MUCH WIDER THAN ITS COLUMN -- it exists to spread the
+    // load into the ground, so the ratio is the whole point of it. Four times the
+    // leg reads correctly at any distance somebody looks at a support from.
+    //
+    // ORDINARY PRACTICE, NOT A CITED FIGURE. Self (2024) explicitly puts
+    // foundations outside its scope, so nothing here rests on that source; these
+    // are plausible dimensions for something that has to be visible, not a
+    // structural design.
+    double FootingWidthRatio = 4.0;
+    double FootingThicknessM = 0.45;
+
+    // How far the top of a footing stands proud of the ground. Real ones are
+    // mostly buried with a little showing, and something entirely below grade
+    // would be invisible -- which defeats the point of drawing it.
+    double FootingProudM = 0.12;
 };
 
 // Shortest distance from a point to a line segment. The whole of the
@@ -227,6 +294,27 @@ inline FSupportPlan PlanSupports(const std::vector<FTrackFrame>& Path,
             // At grade and needing only a footer plate is not a finding — it is
             // the normal case for a station, and reporting it would bury the real
             // ones.
+            //
+            // AND IT NOW GETS THE FOOTER PLATE IT WAS PROMISED. This branch said
+            // "wants a footer plate, not a tower" and then placed nothing, which
+            // was invisible for as long as nothing was drawn and obvious the
+            // moment legs were: the lowest run of a layout floated with no column
+            // and no pad, which is the one part of a real coaster nobody has ever
+            // seen unsupported.
+            //
+            // NO FINDING, STILL. The assertion that at-grade track is silent is
+            // about REPORTING, and it stays true — a station getting a pad is not
+            // a placement failure, it is a station.
+            if (Attach.Z >= GroundZ && S[i] - LastPlaced >= Settings.SpanM - 1e-9)
+            {
+                FSupportFooting Pad;
+                Pad.Top = Attach;
+                Pad.Width = Settings.LegDiameterM * Settings.FootingWidthRatio;
+                // Down from the track to below the ground it sits on, so a pad
+                // under track a few centimetres up is still a pad and not a film.
+                Pad.Thickness = (Attach.Z - GroundZ) + Settings.FootingThicknessM;
+                Plan.Footing.push_back(Pad);
+            }
             LastPlaced = S[i];
             LastSupportedS = S[i];
             continue;
@@ -286,6 +374,15 @@ inline FSupportPlan PlanSupports(const std::vector<FTrackFrame>& Path,
         L.S = S[i];
         Plan.Leg.push_back(L);
 
+        // AND THE THING IT STANDS ON. A column does not stop in the dirt: it
+        // lands on a spread footing, and one appears here rather than being
+        // derived later so that a caller cannot draw legs without them.
+        FSupportFooting Pad;
+        Pad.Top = FVec3{Foot.X, Foot.Y, Foot.Z + Settings.FootingProudM};
+        Pad.Width = Settings.LegDiameterM * Settings.FootingWidthRatio;
+        Pad.Thickness = Settings.FootingThicknessM + Settings.FootingProudM;
+        Plan.Footing.push_back(Pad);
+
         // THE NUMBER AN ENGINEER WOULD ACTUALLY ASK FOR: the longest run with
         // nothing under it. A placer that reported only what it placed would say
         // nothing about the 60 m of unsupported track its refusals left behind.
@@ -338,6 +435,17 @@ inline FMeshBuffer BuildSupportMesh(const FSupportPlan& Plan, int Sides = 8)
         // degenerate case cannot arise -- a leg is vertical by construction and X
         // is never parallel to it -- but SweepStrut handles it anyway.
         SweepStrut(Out, L.Foot, L.Top, FVec3{1.0, 0.0, 0.0}, L.Diameter * 0.5, N);
+    }
+
+    // THE FOOTINGS, in the SAME buffer as the legs. Concrete and steel are two
+    // materials and this is one section, which is a compromise made knowingly:
+    // splitting them is one more buffer and one more component for a difference
+    // nothing can currently show, since neither has a material yet. The day the
+    // structure gets one, this is where the split goes.
+    for (const FSupportFooting& F : Plan.Footing)
+    {
+        if (!(F.Thickness > 1e-6)) { continue; }
+        SweepStrut(Out, F.Bottom(), F.Top, FVec3{1.0, 0.0, 0.0}, F.Width * 0.5, N);
     }
     return Out;
 }
