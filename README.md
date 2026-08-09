@@ -139,9 +139,14 @@ fail to crest it.
 
 ## Status
 
-**Phase 4 — Track Meshing & Supports.** Phases 0 through 3.75 are complete, and the whole of it now
-**compiles and runs in the engine** — the track is solid geometry rather than wireframe, and the control
-system drives it.
+**Phase 4 — Track Meshing & Supports.** Phases 0 through 3.75 are complete, **Phase 3.5's shell is
+substantially done**, and the whole of it **compiles and runs in the engine**: the track is solid
+geometry standing on supports and footings, catwalks run where the evacuation model says they do,
+and the control system drives all of it.
+
+What is left in this phase is **art** — the structure is still on a placeholder material, and cars
+are still cubes. The geometry underneath is parametric and stays that way; a modelled rail would
+have to be re-modelled for every layout.
 
 What exists today, all of it engine-free and assert-tested under `Prototypes/`, with a thin Unreal
 actor over the top:
@@ -170,9 +175,12 @@ actor over the top:
 | Event log | every state transition, timestamped, to the panel and to disk |
 | Starter layouts | five worked examples of the vocabulary, each measured before shipping — two of them closed circuits |
 | Track meshing | rails, spine and ties swept from the same curvature profile — 309k triangles on the reference circuit, capped ends, asserted watertight |
-| Supports | placed where the rules allow and REFUSED with a reason where they do not — through an inversion, under grade, or fouling the track |
+| Supports | placed where the rules allow and REFUSED with a reason where they do not — through an inversion, under grade, or fouling the track. **Drawn**, with a spread footing under every column and a footer plate under track too low for one |
+| Catwalks | the deck and guardrail an evacuation route is actually walked along — one toggle, because a walkway without a rail is a fall hazard rather than a cheaper walkway. Track too steeply banked to walk on is reported and still drawn |
 | Device audit | what a layout's devices will actually do, judged against the ride it produces, with the numbers in the sentence |
-| Application shell | boot, main menu, Build / Operate / Ride, segment editor, diagnostics, graphs, autosave and crash recovery |
+| Application shell | boot, main menu and track browser, Build / Operate / Ride, settings that persist, save and open, autosave and crash recovery |
+| Runtime editing | typed numeric entry, insert and remove, multi-select showing the intersection, and undo — no drag handles, ever |
+| The console | pressable: dispatch, auto/manual, E-stop, reset — and the gates, harness and walk-round when you are the crew rather than the simulated one |
 | In-engine | builds against UE 5.8.1 with zero warnings; rides, meshes, signals, and reads out speed, G and block state |
 
 → [`Docs/ROADMAP.md`](Docs/ROADMAP.md) for what each phase ships and what is left.
@@ -208,7 +216,9 @@ For the full engine build, see [`CONTRIBUTING.md`](CONTRIBUTING.md).
 | [`Docs/CONTROL_ARCHITECTURE.md`](Docs/CONTROL_ARCHITECTURE.md) | The three tiers and the rule that requests never travel down — safety in C++ and not scriptable, for the same reason it is not in a real park |
 | [`Docs/TIER2_OVERRIDES.md`](Docs/TIER2_OVERRIDES.md) | The expression language for per-block overrides. Strict IEC 61131-3 spelling, and an override can only ever make a permissive MORE restrictive |
 | [`Docs/DIRECTION_AND_ROUTES.md`](Docs/DIRECTION_AND_ROUTES.md) | **Design only:** what a reverse section and a track merge actually cost — direction as two signs, and route interlocking instead of a block list |
-| [`Docs/PROTOTYPES.md`](Docs/PROTOTYPES.md) | The seven standalone prototypes and 33 assert suites: what each proves, how to build and run them |
+| [`Docs/COASTER_TYPES.md`](Docs/COASTER_TYPES.md) | **Design only:** what "which kind of coaster" costs, sorted by that rather than by what a rider notices — and why a type is a preset and never a branch |
+| [`Docs/REFERENCES.md`](Docs/REFERENCES.md) | Outside work this project relies on and what each contributed, including what was deliberately *not* taken |
+| [`Docs/PROTOTYPES.md`](Docs/PROTOTYPES.md) | The seven standalone prototypes and 35 assert suites: what each proves, how to build and run them |
 | [`Docs/ROADMAP.md`](Docs/ROADMAP.md) | Phases, shippable artifacts, current status |
 | [`Docs/REFERENCE_LAYOUT.md`](Docs/REFERENCE_LAYOUT.md) | The canonical measured figures for the reference layout |
 | [`Docs/PROJECT_PLAN.md`](Docs/PROJECT_PLAN.md) | The full plan: vision, market context, all five pillars, risks |
