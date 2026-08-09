@@ -337,8 +337,20 @@ void TestTheHANDEDNESSFlipREVERSESWinding()
     // inside out — in UE, not here, so nothing in this suite would ever see it
     // and the symptom is a coaster that renders as a black skeleton.
     //
-    // So the port must swap two indices of every triangle. Asserted as a
-    // property rather than trusted as a comment.
+    // AND THE CONCLUSION ONCE DRAWN FROM THAT WAS WRONG, which is worth leaving
+    // written down. "So the port must swap two indices" does not follow: the
+    // statement above is about GEOMETRY, and UE's front-face rule is the opposite
+    // handedness and flips it back. Two flips. The port swapped explicitly for
+    // months and every surface on the ride was inside out -- invisible on rails,
+    // because a thin tube seen inside out has the same silhouette and you are
+    // merely looking at its far inner wall. It showed the day something SOLID was
+    // drawn: a camera inside a support pier saw walls, which outward-wound
+    // geometry cannot do.
+    //
+    // What is asserted below is still exactly right and still worth having -- the
+    // flip DOES reverse winding. What no engine-free suite can tell you is what to
+    // do about it, because the answer lives in a rasteriser none of this can see.
+    // That one is settled by looking, and was.
     const FTrack T = VerticalLoop();
     FMeshSettings S;
     S.SampleSpacing = 0.5;

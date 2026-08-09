@@ -7519,21 +7519,36 @@ void ATUCoasterRide::PushMeshSection(UProceduralMeshComponent* Target, const FMe
 		UV.Add(FVector2D(M.UV[v].U, M.UV[v].V));
 	}
 
-	// THE PART THAT IS NOT UNIT CONVERSION, and the one neither CLAUDE.md nor
-	// PHASE0_FINDINGS said until now: M(x,y,z) = (x,-y,z) is a REFLECTION with
-	// determinant -1, so it reverses triangle orientation. Mirror the positions
-	// and normals and change nothing else and every surface on this ride is
-	// inside out — invisible under backface culling, black under a light, with
-	// every vertex position perfectly correct.
+	// ===================== TWO FLIPS, NOT ONE. MEASURED, NOT ARGUED =====================
 	//
-	// So two indices of every triangle swap. Asserted as a property in
-	// test_trackmesh.cpp, where it can be, rather than trusted here where it
-	// cannot.
+	// This swapped two indices of every triangle, on the argument that M(x,y,z) =
+	// (x,-y,z) is a reflection with determinant -1 and so reverses triangle
+	// orientation. That argument is CORRECT and the conclusion drawn from it was
+	// not: it is a statement about geometry, and says nothing about UE's
+	// front-face rule, which is the opposite handedness and flips it straight
+	// back. Two flips. Doing one explicitly left every surface on this ride
+	// inside out.
+	//
+	// HOW IT SURVIVED: every assertion this project has stops at the port. Signed
+	// volume, watertightness and normals-agree-with-winding were all checked and
+	// all passed, because the engine-free mesh was never the thing that was wrong.
+	// Nothing on that side can see UE's rasteriser.
+	//
+	// HOW IT WAS FOUND: a camera placed INSIDE a support pier saw solid walls,
+	// which correctly outward-wound geometry cannot do -- from inside, backfaces
+	// cull and you see the world beyond. Settled by looking, both ways: with the
+	// swap the pier was hollow from outside and solid from within, and without it
+	// exactly the reverse.
+	//
+	// It read as a support problem because a column and a pier are the only solid
+	// shapes here. A rail is a thin tube: inside out, its silhouette is unchanged
+	// and you are simply looking at the far inner wall, which is why 1288 m of it
+	// looked plausible for weeks.
 	for (std::size_t t = 0; t + 2 < M.Index.size(); t += 3)
 	{
 		Tri.Add(static_cast<int32>(M.Index[t]));
-		Tri.Add(static_cast<int32>(M.Index[t + 2]));
 		Tri.Add(static_cast<int32>(M.Index[t + 1]));
+		Tri.Add(static_cast<int32>(M.Index[t + 2]));
 	}
 
 	Target->CreateMeshSection_LinearColor(0, Pos, Tri, Nrm, UV,

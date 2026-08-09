@@ -31,7 +31,6 @@ void UTUFrameWidget::AttachTo(ATUCoasterRide* InRide)
 
 void UTUFrameWidget::NativeConstruct()
 {
-	OpenVisibility = GetVisibility();   // whatever the Blueprint asked for
 	Super::NativeConstruct();
 
 	// Bound here rather than in the asset, because a click handler is behaviour
@@ -71,22 +70,28 @@ void UTUFrameWidget::NativeTick(const FGeometry& Geometry, float DeltaSeconds)
 
 	// ===================== THE FRAME BELONGS TO A DOCUMENT =====================
 	//
-	// In Boot and MainMenu there is nothing open, so the mode buttons offer to
-	// switch between views of nothing and the train count counts trains on no
-	// track. The debug-canvas panels were already suppressed in those modes; this
-	// is UMG and sat above that guard entirely, so a menu meant to be the whole
-	// screen still had BUILD / OPERATE / RIDE across the top of it.
+	// In Boot and MainMenu nothing is open, so the mode buttons offer to switch
+	// between views of nothing and the document label names no document.
 	//
-	// Hidden rather than Collapsed: a collapsed UserWidget is at the mercy of tick
-	// settings for ever coming back, and Hidden is already not hit-testable, so
-	// the buttons cannot be clicked through it either.
+	// ITS CHILDREN HIDE, NOT THE WIDGET ITSELF, and the first version got that
+	// wrong with a symptom worth remembering: hiding the root LOST THE MOUSE at
+	// the main menu. FInputModeGameAndUI needs something focusable in the UI to
+	// hold, and with the only widget in the viewport hidden the viewport took the
+	// capture back -- so the cursor vanished on the one screen that is nothing but
+	// things to click.
+	//
+	// Collapsed rather than Hidden on the children, because these sit in a layout:
+	// Hidden keeps a button's footprint and would leave three gaps across the top.
 	const EAppMode Now = R->GetSession().Mode();
 	const bool bDocumentOpen = Now != EAppMode::Boot && Now != EAppMode::MainMenu;
-	// RESTORED TO WHAT THE DESIGNER SET, not to a guess. Hard-coding the visible
-	// state here would quietly override whatever the Blueprint chose -- and for a
-	// full-screen frame the difference between Visible and SelfHitTestInvisible is
-	// whether it swallows every click meant for the canvas underneath.
-	SetVisibility(bDocumentOpen ? OpenVisibility : ESlateVisibility::Hidden);
+	const ESlateVisibility Parts = bDocumentOpen
+		? ESlateVisibility::Visible : ESlateVisibility::Collapsed;
+	if (ModeLabel)     { ModeLabel->SetVisibility(Parts); }
+	if (DocumentLabel) { DocumentLabel->SetVisibility(Parts); }
+	if (StatusLabel)   { StatusLabel->SetVisibility(Parts); }
+	if (BuildTab)      { BuildTab->SetVisibility(Parts); }
+	if (OperateTab)    { OperateTab->SetVisibility(Parts); }
+	if (RideTab)       { RideTab->SetVisibility(Parts); }
 	if (!bDocumentOpen) { return; }
 
 	const FString Mode = UTF8_TO_TCHAR(AppModeName(R->GetSession().Mode()));

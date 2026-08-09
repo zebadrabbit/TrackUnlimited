@@ -240,6 +240,7 @@ public:
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited")
 	bool bDrawTrack = true;
 
+
 	/** Speed, G-forces and block state on screen. The point of the slice. */
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited")
 	bool bShowTelemetry = true;
