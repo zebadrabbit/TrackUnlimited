@@ -25,6 +25,11 @@ Saved/
 # --- Packaging ---
 Builds/
 Packaged/
+# Where Package-Windows.ps1 archives to by default. Narrow rather than a bare
+# `Build/` for the reason stated above -- Build/ also holds packaging inputs
+# that must be committed -- and named here because the first successful package
+# put 336 MB of executable one `git add -A` away from the history.
+/Build/Windows-*/
 
 # --- OS cruft ---
 .DS_Store

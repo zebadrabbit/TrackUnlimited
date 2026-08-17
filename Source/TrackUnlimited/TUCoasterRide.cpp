@@ -4774,6 +4774,35 @@ bool ATUCoasterRide::RunDocumentSmokeTest()
 
 	Session.Enter(EAppMode::Build, /*bConfirmed*/ true);
 
+	// ===================== AND THE DOCUMENT IS AN INPUT TOO =====================
+	//
+	// The paragraph above says the mode is an input, so it gets stated rather than
+	// inherited. THE DOCUMENT IS THE SAME KIND OF THING and was inherited until
+	// the first packaged run measured it: in PIE the level IS the document, so
+	// this found 33 segments; a packaged build boots to the MENU with nothing
+	// open, so it found ZERO -- and every check below is sized to what is loaded.
+	//
+	// What that cost is the whole point. The round trip compared an empty document
+	// with an empty document and reported "saved, opened and unchanged"; the undo
+	// check is guarded on `Num() > 0` and the multi-select on `>= 3`, so both were
+	// SKIPPED IN SILENCE. The packaged build printed PASSED having exercised
+	// neither, which is this project's oldest failure wearing new clothes: a check
+	// that cannot tell success from never-having-run gets believed.
+	//
+	// Stating it makes the packaged run and the PIE run measure the same thing,
+	// which is the only way the packaged one is evidence about anything.
+	StartFromTemplate(1);   // the launched circuit: launch, brakes, a station
+	if (Segments.Num() < 3)
+	{
+		// The guards below stay, but they must never again be the reason a check
+		// does not run. A template that cannot fill them is a broken input, and a
+		// broken input is a failure rather than a quiet reduction in coverage.
+		UE_LOG(LogTUEvents, Error,
+			TEXT("smoke: the stated document has %d segments — too few to test undo or multi-select"),
+			Segments.Num());
+		Failures.Add(TEXT("stated document"));
+	}
+
 	const FString Path = FPaths::ProjectSavedDir() / TEXT("SmokeTest.track");
 	const int32 Before = Segments.Num();
 	const FString TextBefore = SerialiseDocument();

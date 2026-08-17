@@ -151,19 +151,42 @@ if (-not $SmokeTest) {
 # had only ever run in the editor, which is the one place the failures it exists
 # to catch cannot happen: OnConstruction runs there, uncooked assets resolve
 # there, and the map you have open is the map you get.
+# THERE ARE TWO TrackUnlimited.exe IN A PACKAGE, AND THE FIRST ONE IS NOT IT.
+# The archive root holds a 170 KB bootstrap launcher; the real 330 MB binary is
+# under <Project>\Binaries\Win64. `Select-Object -First 1` picked the launcher,
+# which spawns the real one DETACHED and exits 0 immediately -- so the run being
+# measured was a process that did nothing, and the log it was searched for never
+# existed. Matched on the directory rather than on size, because "the big one"
+# is a coincidence and "the one in Binaries\Win64" is the layout.
 $Exe = Get-ChildItem -Path $Output -Filter 'TrackUnlimited.exe' -Recurse -File |
+       Where-Object { $_.DirectoryName -like '*\Binaries\Win64' } |
        Select-Object -First 1
-if (-not $Exe) { throw "Packaged TrackUnlimited.exe not found under $Output." }
+if (-not $Exe) {
+    throw "No packaged binary at <$Output>\**\Binaries\Win64\TrackUnlimited.exe. The archive root's exe is only a launcher."
+}
 
 # -nullrhi and -nosound so it runs without a GPU or an audio device, which is
 # what a CI agent has. -unattended so nothing waits for a dialog.
 $SmokeArgs = @('-TUSmokeTest', '-unattended', '-nullrhi', '-nosound',
                '-stdout', '-FullStdOutLogOutput')
 
+# AND `& $Exe` DOES NOT WAIT FOR IT. A packaged game is a GUI-subsystem binary,
+# so the console does not block on it and does not receive its stdout: $Log came
+# back EMPTY on a run that passed, and the verdict check below then reported the
+# most alarming failure it has -- on a healthy build. Start-Process -Wait blocks
+# properly, and redirection gives -stdout a real handle to write to.
+$OutFile = Join-Path ([System.IO.Path]::GetTempPath()) 'tu-smoke-out.txt'
+$ErrFile = Join-Path ([System.IO.Path]::GetTempPath()) 'tu-smoke-err.txt'
+
 Write-Host ""
 Write-Host "Smoke test: $($Exe.FullName)" -ForegroundColor Cyan
-$Log = & $Exe.FullName @SmokeArgs 2>&1
-$Status = $LASTEXITCODE
+$Proc = Start-Process -FilePath $Exe.FullName -ArgumentList $SmokeArgs -Wait -PassThru `
+                      -NoNewWindow -RedirectStandardOutput $OutFile -RedirectStandardError $ErrFile
+$Status = $Proc.ExitCode
+$Log = @()
+foreach ($F in @($OutFile, $ErrFile)) {
+    if (Test-Path $F) { $Log += Get-Content $F }
+}
 $Log | Where-Object { $_ -match 'smoke:' } | ForEach-Object { Write-Host "  $_" }
 
 # ---- TWO CONDITIONS, AND THE SECOND IS THE ONE THAT MATTERS.
