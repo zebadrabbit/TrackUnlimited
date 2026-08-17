@@ -2963,23 +2963,24 @@ std::vector<FItem> ShowcaseCircuitLayout(bool bWithHelix)
     // separate fields.
     AddStraight(Out, 130.0, EZone::BlockBrake, 20.0, false, 1.5, 1.5, 8.0);
     const std::size_t Turn2 = Out.size();
+    // bWithHelix IS NO LONGER THE SHIPPED LAYOUT. It adds a full turn to a LEVEL
+    // arc, which is a circle driven round twice rather than a helix, and it is
+    // kept here only so the measurement that withdrew it stays runnable. See
+    // TestTheShowcaseCapacityAndTheHelix.
     AddBankedTurn(Out, R, bWithHelix ? Arc + 2.0 * Pi * R : Arc, Ease,
                   BankDegreesFor(18.1, R));
-    if (bWithHelix)
-    {
-        // KICKER TYRES OUT OF THE MID-COURSE, and they are what makes the helix
-        // carryable rather than a four-train ceiling. The wedge the sweep found
-        // is real physics: a train restarting from a standing hold at the MCBR
-        // gets a few metres of tyre push and cannot coast 400 m of banked helix
-        // -- it stalls at rest on open course. Real rides bolt drive tyres to
-        // the brake's exit for exactly this; here that is the turn's own entry
-        // easement carrying a Launch zone. A Launch cannot hold a train, so the
-        // capacity table does not move, and it is a zone on EXISTING geometry,
-        // so the closure does not either.
-        Out[Turn2].Zone = EZone::Launch;
-        Out[Turn2].Speed = 22.0;
-        Out[Turn2].Accel = 10.0;
-    }
+
+    // KICKER TYRES OUT OF THE MID-COURSE, on both variants now. A train
+    // restarting from a standing hold at the MCBR gets a few metres of tyre push
+    // and nothing else; real rides bolt drive tyres to the brake's exit for
+    // exactly this, and here that is the turn's own entry easement carrying a
+    // Launch zone. A Launch cannot hold a train, so the capacity table does not
+    // move; it is a zone on EXISTING geometry, so the closure does not either;
+    // and a Launch has no braking authority, so a train already above 22 m/s
+    // passes untouched.
+    Out[Turn2].Zone = EZone::Launch;
+    Out[Turn2].Speed = 22.0;
+    Out[Turn2].Accel = 10.0;
     AddStraight(Out, 24.0);
     AddStraight(Out, 37.5, EZone::BlockBrake, 6.0);
     AddStraight(Out, 27.0, EZone::Lift, 4.0, false, 1.0, 1.0);
@@ -3007,6 +3008,7 @@ void TestTheShowcaseCapacityAndTheHelix()
                     A.TotalLength(), B.TotalLength(),
                     B.TotalLength() - A.TotalLength(), 2.0 * Pi * R);
         assert(std::fabs(B.TotalLength() - A.TotalLength() - 2.0 * Pi * R) < 1e-6);
+        const FTrackProfile Cross;
         for (const FTrack* T : {&A, &B})
         {
             const FTrackFrame S = T->EvaluateAt(0.0);
@@ -3015,6 +3017,37 @@ void TestTheShowcaseCapacityAndTheHelix()
                                         + (E.Position.Y - S.Position.Y) * (E.Position.Y - S.Position.Y)
                                         + (E.Position.Z - S.Position.Z) * (E.Position.Z - S.Position.Z));
             assert(Seam < 1e-3);
+
+            // AND DOES IT HIT ITSELF. This test measured capacity, laps and
+            // violations -- every question the SIGNALLING can answer -- and never
+            // asked the geometric one, which is how a "helix" that is a flat
+            // circle driven round twice passed everything it was shown.
+            const bool bIsShipped = (T == &A);
+            const FClearanceReport Cl = AnalyseSelfClearance(*T, Cross, 0.5, 12.0, true);
+            std::printf("  %s: closest self-approach %.2f m at %.1f / %.1f m%s\n",
+                        bIsShipped ? "plain" : "helix", Cl.ClosestApproach, Cl.AtS, Cl.AndS,
+                        Cl.bStructureOverlaps ? "  *** STRUCTURE OVERLAPS ***" : "");
+            if (bIsShipped)
+            {
+                assert(!Cl.bStructureOverlaps);
+                assert(Cl.ClosestApproach > 10.0);   // 11.68 m, in the far turn
+            }
+            else
+            {
+                // THE WITHDRAWAL, AS A MEASUREMENT RATHER THAN A MEMORY. Adding a
+                // full turn to a LEVEL arc puts the last 98 degrees on top of the
+                // first: 0.09 m apart at two arc lengths exactly one turn apart.
+                //
+                // And it is not a bug with a fix in plan. Any closure-neutral
+                // addition of turning returns to its own start point and heading,
+                // so it MUST touch itself -- vertical separation is the only
+                // answer and that breaks the hand-solved closure this layout
+                // exists to inherit. If this assertion ever fails, somebody has
+                // given the helix height, and every published figure needs
+                // re-measuring before it ships.
+                assert(Cl.bStructureOverlaps);
+                assert(std::fabs((Cl.AndS - Cl.AtS) - 2.0 * Pi * R) < 1.0);
+            }
         }
     }
 
@@ -3027,11 +3060,16 @@ void TestTheShowcaseCapacityAndTheHelix()
             int TotalLaps = 0;
             for (int L : R.Laps) { TotalLaps += L; }
             std::printf("  %s %zu trains: %zu violation(s), %d laps, "
-                        "diverge %s, counter %s%s\n",
+                        "diverge %s, counter %s%s, drive %s\n",
                         Variant == 0 ? "plain" : "helix", N, R.Violations, TotalLaps,
                         R.FirstDivergence < 0.0 ? "never" : "YES",
                         (R.bCounterOverOccupied || R.bCounterInconsistent) ? "BAD" : "ok",
-                        R.bOverspeed ? ", OVERSPEED E-STOP" : "");
+                        R.bOverspeed ? ", OVERSPEED E-STOP" : "",
+                        R.bDriveFaulted ? "FAULTED" : "ok");
+            if (R.bDriveFaulted)
+            {
+                std::printf("    first faulted drive: zone %d\n", R.FirstFaultedDrive);
+            }
             if (R.bOverspeed)
             {
                 std::printf("    trap: zone %d at %.1f m/s, needs %.0f m of %.0f m, %.1f s in\n",
@@ -3062,16 +3100,19 @@ void TestTheShowcaseCapacityAndTheHelix()
             // assertion holds the harness to its own measurement; the actor's trip
             // still needs reproducing before capacity claims transfer.
             //
-            // THE HELIX CARRIES SIX WITH THE KICKER, having wedged at five
-            // without it. The wedge was PHYSICS, not signalling: a train
-            // restarting from a standing hold at the mid-course got a few metres
-            // of tyre push and stalled at rest halfway round 400 m of banked
-            // helix — which is why a real MCBR sits high with a drop after it,
-            // and why the ones that do not get drive tyres bolted to their exit.
-            // The kicker is that: the turn's own entry easement carrying a
-            // Launch zone. Measured before and after: helix-5 went 0 laps -> 11,
-            // helix-6 went 1 -> 11, and seven runs at 7 laps where the PLAIN
-            // layout gridlocks at one.
+            // THE HELIX VARIANT IS NOT SHIPPED and its runs are evidence rather
+            // than a claim about the product — the geometry block above measures
+            // why. It is still run because the reason it was withdrawn is
+            // geometric, not operational, and a variant that quietly started
+            // violating would be worth knowing about if it ever comes back with
+            // height on it.
+            //
+            // THE KICKER SURVIVED THE WITHDRAWAL, on both. It was built for the
+            // helix — a train restarting from a standing hold at the mid-course
+            // gets a few metres of tyre push and stalled at rest halfway round
+            // 400 m of banked helix — and the reason generalises: a real MCBR
+            // sits high with a drop after it, and the ones that do not get drive
+            // tyres bolted to their exit.
             const bool bAsserted = N <= 6;
             if (bAsserted)
             {
@@ -3080,6 +3121,13 @@ void TestTheShowcaseCapacityAndTheHelix()
                 assert(R.FirstDivergence < 0.0);
                 assert(!R.bCounterOverOccupied && !R.bCounterInconsistent);
                 assert(TotalLaps > 0 && "a clean run with no laps is a parked ride");
+                // MEASURED ALL ALONG AND THROWN AWAY. RunTrains has filled
+                // bDriveFaulted since drives existed, two other tests assert it,
+                // and the one test written to catch what the actor trips on did
+                // not look at it -- so "the harness says the showcase is clean"
+                // was a claim about violations only. Free: it has always been
+                // false here.
+                assert(!R.bDriveFaulted);
             }
         }
     }

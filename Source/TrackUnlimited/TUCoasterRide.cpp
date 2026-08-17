@@ -774,39 +774,43 @@ TArray<FTUTrackSegment> ATUCoasterRide::ShowcaseLayout()
 		}
 	}
 
-	// ---- THE HELIX FINALE, BACK, AND MEASURED ON A FLEET THIS TIME ------------
+	// ---- KICKER TYRES OUT OF THE MID-COURSE ----------------------------------
 	//
-	// A full circle inserted inside a constant-radius turn is closure-neutral --
-	// it returns to its own start point and heading, so the seam and every
-	// hand-solved leg length are untouched -- and curvature-continuous, because
-	// it is at the radius the track is already turning at. 1288.0 -> 1507.9 m,
-	// vertical G unchanged, +2*pi*R to the metre.
+	// A train restarting from a standing hold at the mid-course leaves it with a
+	// few metres of tyre push and nothing else, which is why an MCBR on a real
+	// ride either sits high with a drop after it or gets drive tyres bolted to
+	// its exit. Ours is at grade, so it gets the tyres: the turn's own entry
+	// easement carries a Launch zone -- a zone on EXISTING geometry, so closure
+	// cannot move, and a Launch cannot hold a train, so the capacity table cannot
+	// either. A Launch also has no braking authority whatever is typed, so a
+	// train already above 22 m/s passes untouched and every green-signal figure
+	// is unmoved.
 	//
-	// It was withdrawn once, unmeasured, and the measurement that brought it back
-	// is in test_twotrains (TestTheShowcaseCapacityAndTheHelix): this exact
-	// geometry, these exact device rates, 600 s per run -- clean to SIX trains
-	// with zero violations and full counter agreement.
+	// ---- AND WHY THERE IS NO HELIX HERE, TWICE OVER --------------------------
 	//
-	// THE KICKER BELOW IS WHAT MADE THAT TRUE. Without it the helix wedged at
-	// five: a train restarting from a standing hold at the mid-course got a few
-	// metres of tyre push and stalled at rest halfway round 400 m of banked
-	// helix. That is real physics, and it is why an MCBR on a real ride either
-	// sits high with a drop after it or gets drive tyres bolted to its exit.
-	// Ours is at grade, so it gets the tyres: the turn's own entry easement
-	// carries a Launch zone -- a zone on EXISTING geometry, so closure cannot
-	// move, and a Launch cannot hold a train, so the capacity table cannot
-	// either. Measured before and after: helix-5 went 0 laps -> 11, helix-6
-	// went 1 -> 11.
+	// A full circle added to this turn (Length += 2*pi*R) was shipped as a helix
+	// finale and is NOT a helix: an Arc is level, so the extra turn lies on top
+	// of the track it just came round. MEASURED, once the showcase test was made
+	// to ask the geometric question at all -- closest self-approach 0.09 m at
+	// 1105.5 / 1325.5 m, exactly one turn apart, against 11.68 m without it.
+	//
+	// It cannot be fixed in plan. The property that made it free is the property
+	// that breaks it: ANY closure-neutral addition of turning returns to its own
+	// start point and heading, and therefore has to touch itself. Only vertical
+	// separation answers it, and that breaks the hand-solved closure this layout
+	// exists to inherit.
+	//
+	// The real version, if it is ever worth it: reduce DropLen so the mid-course
+	// sits Dh high, and let a descending helix be the drop back to station
+	// height -- which is what the paragraph above says real MCBRs do, and it
+	// would make these tyres unnecessary. That is a two-variable closure re-solve
+	// and a re-measurement of every published figure, not a line.
 	for (int32 i = Out.Num() - 1; i >= 0; --i)
 	{
 		if (Out[i].Kind != ETUSegmentKind::Arc || !(Out[i].Radius > 0.f)) { continue; }
-		// One full turn is 2*pi*R of arc length at radius R, read from the
-		// segment rather than typed so it follows the turn it extends.
-		Out[i].Length += static_cast<float>(2.0 * PI * Out[i].Radius);
-		// The kicker: the easement INTO this turn, which AddBankedTurn authored
-		// immediately before the arc. Guarded rather than assumed, because a
-		// layout edit that reordered the turn would otherwise zone the wrong
-		// piece of track.
+		// The easement INTO this turn, which AddBankedTurn authored immediately
+		// before the arc. Guarded rather than assumed, because a layout edit that
+		// reordered the turn would otherwise zone the wrong piece of track.
 		if (i > 0 && Out[i - 1].Kind == ETUSegmentKind::Clothoid)
 		{
 			Out[i - 1].Zone = ETUSegmentZone::Launch;
