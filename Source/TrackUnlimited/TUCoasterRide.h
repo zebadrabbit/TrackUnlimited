@@ -1386,6 +1386,8 @@ private:
 	 */
 	FOrbitState Orbit;
 	bool bOrbitFramed = false;
+	/** Where the camera IS; Orbit is where it is going. Glides in Tick. */
+	FOrbitState OrbitShown;
 
 	/**
 	 * THE RIDE PROFILE AS A GRAPH — the view that makes a spike diagnosable.
@@ -1664,7 +1666,7 @@ private:
 
 	/** Put the camera where the orbit says. The tick does this every frame;
 	 *  framing calls it once so the first frame is already right. */
-	void ApplyOrbitToCamera();
+	void ApplyOrbitToCamera(double DeltaSeconds = 0.0);
 
 	/** Swap the per-mode orbit rig the moment CameraMode changes. */
 	void SyncCameraRig();

@@ -4170,26 +4170,19 @@ void ATUCoasterRide::FrameStation()
 		return;
 	}
 
-	FCamBounds B;
-	const int Steps = 10;
-	for (int i = 0; i <= Steps; ++i)
-	{
-		const FTrackFrame F = Track.EvaluateAt(Start + (End - Start) * (double(i) / Steps));
-		B.Add({F.Position.X, F.Position.Y, F.Position.Z});
-	}
-	// Stand back far enough to see the train AND the block ahead of it, because
-	// the dispatch decision is about both.
-	const double Pad = 25.0;
-	B.Add({B.Min.X - Pad, B.Min.Y - Pad, B.Min.Z - 2.0});
-	B.Add({B.Max.X + Pad, B.Max.Y + Pad, B.Max.Z + Pad});
-	if (bOrbitIsBackdrop)
-	{
-		// The menu's horizon angle framed the platform from the sky.
-		Orbit.PitchDeg = -25.0;
-		Orbit.YawDeg = -45.0;
-		bOrbitIsBackdrop = false;
-	}
-	Orbit.Frame(B, Camera ? static_cast<double>(Camera->FieldOfView) : 90.0, 16.0 / 9.0);
+	// AN OPERATOR'S EYE LINE, NOT A HELICOPTER. The bounding-box fit stood here
+	// and framed the platform from the sky, which is the Build view with a
+	// different subject. An operator stands beside the platform: focus on the
+	// middle of it at head height, a little above it, looking along it from
+	// the rider's left -- the side the console camera on [C] already stands on
+	// -- far enough back that the whole platform and the train on it are in
+	// shot. The block ahead is read off the schematic, as a real operator does.
+	const FTrackFrame Mid = Track.EvaluateAt(Start + (End - Start) * 0.5);
+	Orbit.Focus = {Mid.Position.X, Mid.Position.Y, Mid.Position.Z + 1.6};
+	Orbit.Distance = std::max(20.0, (End - Start) * 1.1);
+	Orbit.PitchDeg = -10.0;
+	Orbit.YawDeg = FMath::RadiansToDegrees(std::atan2(Mid.Tangent.Y, Mid.Tangent.X)) + 60.0;
+	bOrbitIsBackdrop = false;
 	bOrbitFramed = true;
 }
 
@@ -4304,7 +4297,6 @@ void ATUCoasterRide::ApplyAppMode(EAppMode Want)
 		FrameWholeTrack();
 		Orbit.PitchDeg = -18.0;
 		Orbit.YawDeg = -30.0;
-		Orbit.Distance *= 0.6;     // the sphere fit is conservative; the backdrop wants the ride close
 		// APPLIED NOW, not on the next tick: Tick returns before the camera while
 		// the window is unfocused or the scan has not started, and the first
 		// frame of the application was the level's serialised camera meanwhile.
@@ -4647,6 +4639,12 @@ void ATUCoasterRide::FrameWholeTrack()
 		if (Size.Y > 0.f) { Aspect = static_cast<double>(Size.X / Size.Y); }
 	}
 	Orbit.Frame(B, Camera ? static_cast<double>(Camera->FieldOfView) : 90.0, Aspect);
+	// THE SPHERE FIT IS A CEILING, NOT A PICTURE. It guarantees nothing is lost
+	// while orbiting, and on a layout 400 m long and 50 m tall that puts the
+	// camera 600 m back looking at a thread. Asked for a look, the fit is the
+	// guarantee and this is the picture; a mouse wheel gets the rest back.
+	// ponytail: one factor; a box-against-frustum fit if it ever matters.
+	Orbit.Distance *= 0.75;
 	bOrbitFramed = true;
 
 	UE_LOG(LogTemp, Log, TEXT("TrackUnlimited: framed %.0f m of track from %.0f m"),
@@ -4979,6 +4977,10 @@ bool ATUCoasterRide::OpenDocumentFrom(const FString& InPath)
 	ResetHistory();
 	Browser.Touch(TCHAR_TO_UTF8(*Path));
 	WriteRecentList();
+	// A NEW DOCUMENT IS FRAMED WHOLE. Open lands in Ride, so the orbit is not
+	// looked through until [Tab]; without this it showed wherever the previous
+	// track had left it.
+	bOrbitFramed = false;
 
 	UE_LOG(LogTUEvents, Log, TEXT("opened %d segments from %s"), Segments.Num(), *Path);
 	return true;
@@ -9692,12 +9694,35 @@ void ATUCoasterRide::SyncCameraRig()
 	}
 }
 
-void ATUCoasterRide::ApplyOrbitToCamera()
+void ATUCoasterRide::ApplyOrbitToCamera(double DeltaSeconds)
 {
 	if (!Camera) { return; }
-	const FCamVec P = Orbit.Position();
+	// THE CAMERA GLIDES TO THE ORBIT RATHER THAN SNAPPING. `Orbit` is where
+	// the framing and the mouse say to be; `OrbitShown` is where the camera is,
+	// and it closes the gap with the frame-rate-independent Smoothed() from
+	// CameraRig.h. A frame call with no delta snaps, which is what the menu's
+	// first frame wants. A snap loses the sense of where you were, which is the
+	// whole reason a validation row that jumps you somewhere is disorienting.
+	if (DeltaSeconds <= 0.0)
+	{
+		OrbitShown = Orbit;
+	}
+	else
+	{
+		const double HalfLife = 0.12;
+		OrbitShown.Focus = Smoothed(OrbitShown.Focus, Orbit.Focus, HalfLife, DeltaSeconds);
+		OrbitShown.Distance = Smoothed(OrbitShown.Distance, Orbit.Distance, HalfLife, DeltaSeconds);
+		OrbitShown.PitchDeg = Smoothed(OrbitShown.PitchDeg, Orbit.PitchDeg, HalfLife, DeltaSeconds);
+		// Yaw the short way round, or a target across the +-180 seam spins the
+		// camera the long way.
+		double DYaw = Orbit.YawDeg - OrbitShown.YawDeg;
+		while (DYaw > 180.0) { DYaw -= 360.0; }
+		while (DYaw < -180.0) { DYaw += 360.0; }
+		OrbitShown.YawDeg = Orbit.YawDeg - Smoothed(DYaw, 0.0, HalfLife, DeltaSeconds);
+	}
+	const FCamVec P = OrbitShown.Position();
 	const FVector World = ToLocal(FVec3{P.X, P.Y, P.Z}) + GetActorLocation();
-	const FVector Focus = ToLocal(FVec3{Orbit.Focus.X, Orbit.Focus.Y, Orbit.Focus.Z})
+	const FVector Focus = ToLocal(FVec3{OrbitShown.Focus.X, OrbitShown.Focus.Y, OrbitShown.Focus.Z})
 		+ GetActorLocation();
 	Camera->SetWorldLocationAndRotation(World, (Focus - World).Rotation().Quaternion());
 
@@ -9705,7 +9730,7 @@ void ATUCoasterRide::ApplyOrbitToCamera()
 	// cannot share a fixed one: set it for the bolt and depth precision at the
 	// top of the hill is gone; set it for the hill and the restraint in front
 	// of a rider is clipped away.
-	const FDepthRange D = DepthRangeFor(Orbit.Distance, Orbit.Distance);
+	const FDepthRange D = DepthRangeFor(OrbitShown.Distance, OrbitShown.Distance);
 	SetNearPlaneMetres(D.Near);
 }
 
@@ -10167,7 +10192,7 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 		Orbit.AddPitch(LookPitch * OrbitSens * (bOrbitInvertY ? -1.0 : 1.0));   // clamped, not wrapped
 		Orbit.Pan(MoveRight * DeltaSeconds * 120.0, MoveUp * DeltaSeconds * 120.0);
 
-		ApplyOrbitToCamera();
+		ApplyOrbitToCamera(DeltaSeconds);
 	}
 	else if (CameraMode == ETUCameraMode::Rider)
 	{
