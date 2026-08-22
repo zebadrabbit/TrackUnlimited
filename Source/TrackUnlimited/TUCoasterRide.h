@@ -2018,6 +2018,16 @@ public:
 	void MenuAction(int32 Action);
 	friend class UTUMenuWidget;   // ponytail: reads Session and the track lists directly rather than through accessors
 	friend class UTUSegmentEditorWidget;
+	/** The console and the graph, as a command list for UTUPaintedPanelWidget to replay. */
+	void RecordPaintedPanels(TArray<struct FTUPanelCmd>& Out, float SizeY, float Scale);
+	/** THE PAINTED PANELS LIVE IN SLATE UNITS, the mouse in pixels, and at 900 px
+	 *  tall the DPI curve puts them 17% apart. Every hit test against a rect the
+	 *  paint recorded reads the mouse through this. */
+	bool PanelMouse(float& Mx, float& My) const;
+	float PaintedScale = 1.f;
+	float PaintedSizeY = 0.f;
+	void ShowPaintedWidget(bool bShow);
+	UPROPERTY(Transient) TObjectPtr<class UTUPaintedPanelWidget> PaintedWidget;
 	/** One editor row clicked: EEditField as int, or -1000-n for segment n. Shift extends the selection. */
 	void EditorAction(int32 Action, bool bShift);
 	static const TCHAR* KindNameOf(ETUSegmentKind K);

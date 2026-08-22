@@ -6,6 +6,9 @@
 #include "UI/TUFrameWidget.h"
 #include "UI/TUMenuWidget.h"
 #include "UI/TUSegmentEditorWidget.h"
+#include "UI/TUPaintedPanelWidget.h"
+#include "Framework/Application/SlateApplication.h"
+#include "Fonts/FontMeasure.h"
 #include "UI/TUStyle.h"
 #include "Framework/Application/NavigationConfig.h"
 #include "Framework/Application/SlateApplication.h"
@@ -184,10 +187,26 @@ namespace
 	// like debug output.
 	UFont* PanelFont() { return GEngine->GetMediumFont(); }
 
+	// ===================== THE RECORDER =====================
+	//
+	// While UTUPaintedPanelWidget is painting, the four primitives below append
+	// to this list instead of drawing; the widget replays it. Null otherwise, and
+	// then they draw on the canvas exactly as before. See that widget's header.
+	TArray<FTUPanelCmd>* GPanelRecord = nullptr;
+	float GPanelSizeY = 0.f;
+	float PanelSizeY(UCanvas* C) { return GPanelRecord ? GPanelSizeY : static_cast<float>(C->SizeY); }
+
 	// MEASURED, NOT ESTIMATED. Every tile behind a line of text was sized as
 	// `Len * 6.2`, which was a guess for one font and is wrong for any other.
 	float PanelTextWidth(UCanvas* C, const FString& S)
 	{
+		if (GPanelRecord)
+		{
+			// Measured in the font the widget will DRAW in, which is the only
+			// measurement that makes a tile fit the text on it.
+			return static_cast<float>(FSlateApplication::Get().GetRenderer()->GetFontMeasureService()
+				->Measure(S, FTUStyle::Get().GetFontStyle("Font.Small")).X);
+		}
 		float W = 0.f, H = 0.f;
 		C->TextSize(PanelFont(), S, W, H);
 		return W;
@@ -195,6 +214,7 @@ namespace
 
 	void PanelTile(UCanvas* C, float X, float Y, float W, float H, const FLinearColor& Col)
 	{
+		if (GPanelRecord) { GPanelRecord->Add({FTUPanelCmd::Tile, FVector2D(X, Y), FVector2D(W, H), Col}); return; }
 		FCanvasTileItem Tile(FVector2D(X, Y), FVector2D(W, H), Col);
 		Tile.BlendMode = SE_BLEND_Translucent;
 		C->DrawItem(Tile);
@@ -202,6 +222,7 @@ namespace
 
 	void PanelLabel(UCanvas* C, float X, float Y, const FString& S, const FLinearColor& Col)
 	{
+		if (GPanelRecord) { GPanelRecord->Add({FTUPanelCmd::Label, FVector2D(X, Y), FVector2D::ZeroVector, Col, S}); return; }
 		FCanvasTextItem Item(FVector2D(X, Y), FText::FromString(S), PanelFont(), Col);
 		Item.EnableShadow(FLinearColor::Black);
 		C->DrawItem(Item);
@@ -211,6 +232,7 @@ namespace
 	// across a room. Everything else stays at the body size.
 	void PanelLabelBig(UCanvas* C, float X, float Y, const FString& S, const FLinearColor& Col)
 	{
+		if (GPanelRecord) { GPanelRecord->Add({FTUPanelCmd::BigLabel, FVector2D(X, Y), FVector2D::ZeroVector, Col, S}); return; }
 		FCanvasTextItem Item(FVector2D(X, Y), FText::FromString(S), PanelFont(), Col);
 		Item.Scale = FVector2D(1.6f, 1.6f);   // the engine's "large" font is barely larger
 		Item.EnableShadow(FLinearColor::Black);
@@ -224,6 +246,7 @@ namespace
 	void PanelLine(UCanvas* C, float X0, float Y0, float X1, float Y1,
 		const FLinearColor& Col, float Thickness = 1.f)
 	{
+		if (GPanelRecord) { GPanelRecord->Add({FTUPanelCmd::Line, FVector2D(X0, Y0), FVector2D(X1, Y1), Col, FString(), Thickness}); return; }
 		FCanvasLineItem Item(FVector2D(X0, Y0), FVector2D(X1, Y1));
 		Item.SetColor(Col);
 		Item.LineThickness = Thickness;
@@ -3403,7 +3426,7 @@ void ATUCoasterRide::ClickPrimary()
 	if (APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr)
 	{
 		float Cx = 0.f, Cy = 0.f;
-		if (PC->GetMousePosition(Cx, Cy) && (PressConsole(Cx, Cy) || PressGraph(Cx, Cy)))
+		if (PanelMouse(Cx, Cy) && (PressConsole(Cx, Cy) || PressGraph(Cx, Cy)))
 		{
 			return;
 		}
@@ -3760,6 +3783,56 @@ void ATUCoasterRide::MenuAction(int32 Action)
 			}
 		}
 	}
+}
+
+bool ATUCoasterRide::PanelMouse(float& Mx, float& My) const
+{
+	APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr;
+	if (!PC || !PC->GetMousePosition(Mx, My)) { return false; }
+	Mx /= PaintedScale;
+	My /= PaintedScale;
+	return true;
+}
+
+void ATUCoasterRide::RecordPaintedPanels(TArray<FTUPanelCmd>& Out, float SizeY, float Scale)
+{
+	GPanelRecord = &Out;
+	GPanelSizeY = SizeY;
+	PaintedSizeY = SizeY;
+	PaintedScale = Scale > 0.f ? Scale : 1.f;
+	// The console first, because the graph places itself above wherever the
+	// console's top edge landed -- the same order DrawPanels kept.
+	ConsolePanelTopY = 1.0e9f;
+	DrawConsole(nullptr);
+	DrawProfileGraph(nullptr);
+	GPanelRecord = nullptr;
+}
+
+void ATUCoasterRide::ShowPaintedWidget(bool bShow)
+{
+	if (!bShow)
+	{
+		if (PaintedWidget) { PaintedWidget->RemoveFromParent(); }
+		// A CONSOLE THAT IS NOT DRAWN HAS NO BUTTONS: the rect lists are filled
+		// by the paint, and would otherwise outlive it.
+		ConsoleRects.Reset();
+		ConsoleAction.Reset();
+		return;
+	}
+	if (!PaintedWidget)
+	{
+		APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr;
+		if (!PC) { return; }
+		PaintedWidget = CreateWidget<UTUPaintedPanelWidget>(PC, UTUPaintedPanelWidget::StaticClass());
+		if (!PaintedWidget) { return; }
+		PaintedWidget->Ride = this;
+		// ON THE USER WIDGET, not only the leaf inside it: the wrapper Slate
+		// makes for a UUserWidget is what the hit test meets first.
+		PaintedWidget->SetVisibility(ESlateVisibility::HitTestInvisible);
+	}
+	// Under the menu and the editor, above the frame; full-screen and hit-test
+	// invisible, so the viewport click still reaches PressConsole and PressGraph.
+	if (!PaintedWidget->IsInViewport()) { PaintedWidget->AddToViewport(5); }
 }
 
 void ATUCoasterRide::ShowEditorWidget(bool bShow)
@@ -6335,13 +6408,8 @@ bool ATUCoasterRide::PressGraph(float Mx, float My)
 		// would be a control that moves the camera to a metre that means nothing.
 		return false;
 	}
-	APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr;
-	if (!PC) { return false; }
-	int32 VpW = 0, VpH = 0;
-	PC->GetViewportSize(VpW, VpH);
-
 	float Gx = 0.f, Gy = 0.f, Gw = 0.f, Gh = 0.f;
-	GraphRect(static_cast<float>(VpH), Gx, Gy, Gw, Gh);
+	GraphRect(PaintedSizeY, Gx, Gy, Gw, Gh);
 	if (Mx < Gx || Mx > Gx + Gw || My < Gy || My > Gy + Gh)
 	{
 		return false;
@@ -6358,17 +6426,13 @@ void ATUCoasterRide::TickScrub()
 	{
 		return;
 	}
-	APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr;
 	float Mx = 0.f, My = 0.f;
-	if (!PC || !PC->GetMousePosition(Mx, My))
+	if (!PanelMouse(Mx, My))
 	{
 		return;
 	}
-
-	int32 VpW = 0, VpH = 0;
-	PC->GetViewportSize(VpW, VpH);
 	float Gx = 0.f, Gy = 0.f, Gw = 0.f, Gh = 0.f;
-	GraphRect(static_cast<float>(VpH), Gx, Gy, Gw, Gh);
+	GraphRect(PaintedSizeY, Gx, Gy, Gw, Gh);
 
 	// NOT CLAMPED TO THE RECTANGLE, deliberately. Dragging off the end of the
 	// graph should pin to the end and keep tracking, the way every scrubber in
@@ -6391,11 +6455,11 @@ void ATUCoasterRide::TickScrub()
 
 void ATUCoasterRide::DrawProfileGraph(UCanvas* Canvas)
 {
-	if (!bShowProfileGraph || !Canvas || !GEngine) { return; }
+	if (!bShowProfileGraph || !GEngine) { return; }
 
 	const std::vector<FRideSample>& Sample = Profile_.Samples;
 	float Ox = 0.f, Oy = 0.f, Wx = 0.f, Hy = 0.f;
-	GraphRect(static_cast<float>(Canvas->SizeY), Ox, Oy, Wx, Hy);
+	GraphRect(PanelSizeY(Canvas), Ox, Oy, Wx, Hy);
 
 	PanelTile(Canvas, Ox - 8.f, Oy - 24.f, Wx + 56.f, Hy + 58.f, PanelGround);   // +40 for the axis labels on the right
 
@@ -6486,10 +6550,7 @@ void ATUCoasterRide::DrawProfileGraph(UCanvas* Canvas)
 		const float X1 = Ox + static_cast<float>(Sample[i + 1].S / Total) * Wx;
 		const float Y0 = Oy + Hy - static_cast<float>(Axis.Fraction(Values[i])) * Hy;
 		const float Y1 = Oy + Hy - static_cast<float>(Axis.Fraction(Values[i + 1])) * Hy;
-		FCanvasLineItem Line(FVector2D(X0, Y0), FVector2D(X1, Y1));
-		Line.SetColor(Ink);
-		Line.LineThickness = 1.6f;
-		Canvas->DrawItem(Line);
+		PanelLine(Canvas, X0, Y0, X1, Y1, Ink, 1.6f);
 	}
 
 	// ---- The scrubber, and the train's own position on it.
@@ -6644,11 +6705,10 @@ void ATUCoasterRide::DrawPanels(UCanvas* Canvas)
 
 	// The console first, because the graph places itself above wherever the
 	// console's top edge landed this frame.
-	ConsolePanelTopY = 1.0e9f;
-	DrawConsole(Canvas);
+	// The console and the graph are PAINTED by UTUPaintedPanelWidget now, below
+	// this canvas; see RecordPaintedPanels.
 	DrawModeBanner(Canvas);
 	DrawTelemetry(Canvas);
-	DrawProfileGraph(Canvas);
 	DrawDiagnosticsPanel(Canvas);
 }
 
@@ -6679,7 +6739,7 @@ void ATUCoasterRide::DrawTelemetry(UCanvas* Canvas)
 
 void ATUCoasterRide::DrawConsole(UCanvas* Canvas)
 {
-	if (PanelView == ETUPanelView::Off || !Canvas || !Signals || !Drives || !GEngine)
+	if (PanelView == ETUPanelView::Off || !Signals || !Drives || !GEngine)
 	{
 		return;
 	}
@@ -6723,7 +6783,7 @@ void ATUCoasterRide::DrawConsole(UCanvas* Canvas)
 
 	const float X = 16.f;
 	// 40 from the bottom, not 16: the frame's status line lives there.
-	const float Y = FMath::Max(16.f, Canvas->SizeY - H - 40.f);
+	const float Y = FMath::Max(16.f, PanelSizeY(Canvas) - H - 40.f);
 	ConsolePanelTopY = Y;
 
 	PanelTile(Canvas, X, Y, W, H, PanelGround);
@@ -9681,9 +9741,11 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 	// kept taking clicks under them would answer a question nobody asked it.
 	// THE EDITOR FOLLOWS ITS FLAG, which [B], [U] and the mode switch all flip
 	// from different places; syncing here is one line against four call sites.
-	ShowEditorWidget(bShowSegmentEditor && !bHideOverlays
+	const bool bPanelsUp = !bHideOverlays
 		&& Session.Mode() != EAppMode::Boot && Session.Mode() != EAppMode::MainMenu
-		&& !(FrameWidget && FrameWidget->IsSettingsOpen()));
+		&& !(FrameWidget && FrameWidget->IsSettingsOpen());
+	ShowEditorWidget(bShowSegmentEditor && bPanelsUp);
+	ShowPaintedWidget(bPanelsUp);
 	if (MenuWidget && MenuWidget->IsInViewport())
 	{
 		const bool bAsking = bConfirmingMenu || Session.HasRecovery();
