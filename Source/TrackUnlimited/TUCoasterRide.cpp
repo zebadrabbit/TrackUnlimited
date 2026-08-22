@@ -4,6 +4,7 @@
 #include "RenderCore.h"                 // SetNearClipPlaneGlobals
 #include "Blueprint/UserWidget.h"
 #include "UI/TUFrameWidget.h"
+#include "UI/TUMenuWidget.h"
 #include "UI/TUStyle.h"
 #include "Framework/Application/NavigationConfig.h"
 #include "Framework/Application/SlateApplication.h"
@@ -3422,186 +3423,6 @@ void ATUCoasterRide::DrawRecoveryOffer(UCanvas* Canvas)
 	PanelLabel(Canvas, Ox + 180.f, Y, TEXT("[ Discard it ]"), PanelAmber);
 }
 
-void ATUCoasterRide::DrawMainMenu(UCanvas* Canvas)
-{
-	if (!Canvas || !GEngine || Session.Mode() != EAppMode::MainMenu) { return; }
-
-	MenuRowRects.Reset();
-	MenuRowAction.Reset();
-
-	const float W = 620.f;
-	const float Row = 20.f;
-	const float Ox = 60.f;
-	float Y = 80.f;
-
-	// ===================== A TRACK ROW IS TALLER THAN A COMMAND ROW =====================
-	//
-	// Because it carries a picture, and 20 px of plan view is a smudge. The list
-	// is READ ahead of the panel rather than in the middle of it, so the panel can
-	// be as tall as what is going in it -- the 460 that stood here was a constant
-	// that a taller row silently overflowed, and a menu whose last two entries are
-	// outside its own background is the kind of thing nobody reports because it
-	// looks deliberate.
-	const std::vector<FTrackEntry> Rows = FTrackBrowser::Rows(KnownTracks, TrackPaths);
-	const float TrackRow = 34.f;
-	const float ThumbSize = 28.f;
-	// A template row is taller than a track row because its picture is the
-	// reason to pick it, where a track row's is a reminder of something already
-	// chosen once.
-	const float TemplateRow = 52.f;
-	const float TemplateThumb = 44.f;
-	const float BodyH = 190.f + static_cast<float>(NumTemplates()) * TemplateRow
-		+ (Rows.empty() ? Row : static_cast<float>(Rows.size()) * TrackRow);
-
-	PanelTile(Canvas, Ox - 20.f, 50.f, W + 40.f, BodyH, PanelGround);
-	PanelLabel(Canvas, Ox, 56.f, TEXT("TRACKUNLIMITED"), PanelCyan);
-	// AN OSS PROJECT'S MENU IS FREE ADVERTISING FOR CONTRIBUTION, and a version
-	// string is the first thing anybody filing a bug is asked for.
-	PanelLabel(Canvas, Ox + 200.f, 58.f,
-		TEXT("free and open source  ·  github.com/zebadrabbit/TrackUnlimited"), PanelDim);
-
-	// ---- START FROM A TEMPLATE.
-	//
-	// NOT AN EMPTY LIST. The first edit should be changing a number on something
-	// that already runs, not authoring geometry from nothing — a completely
-	// different and much harder first task.
-	PanelLabel(Canvas, Ox, Y, TEXT("START"), PanelDim);
-	Y += Row;
-	for (std::size_t i = 0; i < NumTemplates(); ++i)
-	{
-		const FTemplate T = TemplateAt(i);
-		MenuRowRects.Add(FVector4(Ox, Y, Ox + W, Y + TemplateRow));
-		MenuRowAction.Add(static_cast<int32>(i));
-
-		// THE SHAPE, drawn from the preset's own walk. Blank has none and shows
-		// an empty frame, which is an honest picture of it.
-		const float Tx = Ox + 10.f;
-		const float Ty = Y + (TemplateRow - TemplateThumb) * 0.5f;
-		PanelTile(Canvas, Tx, Ty, TemplateThumb, TemplateThumb, PanelRule);
-		if (TemplatePlans.IsValidIndex(static_cast<int32>(i)))
-		{
-			const std::vector<float>& Pl = TemplatePlans[static_cast<int32>(i)];
-			for (std::size_t p = 0; p + 3 < Pl.size(); p += 2)
-			{
-				PanelLine(Canvas,
-					Tx + 3.f + Pl[p] * (TemplateThumb - 6.f),
-					Ty + 3.f + (1.f - Pl[p + 1]) * (TemplateThumb - 6.f),
-					Tx + 3.f + Pl[p + 2] * (TemplateThumb - 6.f),
-					Ty + 3.f + (1.f - Pl[p + 3]) * (TemplateThumb - 6.f),
-					PanelCyan);
-			}
-		}
-
-		const float Lx = Ox + 10.f + TemplateThumb + 12.f;
-		PanelLabel(Canvas, Lx, Y + 9.f, UTF8_TO_TCHAR(T.Name), PanelText);
-		// ONE LINE OF DESCRIPTION, CLIPPED TO THE PANEL. These ran out past the
-		// right edge and across the viewport; the full text is the template's to
-		// keep, the row gets what fits.
-		FString Desc(UTF8_TO_TCHAR(T.Description));
-		while (Desc.Len() > 4 && PanelTextWidth(Canvas, Desc) > W - (Lx - Ox) - 12.f)
-		{
-			Desc = Desc.Left(Desc.Len() - 4) + TEXT("...");
-		}
-		PanelLabel(Canvas, Lx, Y + 26.f, Desc, PanelDim);
-		Y += TemplateRow;
-	}
-
-	// ---- TRACKS: what has been opened recently, then whatever else is in the
-	// folder. Merged rather than two lists, because "have I got this one" is one
-	// question and answering it in two places is how somebody misses a row.
-	Y += 10.f;
-	PanelLabel(Canvas, Ox, Y, TEXT("TRACKS"), PanelDim);
-	Y += Row;
-
-	// KNOWN entries are passed to `Rows` above — they were not, once, and `Rows`
-	// marks anything it has no entry for as MISSING, so every recent track,
-	// however present and readable, was labelled as being on a disconnected drive.
-	if (Rows.empty())
-	{
-		PanelLabel(Canvas, Ox + 12.f, Y,
-			UTF8_TO_TCHAR(EmptyStateFor(EPanelKind::RecentTracks)), PanelDim);
-		Y += Row;
-	}
-	for (std::size_t i = 0; i < Rows.size(); ++i)
-	{
-		const FTrackEntry& E = Rows[i];
-		MenuRowRects.Add(FVector4(Ox, Y, Ox + W, Y + TrackRow));
-		MenuRowAction.Add(-1000 - static_cast<int32>(i));
-
-		// ===================== THE PICTURE IS THE TRACK, NOT A PICTURE OF IT =====================
-		//
-		// Drawn from the plan view the list already walked, so it is right for a
-		// track saved by another machine, one that has never been opened, and one
-		// edited five seconds ago — none of which a stored image can claim.
-		//
-		// A ROW WITH NO PICTURE IS A ROW SAYING SOMETHING. Missing and broken
-		// entries have no geometry to draw, and drawing a placeholder box would
-		// make the two states look the same from across the screen; the empty
-		// frame IS the tell, and the subtitle beside it says which.
-		const float Tx = Ox + 10.f;
-		const float Ty = Y + (TrackRow - ThumbSize) * 0.5f;
-		PanelTile(Canvas, Tx, Ty, ThumbSize, ThumbSize, PanelRule);
-		for (std::size_t p = 0; p + 3 < E.Plan.size(); p += 2)
-		{
-			// Y IS FLIPPED, because a canvas grows downward and a plan view does
-			// not. Without it every layout is drawn mirrored — which still looks
-			// like a coaster, which is exactly why it would have shipped.
-			PanelLine(Canvas,
-				Tx + 2.f + E.Plan[p] * (ThumbSize - 4.f),
-				Ty + 2.f + (1.f - E.Plan[p + 1]) * (ThumbSize - 4.f),
-				Tx + 2.f + E.Plan[p + 2] * (ThumbSize - 4.f),
-				Ty + 2.f + (1.f - E.Plan[p + 3]) * (ThumbSize - 4.f),
-				E.IsUsable() ? PanelCyan : PanelAmber);
-		}
-
-		// A MISSING FILE IS STILL LISTED AND STILL CLICKABLE, because the
-		// commonest cause is an unplugged drive and "reconnect it and click
-		// again" only works if it is still there to click. It is dimmed and it
-		// says which kind of problem it is — one is "plug the drive back in" and
-		// the other is "line 12 is wrong".
-		PanelLabel(Canvas, Ox + 48.f, Y + 4.f, UTF8_TO_TCHAR(E.Name.c_str()),
-			E.IsUsable() ? PanelText : PanelAmber);
-		PanelLabel(Canvas, Ox + 48.f, Y + 18.f,
-			UTF8_TO_TCHAR(FTrackBrowser::Subtitle(E).c_str()), PanelDim);
-		Y += TrackRow;
-	}
-
-	// ---- OPEN, and quit.
-	Y += 10.f;
-	MenuRowRects.Add(FVector4(Ox, Y, Ox + W, Y + Row));
-	MenuRowAction.Add(-1);
-	// THE ROW SAYS WHICH ACTION IT IS. In a packaged build it opens a folder
-	// rather than a file dialog, and a control labelled as the thing it is not
-	// is worse than one labelled plainly.
-#if WITH_EDITOR
-	PanelLabel(Canvas, Ox + 12.f, Y, TEXT("Open a track file..."), PanelText);
-#else
-	PanelLabel(Canvas, Ox + 12.f, Y,
-		TEXT("Open the tracks folder...   (drop a .track in it and it appears here)"),
-		PanelText);
-#endif
-	Y += Row;
-
-	// ---- SETTINGS AND QUIT, which the card names and which a first screen has
-	// to have: the two things somebody does here that are not opening a track.
-	MenuRowRects.Add(FVector4(Ox, Y, Ox + W, Y + Row));
-	MenuRowAction.Add(-8);
-	PanelLabel(Canvas, Ox + 12.f, Y, TEXT("Settings"), PanelText);
-	Y += Row;
-	MenuRowRects.Add(FVector4(Ox, Y, Ox + W, Y + Row));
-	MenuRowAction.Add(-9);
-	// QUIT IS LAST AND SAYS WHAT IT CHECKS. It is the only control here that
-	// can lose work, and a menu whose exit reads like its other rows is one
-	// somebody leaves by accident.
-	PanelLabel(Canvas, Ox + 12.f, Y, Session.IsDirty()
-		? TEXT("Quit  -  there is unsaved work")
-		: TEXT("Quit"), Session.IsDirty() ? PanelAmber : PanelText);
-	Y += Row + 8.f;
-	PanelLabel(Canvas, Ox, Y,
-		TEXT("click to choose   ·   [Tab] once a track is open   ·   [M] back here"),
-		PanelDim);
-}
-
 void ATUCoasterRide::DrawDragAnswer(UCanvas* Canvas)
 {
 	if (!Canvas || !GEngine || DragAnswerSeconds <= 0.0)
@@ -3782,8 +3603,8 @@ void ATUCoasterRide::ClickPrimary()
 	// and answering it is the only way out of Boot.
 	if (Session.HasRecovery()) { ClickLeaveConfirm(); return; }
 	if (bConfirmingMenu) { ClickLeaveConfirm(); return; }
-	// The menu owns the click while it is up; everything else is the editor's.
-	if (Session.Mode() == EAppMode::MainMenu) { ClickMainMenu(); return; }
+	// The menu is a widget and takes its own clicks; nothing under it is live.
+	if (Session.Mode() == EAppMode::MainMenu) { return; }
 
 	if (APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr)
 	{
@@ -4051,20 +3872,13 @@ void ATUCoasterRide::ClickLeaveConfirm()
 	}
 }
 
-void ATUCoasterRide::ClickMainMenu()
+void ATUCoasterRide::MenuAction(int32 Action)
 {
-	APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr;
-	if (!PC || Session.Mode() != EAppMode::MainMenu) { return; }
-
-	float Mx = 0.f, My = 0.f;
-	if (!PC->GetMousePosition(Mx, My)) { return; }
-
-	for (int32 i = 0; i < MenuRowRects.Num() && i < MenuRowAction.Num(); ++i)
+	if (Session.Mode() != EAppMode::MainMenu) { return; }
+	// NOT WHILE A QUESTION IS UP: the confirm and the recovery offer are still
+	// canvas, drawn over the widget, and a button under them must not answer.
+	if (bConfirmingMenu || Session.HasRecovery()) { return; }
 	{
-		const FVector4& R = MenuRowRects[i];
-		if (Mx < R.X || Mx > R.Z || My < R.Y || My > R.W) { continue; }
-
-		const int32 Action = MenuRowAction[i];
 		if (Action >= 0)
 		{
 			StartFromTemplate(Action);
@@ -4167,8 +3981,31 @@ void ATUCoasterRide::ClickMainMenu()
 				}
 			}
 		}
+	}
+}
+
+void ATUCoasterRide::ShowMenuWidget(bool bShow)
+{
+	if (!bShow)
+	{
+		if (MenuWidget) { MenuWidget->RemoveFromParent(); }
 		return;
 	}
+	if (!MenuWidget)
+	{
+		APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr;
+		if (!PC) { return; }
+		// A NATIVE CLASS, NO ASSET: every row is a live read, so there is nothing
+		// for an asset to hold. Created once and re-added, because rebuilding a
+		// widget tree on every [M] is work for no change.
+		MenuWidget = CreateWidget<UTUMenuWidget>(PC, UTUMenuWidget::StaticClass());
+		if (!MenuWidget) { return; }
+		MenuWidget->Ride = this;
+	}
+	// ABOVE THE FRAME, which is full-screen and hit-testable (it has to be, or the
+	// mouse is lost at the menu) and is created after this on the boot path.
+	if (!MenuWidget->IsInViewport()) { MenuWidget->AddToViewport(10); }
+	MenuWidget->Rebuild();
 }
 
 void ATUCoasterRide::OpenMainMenu()
@@ -4376,6 +4213,7 @@ void ATUCoasterRide::ApplyAppMode(EAppMode Want)
 	switch (Want)
 	{
 	case EAppMode::Operate:
+		ShowMenuWidget(false);
 		PanelView = ETUPanelView::Operator;
 		// THE STATION, not a chase. Chase follows a train around the ride; the
 		// question in Operate is "may this train go", and that is asked and
@@ -4385,6 +4223,7 @@ void ATUCoasterRide::ApplyAppMode(EAppMode Want)
 		FrameStation();
 		break;
 	case EAppMode::Ride:
+		ShowMenuWidget(false);
 		PanelView = ETUPanelView::Off;
 		CameraMode = ETUCameraMode::Rider;
 		bShowSegmentEditor = false;   // a list of segments is not a view from a seat; [B] brings it back
@@ -4425,6 +4264,7 @@ void ATUCoasterRide::ApplyAppMode(EAppMode Want)
 		{
 			FrameWidget->CloseSettings();
 		}
+		ShowMenuWidget(true);
 
 		// Framed from a little above the horizon and turning slowly (see the
 		// orbit branch of Tick). Framed here rather than on the first tick so the
@@ -4450,6 +4290,7 @@ void ATUCoasterRide::ApplyAppMode(EAppMode Want)
 		// said "edit the numbers" over a viewport with no numbers on it. [B] still
 		// hides it again.
 		if (Want == EAppMode::Build) { bShowSegmentEditor = true; }
+		ShowMenuWidget(false);
 		if (FrameWidget)
 		{
 			// A SETTINGS PAGE LEFT OPEN ACROSS A MODE CHANGE IS A STUCK MENU. It
@@ -5341,6 +5182,7 @@ void ATUCoasterRide::RefreshTrackList()
 		E.Plan = PlanThumb(Plan);
 		KnownTracks.push_back(E);
 	}
+	if (MenuWidget && MenuWidget->IsInViewport()) { MenuWidget->Rebuild(); }
 }
 
 FString ATUCoasterRide::RecentListPath() const
@@ -6947,10 +6789,9 @@ void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/
 		DrawPanels(Canvas);
 	}
 
-	// THE MENU IS NOT AN OVERLAY, so [U] leaves it alone — hiding it would strand
-	// somebody on a screen whose only controls are the ones just hidden. It is up
-	// here for that as much as for the z-order.
-	DrawMainMenu(Canvas);
+	// THE MENU IS UMG NOW (UTUMenuWidget), below this canvas; the confirm and
+	// the recovery offer still draw here, above it, and it is made hit-test
+	// invisible while either is up (see Tick).
 	DrawDragAnswer(Canvas);
 	// ABOVE THE MENU, because nothing may be opened while it is up: opening a
 	// document is what would overwrite the evidence, and the session refuses to
@@ -10039,6 +9880,18 @@ void ATUCoasterRide::ApplyOrbitToCamera(double DeltaSeconds)
 void ATUCoasterRide::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+
+	// THE MENU YIELDS TO A QUESTION. The confirm, the recovery offer and the
+	// settings page are above it (canvas, or the frame's slot); a widget that
+	// kept taking clicks under them would answer a question nobody asked it.
+	if (MenuWidget && MenuWidget->IsInViewport())
+	{
+		const bool bAsking = bConfirmingMenu || Session.HasRecovery();
+		const bool bSettings = FrameWidget && FrameWidget->IsSettingsOpen();
+		MenuWidget->SetVisibility(bSettings ? ESlateVisibility::Collapsed
+			: bAsking ? ESlateVisibility::HitTestInvisible
+			: ESlateVisibility::SelfHitTestInvisible);
+	}
 
 	// ===================== AUTOSAVE, WHICH NOW HAS SOMEBODY TO TELL =====================
 	//

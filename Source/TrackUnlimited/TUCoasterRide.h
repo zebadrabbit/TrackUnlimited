@@ -1985,8 +1985,8 @@ private:
 	void WriteField(FTUTrackSegment& S, EEditField F, double V);
 	static EEditKind KindOf(ETUSegmentKind K);
 
-	void DrawMainMenu(class UCanvas* Canvas);
-	void ClickMainMenu();
+	void ShowMenuWidget(bool bShow);
+	UPROPERTY(Transient) TObjectPtr<class UTUMenuWidget> MenuWidget;
 
 	/**
 	 * ONE BINDING FOR THE LEFT MOUSE, dispatching by mode.
@@ -2013,6 +2013,9 @@ private:
 	// command are the whole surface a frame widget needs, and naming that
 	// surface is cheaper than making the class public and hoping.
 public:
+	/** One menu row chosen: >=0 template, -1 open, -8 settings, -9 quit, -1000-i track. The UMG menu calls this. */
+	void MenuAction(int32 Action);
+	friend class UTUMenuWidget;   // ponytail: reads Session and the track lists directly rather than through accessors
 	/**
 	 * Enter a mode directly — what a clicked tab calls, where [Tab] calls
 	 * CycleAppMode. BOTH GO THROUGH ApplyAppMode, so the keyboard and the mouse
