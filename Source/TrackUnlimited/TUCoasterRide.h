@@ -38,6 +38,7 @@
 #include "Shell/Settings.h"
 #include "Shell/TrackBrowser.h"
 #include "TrackMesh/TrackCatwalk.h"
+#include "TrackMesh/TrackDevices.h"
 #include "TrackMesh/TrackSupports.h"
 #include "TrackMesh/TrainMesh.h"
 #include "BlockSignal/ShowBus.h"
@@ -661,6 +662,24 @@ private:
 	bool bBuildCatwalks = true;
 
 	/**
+	 * DEVICE HARDWARE: what makes a zone LOOK like one. Chain and dog rail on a
+	 * lift, fins on a brake, fins AND tyres on a block brake or station, stators
+	 * on a launch -- derived from the zone walk, so it cannot disagree with the
+	 * physics about where a device is. Two sections: painted steel, and the dark
+	 * parts (tread, pads, chain, magnet faces). See TrackMesh/TrackDevices.h.
+	 */
+	UPROPERTY(VisibleAnywhere, Category = "TrackUnlimited|Mesh")
+	TObjectPtr<class UProceduralMeshComponent> DeviceSteelMesh;
+	UPROPERTY(VisibleAnywhere, Category = "TrackUnlimited|Mesh")
+	TObjectPtr<class UProceduralMeshComponent> DeviceRubberMesh;
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Mesh")
+	bool bBuildDeviceHardware = true;
+	/** The anti-rollback spans the last rebuild derived, kept for the hardware pass. */
+	TArray<TPair<double, double>> CatchSpanList;
+	/** Triangles the last hardware build produced, for the smoke test. */
+	int32 DeviceTriangles = 0;
+
+	/**
 	 * WHICH SIDE A PRESET PUTS ITS CATWALKS ON. It was hardcoded to Both, and the
 	 * argument for that read well and did not survive being looked at: every
 	 * powered run on every shipped ride got a deck and a handrail down both
@@ -871,6 +890,8 @@ private:
 	TObjectPtr<class UMaterialInstanceDynamic> CatwalkDeckMaterial;
 	UPROPERTY(Transient)
 	TObjectPtr<class UMaterialInstanceDynamic> CatwalkRailMaterial;
+	UPROPERTY(Transient) TObjectPtr<class UMaterialInstanceDynamic> DeviceSteelMaterial;
+	UPROPERTY(Transient) TObjectPtr<class UMaterialInstanceDynamic> DeviceRubberMaterial;
 	UPROPERTY(Transient)
 	TObjectPtr<class UMaterialInstanceDynamic> TrainBodyMaterial;
 	UPROPERTY(Transient)

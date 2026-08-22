@@ -126,6 +126,8 @@ ATUCoasterRide::ATUCoasterRide()
 	SupportMesh = MakeTrackMesh(TEXT("SupportMesh"));
 	CatwalkDeckMesh = MakeTrackMesh(TEXT("CatwalkDeckMesh"));
 	CatwalkRailMesh = MakeTrackMesh(TEXT("CatwalkRailMesh"));
+	DeviceSteelMesh = MakeTrackMesh(TEXT("DeviceSteelMesh"));
+	DeviceRubberMesh = MakeTrackMesh(TEXT("DeviceRubberMesh"));
 
 	// AND THE TRAIN. Four more, for the same reason and on the same terms: four
 	// materials, no collision. These are the only ones that move every frame,
@@ -1486,6 +1488,7 @@ void ATUCoasterRide::RebuildFromSegments()
 		{
 			CatchSpans.Add(TPair<double, double>(CatchStartS, AccS));
 		}
+		CatchSpanList = CatchSpans;
 
 		// THE AUTHORED WALKWAYS, converted rather than derived. A person placed
 		// these; this only turns start/stop/side into what the evacuation check
@@ -5392,6 +5395,21 @@ bool ATUCoasterRide::RunDocumentSmokeTest()
 				Walkways.Num(), WalkwaySideName(PresetWalkwaySide), Catwalked);
 		}
 
+		// AND EVERY DEVICE IS DRESSED. A launch, a station and brakes are on this
+		// template; hardware on none of them is the gap this closes, and a
+		// rebuild that produced no triangles would be silent from the cockpit.
+		if (DeviceTriangles <= 0 || CatchSpanList.Num() == 0)
+		{
+			UE_LOG(LogTUEvents, Error, TEXT("smoke: device hardware is missing (%d triangles, %d catch spans)"),
+				DeviceTriangles, CatchSpanList.Num());
+			Failures.Add(TEXT("device hardware"));
+		}
+		else
+		{
+			UE_LOG(LogTUEvents, Log, TEXT("smoke: %d zones and %d anti-rollback spans wear their hardware, %d triangles"),
+				ZoneSpans.Num(), CatchSpanList.Num(), DeviceTriangles);
+		}
+
 		// ===================== AND NONE AUTHORS NOTHING =====================
 		//
 		// The branch worth checking, because the other settings differ only in
@@ -8707,6 +8725,8 @@ void ATUCoasterRide::ApplyTrackStyle()
 	Paint(SupportMaterial, SupportMesh, S.SupportColour);
 	Paint(CatwalkDeckMaterial, CatwalkDeckMesh, FLinearColor(0.16f, 0.17f, 0.18f));
 	Paint(CatwalkRailMaterial, CatwalkRailMesh, FLinearColor(0.85f, 0.62f, 0.08f));
+	Paint(DeviceSteelMaterial, DeviceSteelMesh, S.SupportColour);
+	Paint(DeviceRubberMaterial, DeviceRubberMesh, FLinearColor(0.06f, 0.06f, 0.06f));
 	Paint(TrainBodyMaterial, TrainBodyMesh, S.TrainColour);
 	Paint(TrainChassisMaterial, TrainChassisMesh, FLinearColor(0.10f, 0.11f, 0.12f));
 	Paint(TrainWheelMaterial, TrainWheelMesh, FLinearColor(0.05f, 0.05f, 0.05f));
@@ -8898,6 +8918,8 @@ void ATUCoasterRide::RebuildTrackMesh()
 		if (SupportMesh) { SupportMesh->ClearAllMeshSections(); }
 		if (CatwalkDeckMesh) { CatwalkDeckMesh->ClearAllMeshSections(); }
 		if (CatwalkRailMesh) { CatwalkRailMesh->ClearAllMeshSections(); }
+		if (DeviceSteelMesh) { DeviceSteelMesh->ClearAllMeshSections(); }
+		if (DeviceRubberMesh) { DeviceRubberMesh->ClearAllMeshSections(); }
 		return;
 	}
 
@@ -8991,6 +9013,45 @@ void ATUCoasterRide::RebuildTrackMesh()
 	{
 		if (CatwalkDeckMesh) { CatwalkDeckMesh->ClearAllMeshSections(); }
 		if (CatwalkRailMesh) { CatwalkRailMesh->ClearAllMeshSections(); }
+	}
+
+	// ===================== AND THE HARDWARE THAT MAKES A ZONE A DEVICE =====================
+	//
+	// From the same zone walk the physics and the signalling use, so a brake's
+	// fins are exactly where the brake is. The catch spans are the anti-rollback
+	// list -- the first time that flag has been visible at all.
+	DeviceTriangles = 0;
+	if (bBuildDeviceHardware && (ZoneSpans.Num() > 0 || CatchSpanList.Num() > 0))
+	{
+		std::vector<FTrackDeviceSpan> DevSpans;
+		for (const FTUZoneSpan& Z : ZoneSpans)
+		{
+			FTrackDeviceSpan D;
+			D.StartS = Z.StartS;
+			D.EndS = Z.EndS;
+			D.Hardware = HardwareForZoneName(TCHAR_TO_UTF8(ZoneKindName(Z.Kind)));
+			if (D.Hardware != DeviceNone) { DevSpans.push_back(D); }
+		}
+		for (const TPair<double, double>& C : CatchSpanList)
+		{
+			FTrackDeviceSpan D;
+			D.StartS = C.Key;
+			D.EndS = C.Value;
+			D.Hardware = DeviceCatch;
+			DevSpans.push_back(D);
+		}
+		const FTrackDeviceMesh Dev = BuildDeviceHardware(WalkTrack(Track, Settings.SampleSpacing),
+			DevSpans, Track.GetHeartlineHeight(), Profile);
+		PushMeshSection(DeviceSteelMesh, Dev.Hardware);
+		PushMeshSection(DeviceRubberMesh, Dev.Rubber);
+		DeviceTriangles = static_cast<int32>(Dev.NumTriangles());
+		UE_LOG(LogTemp, Log, TEXT("TrackUnlimited: device hardware %d triangles over %d span(s)"),
+			DeviceTriangles, static_cast<int32>(DevSpans.size()));
+	}
+	else
+	{
+		if (DeviceSteelMesh) { DeviceSteelMesh->ClearAllMeshSections(); }
+		if (DeviceRubberMesh) { DeviceRubberMesh->ClearAllMeshSections(); }
 	}
 
 	// AFTER the sections exist, because SetMaterial on a component with no
