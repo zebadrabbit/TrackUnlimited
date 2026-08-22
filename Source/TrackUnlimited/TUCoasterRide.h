@@ -37,6 +37,7 @@
 #include "Shell/TrackBrowser.h"
 #include "TrackMesh/TrackCatwalk.h"
 #include "TrackMesh/TrackSupports.h"
+#include "TrackMesh/TrainMesh.h"
 #include "BlockSignal/ShowBus.h"
 #include "BlockSignal/SimDigest.h"
 #include "BlockSignal/StationProcess.h"
@@ -657,6 +658,90 @@ private:
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Mesh")
 	bool bBuildCatwalks = true;
 
+	/**
+	 * WHICH SIDE A PRESET PUTS ITS CATWALKS ON. It was hardcoded to Both, and the
+	 * argument for that read well and did not survive being looked at: every
+	 * powered run on every shipped ride got a deck and a handrail down both
+	 * flanks, which is twice the geometry to say the same thing and reads as
+	 * scaffolding rather than as a ride.
+	 *
+	 * ONE SIDE IS THE ORDINARY CASE. A brake run is reached from one walkway; the
+	 * second is what you add where a specific ride needs it, not what you start
+	 * from. `Both` is still here and still one click away.
+	 *
+	 * NONE MEANS A PRESET AUTHORS NO ROUTE AT ALL, which is a different thing from
+	 * unchecking bBuildCatwalks above: that one stops the mesh being DRAWN and
+	 * leaves the route authored, so anything reasoning about whether a stopped
+	 * train can be reached still believes in a walkway nobody can see. This is the
+	 * one that means there is no walkway.
+	 *
+	 * PER-SPAN `Side` STILL WINS. This is only what a preset load stamps on the
+	 * runs it derives; a walkway edited afterwards keeps whatever it was given,
+	 * because nothing but an explicit preset load ever rewrites the list.
+	 */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Mesh")
+	ETUWalkway PresetWalkwaySide = ETUWalkway::Right;
+
+	/**
+	 * ===================== THE TRAIN, WHICH WAS NINE ENGINE CUBES =====================
+	 *
+	 * Four sections because they are four materials — fibreglass shell, painted
+	 * steel chassis, polyurethane wheels, and the couplers between cars. The
+	 * geometry comes from `Prototypes/TrackMesh/TrainMesh.h`, which is engine-free
+	 * and assert-tested; this is only the port.
+	 *
+	 * BUILT FROM `CarCount` AND `CarLengthM`, not from the physics sample points.
+	 * `NumSamplePoints()` is nine because that is what the mean-height gravity
+	 * integration needs, and it has nothing to do with how many vehicles a train
+	 * has. Drawing off it made a 15 m train look accidentally plausible and the 6 m
+	 * small-batch vehicle look like nine playing cards standing on edge.
+	 */
+	UPROPERTY(VisibleAnywhere, Category = "TrackUnlimited|Mesh")
+	TObjectPtr<class UProceduralMeshComponent> TrainBodyMesh;
+
+	UPROPERTY(VisibleAnywhere, Category = "TrackUnlimited|Mesh")
+	TObjectPtr<class UProceduralMeshComponent> TrainChassisMesh;
+
+	UPROPERTY(VisibleAnywhere, Category = "TrackUnlimited|Mesh")
+	TObjectPtr<class UProceduralMeshComponent> TrainWheelMesh;
+
+	UPROPERTY(VisibleAnywhere, Category = "TrackUnlimited|Mesh")
+	TObjectPtr<class UProceduralMeshComponent> TrainCouplerMesh;
+
+	/** Off puts the old instanced cubes back, which is what every screenshot
+	 *  before today was taken with. One click, and the physics is untouched
+	 *  either way — this decides what is DRAWN and nothing else. */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Mesh")
+	bool bBuildTrainMesh = true;
+
+	/** Sides on a wheel. Coarser than the rails deliberately: a wheel is 300 mm
+	 *  across and there are twelve per car. */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Mesh",
+		meta = (ClampMin = "5", ClampMax = "24", EditCondition = "bBuildTrainMesh"))
+	int32 TrainWheelSides = 10;
+
+	/** What the mesh is built from. One answer, so the car geometry and the
+	 *  placement cannot be built from two different ideas of the same train. */
+	FTrainSettings TrainMeshSettings() const;
+
+	/** Per frame, and it is CHEAP BY CONSTRUCTION: the topology never changes
+	 *  while the car count does not, so this updates vertex positions in place
+	 *  rather than recreating a section. Recreating one rebuilds a render proxy,
+	 *  which at frame rate is the whole cost of the feature. */
+	void RebuildTrainMesh();
+
+	/** The walked path the cars are placed along, cached at track rebuild.
+	 *
+	 *  IT HAS TO BE CACHED. `EvaluateAt` is O(track length) a call, and a car
+	 *  centre lands between samples, so placing five cars per train per frame off
+	 *  the track itself is the O(n^2) trap this project keeps unlearning.
+	 *  `FTrain::GetFrameAt` cannot serve either — it returns the NEAREST of the
+	 *  nine sample frames, so cars would snap forward in half-metre steps while
+	 *  the ride ran smoothly underneath them. */
+	std::vector<FTrackFrame> TrainPath;
+	double TrainPathSpacing = 0.5;
+	double TrainPathTotal = 0.0;
+
 	// ===================== THE BRAKES LET GO, AND YOU HEAR IT =====================
 	//
 	// A coaster brake is SPRING-APPLIED AND AIR-RELEASED — fail-safe, which is why
@@ -793,6 +878,13 @@ private:
 
 	void RebuildTrackMesh();
 	void PushMeshSection(class UProceduralMeshComponent* Target, const FMeshBuffer& M) const;
+
+	/** The same push, but UPDATING an existing section when the vertex count has
+	 *  not changed. For the track that would be pointless — it is rebuilt when it
+	 *  changes and not otherwise — and for the train it is the difference between
+	 *  a feature and a frame-rate problem. */
+	void PushOrUpdateMeshSection(class UProceduralMeshComponent* Target,
+		const FMeshBuffer& M) const;
 
 	UPROPERTY(VisibleAnywhere, Category = "TrackUnlimited")
 	TObjectPtr<USceneComponent> Root;
@@ -1552,9 +1644,57 @@ private:
 	 *  one transition that can discard work. */
 	void OpenMainMenu();
 
-	/** [K] — save. A void wrapper because BindKey wants one, and because whether
-	 *  the save succeeded is the log's business rather than the key's. */
-	void SaveDocumentFromKey() { SaveDocument(); }
+	/**
+	 * [K] — save, and SHIFT+[K] — save under a name you type.
+	 *
+	 * ===================== THE FIRST SAVE IS WHERE A NAME BELONGS =====================
+	 *
+	 * An unnamed save used to invent `Untitled-N`, which is the right FALLBACK and
+	 * a poor default: the moment somebody presses save is the moment they know
+	 * what the thing is called, and a folder of Untitled-3 is where tracks go to
+	 * be lost. So [K] asks when there is no path yet, and is silent afterwards —
+	 * which is what every application does and why nobody has to be told.
+	 *
+	 * SHIFT IS ALREADY THE CONTEXT MODIFIER HERE (shift-click extends a selection,
+	 * shift alone is the camera boost), so save-as needs no new key — and a new
+	 * key is what this shell has least of.
+	 *
+	 * AND THE CONFIRM DIALOG'S SAVE STILL DOES NOT ASK. "Save and leave" is an
+	 * emergency preserve-my-work, not a naming moment: a prompt there would mean
+	 * an unanswered question standing between somebody and the exit they already
+	 * chose, and it is the one path whose contract is that it only leaves if the
+	 * save SUCCEEDED. It keeps `Untitled-N`, which is exactly what that fallback
+	 * is for.
+	 */
+	void SaveDocumentFromKey();
+
+	/**
+	 * The name prompt. A SEPARATE BUFFER from `FieldBuffer` rather than a reuse of
+	 * it: that one is numeric, belongs to a segment field, and is committed by
+	 * writing a double into geometry — routing a filename through it would put
+	 * one keystroke between naming a track and editing a radius.
+	 */
+	bool bNamingSave = false;
+	FString NameBuffer;
+	FString NameError;
+
+	void BeginNameSave(bool bFromShift);
+	void CommitNameSave();
+	void CancelNameSave();
+
+	/**
+	 * TEXT ENTRY, WHICH THIS SHELL DID NOT HAVE — and its absence is why save-as
+	 * sat unbuilt while everything around it shipped. Every other key here is
+	 * bound one at a time, which is right for commands and absurd for an alphabet.
+	 *
+	 * `EKeys::AnyKey` with the FKey-carrying handler is the engine's own answer,
+	 * and it is deliberately NARROW: it appends only while a name is being typed,
+	 * and only characters that are legal in a filename. THE INPUT ALPHABET IS THE
+	 * VALIDATION — there is no sanitising pass to forget, because a slash, a
+	 * colon and a quote cannot be typed into the buffer in the first place.
+	 */
+	void OnAnyKeyTyped(FKey Key);
+	void DrawSaveNamePrompt(UCanvas* Canvas);
 
 	/**
 	 * [I] AND [R] — the two things that make it an editor rather than a tuning
@@ -1747,8 +1887,16 @@ private:
 	 *
 	 * So they dispatch on whether a field has focus. Editing wins while editing;
 	 * the operator's controls win the rest of the time.
+	 *
+	 * AND NAMING A SAVE IS TYPING TOO. Answered here rather than at each caller,
+	 * because there are six and the cost of missing one is specific: WASD is
+	 * polled through this same guard, so a name with a W in it would fly the
+	 * camera, and Backspace would E-stop the ride instead of deleting a letter.
 	 */
-	bool IsTypingInField() const { return FocusedField != EEditField::Count; }
+	bool IsTypingInField() const
+	{
+		return FocusedField != EEditField::Count || bNamingSave;
+	}
 
 	/**
 	 * [ and ] — STEP THE SELECTION, and show where it went.

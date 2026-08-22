@@ -119,6 +119,15 @@ ATUCoasterRide::ATUCoasterRide()
 	CatwalkDeckMesh = MakeTrackMesh(TEXT("CatwalkDeckMesh"));
 	CatwalkRailMesh = MakeTrackMesh(TEXT("CatwalkRailMesh"));
 
+	// AND THE TRAIN. Four more, for the same reason and on the same terms: four
+	// materials, no collision. These are the only ones that move every frame,
+	// which is why RebuildTrainMesh updates their vertices in place rather than
+	// recreating the sections.
+	TrainBodyMesh = MakeTrackMesh(TEXT("TrainBodyMesh"));
+	TrainChassisMesh = MakeTrackMesh(TEXT("TrainChassisMesh"));
+	TrainWheelMesh = MakeTrackMesh(TEXT("TrainWheelMesh"));
+	TrainCouplerMesh = MakeTrackMesh(TEXT("TrainCouplerMesh"));
+
 	// Seeded so a freshly placed actor has a ride in it. Everything about that
 	// ride is data in the Details panel rather than code, which is the whole
 	// point — Preset + bLoadPreset puts a known-good one back if an edit goes
@@ -173,6 +182,33 @@ namespace
 		FCanvasTextItem Item(FVector2D(X, Y), FText::FromString(S), GEngine->GetSmallFont(), Col);
 		Item.EnableShadow(FLinearColor::Black);
 		C->DrawItem(Item);
+	}
+
+	// The third primitive, and it arrived with the browser's plan-view thumbnails.
+	// A tile per sample was the alternative -- it needs no new primitive and it
+	// draws a dotted line, which on a 30-pixel thumbnail is the difference between
+	// a layout you recognise and a smear.
+	void PanelLine(UCanvas* C, float X0, float Y0, float X1, float Y1,
+		const FLinearColor& Col, float Thickness = 1.f)
+	{
+		FCanvasLineItem Item(FVector2D(X0, Y0), FVector2D(X1, Y1));
+		Item.SetColor(Col);
+		Item.LineThickness = Thickness;
+		C->DrawItem(Item);
+	}
+
+	// Which flank a walkway is on, in the rider's terms rather than the enum's —
+	// "the rider's right" is unambiguous where "Right" alone is a question about
+	// which way you are facing.
+	const TCHAR* WalkwaySideName(ETUWalkway Side)
+	{
+		switch (Side)
+		{
+		case ETUWalkway::Left:  return TEXT("rider's left");
+		case ETUWalkway::Right: return TEXT("rider's right");
+		case ETUWalkway::Both:  return TEXT("both sides");
+		default:                return TEXT("no side");
+		}
 	}
 
 	// What a zone IS, for the module heading. FTrackZone drops the kind because the
@@ -241,6 +277,18 @@ void ATUCoasterRide::ApplyPresetWalkways()
 	// keeps them.
 	Walkways.Reset();
 
+	// ===================== AND NONE MEANS NONE =====================
+	//
+	// Returning here rather than authoring spans with a side of None leaves the
+	// list genuinely EMPTY, which is what makes this the honest way to say a ride
+	// has no walkways: a span that exists but draws nothing is still a route as
+	// far as anything reasoning about reachability is concerned, and that is
+	// exactly the lie `bBuildCatwalks` cannot avoid telling.
+	if (PresetWalkwaySide == ETUWalkway::None)
+	{
+		return;
+	}
+
 	double S = 0.0;
 	double RunStart = 0.0;
 	bool bInRun = false;
@@ -257,10 +305,12 @@ void ATUCoasterRide::ApplyPresetWalkways()
 			// A run that ended because the NEXT segment is unpowered stops at the
 			// start of this one; one that ended at the last segment runs to the end.
 			W.EndS = static_cast<float>(bWants ? S : S - static_cast<double>(Segments[i].Length));
-			// BOTH SIDES. A station is boarded from one side and evacuated from
-			// whichever is reachable, and a lift hill in the real world has a walkway
-			// on both flanks — the authored field exists for the cases that do not.
-			W.Side = ETUWalkway::Both;
+			// THE SIDE IS A SETTING NOW, and it was hardcoded to Both. See the
+			// property's own comment for why one side is the better default: the
+			// old version put a deck and a handrail down both flanks of every
+			// powered run on every shipped ride, which is twice the geometry
+			// saying the same thing.
+			W.Side = PresetWalkwaySide;
 			if (W.EndS > W.StartS) { Walkways.Add(W); }
 			bInRun = false;
 		}
@@ -2335,6 +2385,19 @@ void ATUCoasterRide::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 	PlayerInputComponent->BindKey(EKeys::MouseScrollDown, IE_Pressed, this,
 		&ATUCoasterRide::OrbitZoomOut);
 
+	// ===================== THE ALPHABET, ONCE =====================
+	//
+	// Every other key above is bound one at a time, which is right for commands
+	// and absurd for twenty-six letters — and the absence of any way to type one
+	// is why save-as sat unbuilt while the rest of the shell shipped.
+	//
+	// AnyKey with the FKey-carrying handler is the engine's own answer. It fires
+	// for EVERYTHING including the mouse, so the handler is the narrow part: it
+	// appends only while a name is being typed, and only characters legal in a
+	// file name. Bound last, so nothing above it changed shape to allow it.
+	PlayerInputComponent->BindKey(EKeys::AnyKey, IE_Pressed, this,
+		&ATUCoasterRide::OnAnyKeyTyped);
+
 	PlayerInputComponent->BindKey(EKeys::LeftShift, IE_Pressed, this,
 		&ATUCoasterRide::BoostOn);
 	PlayerInputComponent->BindKey(EKeys::LeftShift, IE_Released, this,
@@ -2789,7 +2852,10 @@ void ATUCoasterRide::KeyPeriod()
 
 void ATUCoasterRide::TypeDigit(int32 D)
 {
-	if (FocusedField == EEditField::Count) { return; }
+	// WHILE NAMING, THE ANYKEY HANDLER HAS ALREADY TAKEN IT. Both bindings fire
+	// for one press, so a digit appended in each place appears twice — which is
+	// the whole reason these three guard rather than branch.
+	if (bNamingSave || FocusedField == EEditField::Count) { return; }
 	FieldBuffer.AppendChar(static_cast<TCHAR>('0' + FMath::Clamp(D, 0, 9)));
 }
 
@@ -2797,6 +2863,10 @@ void ATUCoasterRide::TypePoint()
 {
 	// ONE decimal point. A second one makes a string no parser accepts, and
 	// silently dropping it is what every numeric field has always done.
+	// A FULL STOP IS NOT A NAME CHARACTER, deliberately: the extension is this
+	// application's to add, and "Reference.track" typed in full would be saved as
+	// Reference.track.track.
+	if (bNamingSave) { return; }
 	if (FocusedField == EEditField::Count || FieldBuffer.Contains(TEXT("."))) { return; }
 	FieldBuffer.AppendChar('.');
 }
@@ -2805,18 +2875,31 @@ void ATUCoasterRide::TypeMinus()
 {
 	// A minus is only a minus at the FRONT. Anywhere else it is a typo, and a
 	// field that accepted "3-0" would produce a number nobody meant.
+	if (bNamingSave) { return; }   // a hyphen anywhere is fine in a name; AnyKey has it
 	if (FocusedField == EEditField::Count || FieldBuffer.Len() > 0) { return; }
 	FieldBuffer.AppendChar('-');
 }
 
 void ATUCoasterRide::TypeBackspace()
 {
+	// THIS ONE BRANCHES RATHER THAN GUARDING, because AnyKey ignores Backspace —
+	// deleting is what the key means, in either buffer.
+	if (bNamingSave)
+	{
+		if (!NameBuffer.IsEmpty()) { NameBuffer.LeftChopInline(1); }
+		NameError.Empty();
+		return;
+	}
 	if (FocusedField == EEditField::Count || FieldBuffer.IsEmpty()) { return; }
 	FieldBuffer.LeftChopInline(1);
 }
 
 void ATUCoasterRide::CommitField()
 {
+	// ENTER MEANS "DO THE THING IN FRONT OF ME", and while a name is being typed
+	// that is the save rather than a segment field — which cannot be focused at
+	// the same time, because the prompt is the only thing taking keys.
+	if (bNamingSave) { CommitNameSave(); return; }
 	if (FocusedField == EEditField::Count || !Session.EditsAllowed()
 		|| SelectedSegment < 0 || SelectedSegment >= Segments.Num())
 	{
@@ -2952,6 +3035,10 @@ void ATUCoasterRide::RemoveSegment()
 
 void ATUCoasterRide::CancelField()
 {
+	// ESCAPE BACKS OUT OF THE NAME PROMPT FIRST, which is the only thing on screen
+	// when it is up. Nothing is saved and nothing is lost — the document is
+	// exactly as dirty as it was.
+	if (bNamingSave) { CancelNameSave(); return; }
 	FocusedField = EEditField::Count;
 	FieldBuffer.Empty();
 }
@@ -3093,7 +3180,21 @@ void ATUCoasterRide::DrawMainMenu(UCanvas* Canvas)
 	const float Ox = 60.f;
 	float Y = 80.f;
 
-	PanelTile(Canvas, Ox - 20.f, 50.f, W + 40.f, 460.f, PanelGround);
+	// ===================== A TRACK ROW IS TALLER THAN A COMMAND ROW =====================
+	//
+	// Because it carries a picture, and 20 px of plan view is a smudge. The list
+	// is READ ahead of the panel rather than in the middle of it, so the panel can
+	// be as tall as what is going in it -- the 460 that stood here was a constant
+	// that a taller row silently overflowed, and a menu whose last two entries are
+	// outside its own background is the kind of thing nobody reports because it
+	// looks deliberate.
+	const std::vector<FTrackEntry> Rows = FTrackBrowser::Rows(KnownTracks, TrackPaths);
+	const float TrackRow = 34.f;
+	const float ThumbSize = 28.f;
+	const float BodyH = 190.f + static_cast<float>(NumTemplates()) * Row
+		+ (Rows.empty() ? Row : static_cast<float>(Rows.size()) * TrackRow);
+
+	PanelTile(Canvas, Ox - 20.f, 50.f, W + 40.f, BodyH, PanelGround);
 	PanelLabel(Canvas, Ox, 56.f, TEXT("TRACKUNLIMITED"), PanelCyan);
 	// AN OSS PROJECT'S MENU IS FREE ADVERTISING FOR CONTRIBUTION, and a version
 	// string is the first thing anybody filing a bug is asked for.
@@ -3124,10 +3225,9 @@ void ATUCoasterRide::DrawMainMenu(UCanvas* Canvas)
 	PanelLabel(Canvas, Ox, Y, TEXT("TRACKS"), PanelDim);
 	Y += Row;
 
-	// KNOWN entries are passed in now. They were not, and `Rows` marks anything it
-	// has no entry for as MISSING — so every recent track, however present and
-	// readable, was labelled as being on a disconnected drive.
-	const std::vector<FTrackEntry> Rows = FTrackBrowser::Rows(KnownTracks, TrackPaths);
+	// KNOWN entries are passed to `Rows` above — they were not, once, and `Rows`
+	// marks anything it has no entry for as MISSING, so every recent track,
+	// however present and readable, was labelled as being on a disconnected drive.
 	if (Rows.empty())
 	{
 		PanelLabel(Canvas, Ox + 12.f, Y,
@@ -3137,19 +3237,45 @@ void ATUCoasterRide::DrawMainMenu(UCanvas* Canvas)
 	for (std::size_t i = 0; i < Rows.size(); ++i)
 	{
 		const FTrackEntry& E = Rows[i];
-		MenuRowRects.Add(FVector4(Ox, Y, Ox + W, Y + Row));
+		MenuRowRects.Add(FVector4(Ox, Y, Ox + W, Y + TrackRow));
 		MenuRowAction.Add(-1000 - static_cast<int32>(i));
+
+		// ===================== THE PICTURE IS THE TRACK, NOT A PICTURE OF IT =====================
+		//
+		// Drawn from the plan view the list already walked, so it is right for a
+		// track saved by another machine, one that has never been opened, and one
+		// edited five seconds ago — none of which a stored image can claim.
+		//
+		// A ROW WITH NO PICTURE IS A ROW SAYING SOMETHING. Missing and broken
+		// entries have no geometry to draw, and drawing a placeholder box would
+		// make the two states look the same from across the screen; the empty
+		// frame IS the tell, and the subtitle beside it says which.
+		const float Tx = Ox + 10.f;
+		const float Ty = Y + (TrackRow - ThumbSize) * 0.5f;
+		PanelTile(Canvas, Tx, Ty, ThumbSize, ThumbSize, PanelRule);
+		for (std::size_t p = 0; p + 3 < E.Plan.size(); p += 2)
+		{
+			// Y IS FLIPPED, because a canvas grows downward and a plan view does
+			// not. Without it every layout is drawn mirrored — which still looks
+			// like a coaster, which is exactly why it would have shipped.
+			PanelLine(Canvas,
+				Tx + 2.f + E.Plan[p] * (ThumbSize - 4.f),
+				Ty + 2.f + (1.f - E.Plan[p + 1]) * (ThumbSize - 4.f),
+				Tx + 2.f + E.Plan[p + 2] * (ThumbSize - 4.f),
+				Ty + 2.f + (1.f - E.Plan[p + 3]) * (ThumbSize - 4.f),
+				E.IsUsable() ? PanelCyan : PanelAmber);
+		}
 
 		// A MISSING FILE IS STILL LISTED AND STILL CLICKABLE, because the
 		// commonest cause is an unplugged drive and "reconnect it and click
 		// again" only works if it is still there to click. It is dimmed and it
 		// says which kind of problem it is — one is "plug the drive back in" and
 		// the other is "line 12 is wrong".
-		PanelLabel(Canvas, Ox + 12.f, Y, UTF8_TO_TCHAR(E.Name.c_str()),
+		PanelLabel(Canvas, Ox + 48.f, Y + 4.f, UTF8_TO_TCHAR(E.Name.c_str()),
 			E.IsUsable() ? PanelText : PanelAmber);
-		PanelLabel(Canvas, Ox + 230.f, Y + 2.f,
+		PanelLabel(Canvas, Ox + 48.f, Y + 18.f,
 			UTF8_TO_TCHAR(FTrackBrowser::Subtitle(E).c_str()), PanelDim);
-		Y += Row;
+		Y += TrackRow;
 	}
 
 	// ---- OPEN, and quit.
@@ -4399,6 +4525,141 @@ bool ATUCoasterRide::SaveDocument()
 		: NextUntitledPath());
 }
 
+void ATUCoasterRide::SaveDocumentFromKey()
+{
+	// SHIFT ALWAYS ASKS; a document with no path asks anyway. See the header for
+	// why the first save is where a name belongs and why the leave-confirm's save
+	// deliberately does not ask.
+	if (bBoost || !Session.HasPath())
+	{
+		BeginNameSave(bBoost);
+		return;
+	}
+	SaveDocument();
+}
+
+void ATUCoasterRide::BeginNameSave(bool bFromShift)
+{
+	bNamingSave = true;
+	NameError.Empty();
+
+	// PRE-FILLED WITH WHAT IT IS CALLED NOW, so save-as on a named track is a
+	// small edit rather than retyping. An unnamed one starts EMPTY rather than at
+	// "Untitled": a prompt already holding a plausible answer is one people press
+	// Enter on, which is the folder-full-of-Untitled outcome this exists to end.
+	NameBuffer.Empty();
+	if (bFromShift && Session.HasPath())
+	{
+		NameBuffer = FPaths::GetBaseFilename(
+			FString(UTF8_TO_TCHAR(Session.Path().c_str())));
+	}
+}
+
+void ATUCoasterRide::CancelNameSave()
+{
+	bNamingSave = false;
+	NameBuffer.Empty();
+	NameError.Empty();
+}
+
+void ATUCoasterRide::CommitNameSave()
+{
+	FString Name = NameBuffer.TrimStartAndEnd();
+
+	// AN EMPTY NAME IS A CANCEL, not a file called nothing — the same reading the
+	// numeric fields give an empty buffer, and for the same reason: somebody who
+	// opened this and pressed Enter meant "never mind".
+	if (Name.IsEmpty())
+	{
+		CancelNameSave();
+		return;
+	}
+
+	const FString Path = TracksDir() / (Name + TEXT(".track"));
+
+	// ===================== IT WILL NOT WRITE OVER SOMETHING ELSE =====================
+	//
+	// The unnamed save has never been allowed to clobber, and a typed name must
+	// not be the hole in that: "Reference" is a name somebody will reach for
+	// twice, and the second time the first track is gone with no undo anywhere in
+	// the application that could bring it back.
+	//
+	// Saving over the document you already have open is not that case and is
+	// allowed — it is an ordinary save that happens to have been typed.
+	IPlatformFile& Files = FPlatformFileManager::Get().GetPlatformFile();
+	const bool bIsThisDocument = Session.HasPath()
+		&& FPaths::IsSamePath(FString(UTF8_TO_TCHAR(Session.Path().c_str())),
+			FPaths::ConvertRelativePathToFull(Path));
+	if (Files.FileExists(*Path) && !bIsThisDocument)
+	{
+		// ponytail: refused rather than offering to overwrite. A confirm is a
+		// second dialog above a dialog, and the answer to "that name is taken" is
+		// to type another one. Add the overwrite path when somebody asks for it.
+		NameError = FString::Printf(
+			TEXT("\"%s\" already exists. Type a different name."), *Name);
+		return;
+	}
+
+	if (!SaveDocumentTo(Path))
+	{
+		// THE PROMPT STAYS UP ON A FAILURE, because dismissing it would report a
+		// save that did not happen by simply going away.
+		NameError = TEXT("Could not write that file. Try another name.");
+		return;
+	}
+	CancelNameSave();
+}
+
+void ATUCoasterRide::OnAnyKeyTyped(FKey Key)
+{
+	if (!bNamingSave) { return; }
+
+	// Enter, Escape and Backspace have their own bindings and reach this too.
+	// Ignored here so they are not also typed as characters — the specific
+	// binding is the one that means something.
+	const FName N = Key.GetFName();
+	const FString S = N.ToString();
+
+	TCHAR C = 0;
+	if (S.Len() == 1)
+	{
+		const TCHAR Raw = S[0];
+		if (Raw >= 'A' && Raw <= 'Z')
+		{
+			// SHIFT IS ALSO THE CAMERA BOOST, and holding it here is unambiguous
+			// because the camera does not move while a field has focus.
+			C = bBoost ? Raw : static_cast<TCHAR>(Raw - 'A' + 'a');
+		}
+	}
+	else if (Key == EKeys::SpaceBar)  { C = ' '; }
+	else if (Key == EKeys::Hyphen || Key == EKeys::Subtract) { C = '-'; }
+	else if (Key == EKeys::Underscore) { C = '_'; }
+	else
+	{
+		// Digits are named "Zero".."Nine" and the numpad "NumPadZero"..; both are
+		// wanted, and neither is a single character to test for.
+		static const TCHAR* Names[10] = {TEXT("Zero"), TEXT("One"), TEXT("Two"),
+			TEXT("Three"), TEXT("Four"), TEXT("Five"), TEXT("Six"), TEXT("Seven"),
+			TEXT("Eight"), TEXT("Nine")};
+		for (int32 i = 0; i < 10; ++i)
+		{
+			if (S == Names[i] || S == FString(TEXT("NumPad")) + Names[i])
+			{
+				C = static_cast<TCHAR>('0' + i);
+				break;
+			}
+		}
+	}
+
+	// A CAP, because a file name has one whatever this thinks, and a buffer that
+	// grows past the box it is drawn in is a field somebody cannot read.
+	if (C != 0 && NameBuffer.Len() < 48)
+	{
+		NameBuffer.AppendChar(C);
+		NameError.Empty();
+	}
+}
+
 bool ATUCoasterRide::OpenDocumentFrom(const FString& InPath)
 {
 	const FString Path = FPaths::ConvertRelativePathToFull(InPath);
@@ -4623,13 +4884,21 @@ void ATUCoasterRide::RefreshTrackList()
 		E.LengthM = Built.TotalLength();
 		double Lowest = 0.0, Highest = 0.0;
 		bool bFirst = true;
+		// AND THE THUMBNAIL COMES OUT OF THE SAME WALK. A plan view is X and Y
+		// where the height is Z, so the picture is free at the point the numbers
+		// are already being read — which is what makes it cheaper than a rendered
+		// one by more than a constant factor. See PlanThumb.
+		std::vector<float> Plan;
 		for (const FTrackFrame& F : WalkTrack(Built, 2.0))
 		{
 			Lowest = bFirst ? F.Position.Z : std::fmin(Lowest, F.Position.Z);
 			Highest = bFirst ? F.Position.Z : std::fmax(Highest, F.Position.Z);
 			bFirst = false;
+			Plan.push_back(static_cast<float>(F.Position.X));
+			Plan.push_back(static_cast<float>(F.Position.Y));
 		}
 		E.HeightM = Highest - Lowest;
+		E.Plan = PlanThumb(Plan);
 		KnownTracks.push_back(E);
 	}
 }
@@ -4968,8 +5237,96 @@ bool ATUCoasterRide::RunDocumentSmokeTest()
 		else
 		{
 			UE_LOG(LogTUEvents, Log,
-				TEXT("smoke: the preset catwalks %d powered runs, %.0f m of route"),
-				Walkways.Num(), Catwalked);
+				TEXT("smoke: the preset catwalks %d powered runs on the %s, %.0f m of route"),
+				Walkways.Num(), WalkwaySideName(PresetWalkwaySide), Catwalked);
+		}
+
+		// ===================== AND NONE AUTHORS NOTHING =====================
+		//
+		// The branch worth checking, because the other settings differ only in
+		// which vertices come out: this one decides whether a route EXISTS. A
+		// version that authored spans with a side of None instead of returning
+		// would pass every geometric check here and still leave the evacuation
+		// model believing in walkways nobody can see.
+		const ETUWalkway Was = PresetWalkwaySide;
+		PresetWalkwaySide = ETUWalkway::None;
+		ApplyPresetWalkways();
+		const bool bNoRoute = Walkways.Num() == 0;
+		PresetWalkwaySide = Was;
+		ApplyPresetWalkways();   // put the preset back as it was found
+
+		if (!bNoRoute || Walkways.Num() == 0)
+		{
+			UE_LOG(LogTUEvents, Error,
+				TEXT("smoke: walkway side None is wrong (authored %d with None, %d after)"),
+				bNoRoute ? 0 : 1, Walkways.Num());
+			Failures.Add(TEXT("walkway side"));
+		}
+		else
+		{
+			UE_LOG(LogTUEvents, Log,
+				TEXT("smoke: side None authors no route at all, and it comes back"));
+		}
+	}
+
+	// ===================== AND THE TRAIN IS A TRAIN =====================
+	//
+	// The payoff for the physics, the signalling, the envelope and the meshing was
+	// nine grey cubes, and this is the check that it is not any more. Asserted
+	// rather than eyeballed for the reason every other smoke assertion exists: a
+	// train that came out inside out, or with the wrong number of cars, is silent
+	// from the cockpit and obvious in a number.
+	{
+		const FTrainSettings TS = TrainMeshSettings();
+		const FTrainMesh CarMesh = BuildCarMesh(TS, Track.GetHeartlineHeight(), Profile);
+
+		// A CAR IS NOT A SAMPLE POINT. Nine is what the gravity integration needs;
+		// CarCount is what somebody authored, and the two are allowed to differ.
+		const int32 Points = Trains.Num() > 0 ? Trains[0]->NumSamplePoints() : 0;
+		const std::vector<FCarPlacement> Placed = TrainPath.empty()
+			? std::vector<FCarPlacement>()
+			: PlaceCars(TrainPath, TrainPathSpacing, TrainPathTotal,
+				TrainPathTotal * 0.5, TS, bTrackIsCircuit);
+
+		// Watertight and outward-wound, which is what a solid body would have shown
+		// about the port rule years earlier than the support pier did.
+		double V6 = 0.0;
+		for (std::size_t t = 0; t + 2 < CarMesh.Body.Index.size(); t += 3)
+		{
+			V6 += Dot(CarMesh.Body.Position[CarMesh.Body.Index[t]],
+				Cross(CarMesh.Body.Position[CarMesh.Body.Index[t + 1]],
+					CarMesh.Body.Position[CarMesh.Body.Index[t + 2]]));
+		}
+		const double BodyVolume = V6 / 6.0;
+
+		const std::vector<FMeshFinding> TrainFindings =
+			AuditTrain(TS, Track.GetHeartlineHeight(), Profile, Track.TotalLength());
+
+		const bool bOk = CarMesh.NumTriangles() > 0
+			&& BodyVolume > 0.0
+			&& static_cast<int32>(Placed.size()) == TS.CarCount
+			&& TrainFindings.empty();
+		if (!bOk)
+		{
+			UE_LOG(LogTUEvents, Error,
+				TEXT("smoke: the train mesh is wrong (%d tris, body volume %.6f, %d cars ")
+				TEXT("placed for %d authored, %d findings)"),
+				static_cast<int32>(CarMesh.NumTriangles()), BodyVolume,
+				static_cast<int32>(Placed.size()), TS.CarCount,
+				static_cast<int32>(TrainFindings.size()));
+			for (const FMeshFinding& F : TrainFindings)
+			{
+				UE_LOG(LogTUEvents, Error, TEXT("smoke:   %s"), UTF8_TO_TCHAR(F.What.c_str()));
+			}
+			Failures.Add(TEXT("train mesh"));
+		}
+		else
+		{
+			UE_LOG(LogTUEvents, Log,
+				TEXT("smoke: the train is %d cars of %.1f m, not %d sample points -- ")
+				TEXT("%d triangles a car, body encloses %.3f m3, silent"),
+				TS.CarCount, TS.CarLengthM, Points,
+				static_cast<int32>(CarMesh.NumTriangles()), BodyVolume);
 		}
 	}
 
@@ -5953,6 +6310,45 @@ void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/
 	// rebuilds the row list, so a click while it is up can only hit its own three
 	// answers.
 	DrawLeaveConfirm(Canvas);
+	// ABOVE EVEN THAT, because it is the only thing on screen that is taking
+	// keystrokes: a prompt drawn under the panel somebody is typing into reads as
+	// the keyboard being broken. Z-order here IS draw order — see the note above.
+	DrawSaveNamePrompt(Canvas);
+}
+
+void ATUCoasterRide::DrawSaveNamePrompt(UCanvas* Canvas)
+{
+	if (!Canvas || !GEngine || !bNamingSave) { return; }
+
+	const float Ox = 70.f;
+	float Y = 150.f;
+	PanelTile(Canvas, Ox - 18.f, Y - 16.f, 560.f, NameError.IsEmpty() ? 108.f : 128.f,
+		PanelGround);
+	PanelLabel(Canvas, Ox, Y, TEXT("SAVE AS"), PanelCyan);
+	Y += 26.f;
+
+	// THE CARET IS DRAWN, not implied. A field with an empty buffer and no caret
+	// is indistinguishable from a label, and somebody types into the void.
+	PanelLabel(Canvas, Ox, Y, NameBuffer + TEXT("_"), PanelText);
+	Y += 8.f;
+	PanelLine(Canvas, Ox, Y + 10.f, Ox + 420.f, Y + 10.f, PanelRule);
+	Y += 22.f;
+
+	// WHERE IT IS GOING, spelled out. A save prompt that does not say the folder
+	// is one people go looking for the file after.
+	PanelLabel(Canvas, Ox, Y, FString::Printf(TEXT("%s/%s.track"),
+		*FPaths::GetCleanFilename(TracksDir()),
+		NameBuffer.IsEmpty() ? TEXT("...") : *NameBuffer), PanelDim);
+	Y += 20.f;
+
+	if (!NameError.IsEmpty())
+	{
+		PanelLabel(Canvas, Ox, Y, NameError, PanelAmber);
+		Y += 20.f;
+	}
+	PanelLabel(Canvas, Ox, Y,
+		TEXT("letters, digits, space, - and _   ·   [Enter] save   ·   [Esc] cancel"),
+		PanelDim);
 }
 
 void ATUCoasterRide::DrawPanels(UCanvas* Canvas)
@@ -7591,6 +7987,136 @@ FColor ATUCoasterRide::RailColourAt(double S) const
 // One buffer, ported. Everything geometric already happened in TrackMesh.h; this
 // converts units and handedness and nothing else, which is the whole job of this
 // file.
+FTrainSettings ATUCoasterRide::TrainMeshSettings() const
+{
+	// ONE ANSWER. The car geometry and the placement both come through here, so
+	// they cannot be built from two different ideas of the same train - which is
+	// the GraphRect and ConsolePlatformPtr() rule, and the exact shape of the bug
+	// this whole card exists to fix.
+	FTrainSettings S;
+	S.CarCount = FMath::Max(1, CarCount);
+	S.CarLengthM = FMath::Max(0.5f, CarLengthM);
+	S.WheelSides = FMath::Clamp(TrainWheelSides, 5, 24);
+	return S;
+}
+
+void ATUCoasterRide::PushOrUpdateMeshSection(UProceduralMeshComponent* Target,
+	const FMeshBuffer& M) const
+{
+	if (Target == nullptr)
+	{
+		return;
+	}
+	if (M.NumTriangles() == 0)
+	{
+		Target->ClearAllMeshSections();
+		return;
+	}
+
+	// SAME VERTEX COUNT MEANS SAME TOPOLOGY HERE, and that is a fact about this
+	// caller rather than a general truth: a train's triangles are fixed by its
+	// car count, and only their POSITIONS change as it runs. So the common case is
+	// an in-place vertex update, and a section is recreated only when the train
+	// itself changes shape - a car added, a train dispatched, a preset loaded.
+	// Recreating one rebuilds a render proxy, which at frame rate is the entire
+	// cost of the feature.
+	const FProcMeshSection* Existing = Target->GetProcMeshSection(0);
+	const bool bSameTopology = Existing != nullptr
+		&& Existing->ProcVertexBuffer.Num() == static_cast<int32>(M.NumVertices());
+
+	TArray<FVector> Pos;
+	TArray<FVector> Nrm;
+	TArray<FVector2D> UV;
+	Pos.Reserve(static_cast<int32>(M.NumVertices()));
+	Nrm.Reserve(static_cast<int32>(M.NumVertices()));
+	UV.Reserve(static_cast<int32>(M.NumVertices()));
+	for (std::size_t v = 0; v < M.NumVertices(); ++v)
+	{
+		Pos.Add(ToLocal(M.Position[v]));
+		Nrm.Add(ToLocalDirection(M.Normal[v]));
+		UV.Add(FVector2D(M.UV[v].U, M.UV[v].V));
+	}
+
+	if (bSameTopology)
+	{
+		Target->UpdateMeshSection(0, Pos, Nrm, UV, TArray<FColor>(),
+			TArray<FProcMeshTangent>());
+		return;
+	}
+
+	// NO INDEX SWAP, exactly as PushMeshSection does not swap: M(x,y,z) = (x,-y,z)
+	// reverses orientation and UE's front-face rule reverses it again. Two
+	// flips. Doing one explicitly left every surface on this ride inside out for
+	// weeks, and a car body is SOLID - so it is the first thing that would show it
+	// again.
+	TArray<int32> Tri;
+	Tri.Reserve(static_cast<int32>(M.Index.size()));
+	for (std::size_t t = 0; t + 2 < M.Index.size(); t += 3)
+	{
+		Tri.Add(static_cast<int32>(M.Index[t]));
+		Tri.Add(static_cast<int32>(M.Index[t + 1]));
+		Tri.Add(static_cast<int32>(M.Index[t + 2]));
+	}
+	Target->CreateMeshSection_LinearColor(0, Pos, Tri, Nrm, UV,
+		TArray<FLinearColor>(), TArray<FProcMeshTangent>(), /*bCreateCollision*/ false);
+}
+
+// ===================== THE TRAIN, EVERY FRAME =====================
+//
+// Nine engine cubes until today, one per PHYSICS SAMPLE POINT - which is a
+// physics resolution and not a vehicle count. See TrainMesh.h; the geometry is
+// engine-free and assert-tested and this is only the port.
+void ATUCoasterRide::RebuildTrainMesh()
+{
+	if (!bBuildTrainMesh || TrainPath.empty() || Trains.Num() == 0)
+	{
+		if (TrainBodyMesh) { TrainBodyMesh->ClearAllMeshSections(); }
+		if (TrainChassisMesh) { TrainChassisMesh->ClearAllMeshSections(); }
+		if (TrainWheelMesh) { TrainWheelMesh->ClearAllMeshSections(); }
+		if (TrainCouplerMesh) { TrainCouplerMesh->ClearAllMeshSections(); }
+		return;
+	}
+
+	const FTrainSettings S = TrainMeshSettings();
+	const double Heartline = Track.GetHeartlineHeight();
+
+	// ONE CAR, built once and stamped wherever a vehicle is. It is the same
+	// geometry for every car on the ride; what differs is where each one is, and
+	// that is a transform rather than a mesh.
+	const FTrainMesh Car = BuildCarMesh(S, Heartline, Profile);
+
+	FTrainMesh All;
+	for (int32 t = 0; t < Trains.Num(); ++t)
+	{
+		// THE NOSE IS THE REFERENCE, and it is the one the signalling and the stop
+		// marks already use - so there is nothing to convert, and nothing for the
+		// picture and the interlocking to disagree about.
+		//
+		// GetFrontS() rather than GetDistance() + half a length, which is what it
+		// is: the accessor already exists and re-deriving it here would be a
+		// second answer to a question this class has answered. Its own header
+		// warns that front-versus-rear is a TRAP for anything reasoning about
+		// direction, and that warning is about the signalling rather than about
+		// this - a reversing train wants the two signs in DIRECTION_AND_ROUTES.md,
+		// which is designed and unbuilt. Drawing a forward train, this is the nose.
+		const double NoseS = Trains[t]->GetFrontS();
+		// NOT `Cars`, which is the instanced-cube COMPONENT one scope up. The
+		// compiler caught it; the two would have been readable and wrong.
+		const std::vector<FCarPlacement> Placed = PlaceCars(TrainPath, TrainPathSpacing,
+			TrainPathTotal, NoseS, S, bTrackIsCircuit);
+		const FTrainMesh One = BuildTrainMesh(Placed, Car, S, Heartline);
+		AppendBuffer(All.Body, One.Body);
+		AppendBuffer(All.Chassis, One.Chassis);
+		AppendBuffer(All.Wheels, One.Wheels);
+		AppendBuffer(All.Couplers, One.Couplers);
+	}
+
+	PushOrUpdateMeshSection(TrainBodyMesh, All.Body);
+	PushOrUpdateMeshSection(TrainChassisMesh, All.Chassis);
+	PushOrUpdateMeshSection(TrainWheelMesh, All.Wheels);
+	PushOrUpdateMeshSection(TrainCouplerMesh, All.Couplers);
+}
+
 void ATUCoasterRide::PushMeshSection(UProceduralMeshComponent* Target, const FMeshBuffer& M) const
 {
 	if (Target == nullptr)
@@ -7897,6 +8423,27 @@ void ATUCoasterRide::ServeBrakeReleaseSound()
 
 void ATUCoasterRide::RebuildTrackMesh()
 {
+	FMeshSettings Settings;
+	Settings.SampleSpacing = MeshSampleSpacingM;
+	Settings.Sides = MeshSides;
+
+	// ===================== THE WALK COMES FIRST, AND IT IS NOT THE TRACK MESH'S =====================
+	//
+	// The train rides these frames, and it is a SEPARATE feature behind a separate
+	// switch. Caching the walk below the guard made `bBuildTrainMesh` quietly
+	// depend on `bBuildTrackMesh`: turning the rails off would have left the cars
+	// on a stale path, or on none at all, and the symptom would have been a train
+	// that vanished when somebody hid the track to look at something else.
+	//
+	// One walk still serves both, which is the point of doing it here rather than
+	// in two places: the cars ride exactly the samples the rails were swept along,
+	// so the two cannot disagree about where the track is.
+	TrainPath = Track.TotalLength() > 0.0
+		? WalkTrack(Track, Settings.SampleSpacing)
+		: std::vector<FTrackFrame>();
+	TrainPathSpacing = Settings.SampleSpacing;
+	TrainPathTotal = Track.TotalLength();
+
 	if (!bBuildTrackMesh || Track.TotalLength() <= 0.0)
 	{
 		if (RailMesh) { RailMesh->ClearAllMeshSections(); }
@@ -7907,10 +8454,6 @@ void ATUCoasterRide::RebuildTrackMesh()
 		if (CatwalkRailMesh) { CatwalkRailMesh->ClearAllMeshSections(); }
 		return;
 	}
-
-	FMeshSettings Settings;
-	Settings.SampleSpacing = MeshSampleSpacingM;
-	Settings.Sides = MeshSides;
 
 	// CAP THE OPEN ENDS, AND ONLY IF THERE ARE ANY. On a circuit the first ring
 	// and the last are the same ring, so a cap is a disc buried in the seam —
@@ -7925,9 +8468,11 @@ void ATUCoasterRide::RebuildTrackMesh()
 	// The walk is the ONLY thing that touches the track, and it walks with
 	// AdvanceFrom. The sweep below has no FTrack at all, which is what makes the
 	// O(n^2) trap unreachable rather than merely discouraged — see TrackMesh.h.
+	// THE SAME WALK THE TRAIN IS PLACED ALONG, cached above the guard so the two
+	// features do not depend on each other.
 	std::vector<FMeshFinding> Findings;
-	const FTrackMesh Mesh = BuildTrackMesh(WalkTrack(Track, Settings.SampleSpacing),
-		Track.GetHeartlineHeight(), Profile, Settings, &Findings);
+	const FTrackMesh Mesh = BuildTrackMesh(TrainPath, Track.GetHeartlineHeight(),
+		Profile, Settings, &Findings);
 
 	PushMeshSection(RailMesh, Mesh.Rails);
 	PushMeshSection(SpineMesh, Mesh.Spine);
@@ -8938,6 +9483,25 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 	//
 	// Frames come from the train rather than from Track.EvaluateAt, which is
 	// O(track length) a call and would be nine of those per train every frame.
+	//
+	// ===================== AND ALL OF THAT IS NOW THE FALLBACK =====================
+	//
+	// Everything above is still true and still correct, and it is no longer what
+	// gets drawn. It was the honest answer while a train was a LENGTH with nine
+	// sample points and no car count; `CarCount` and `CarLengthM` exist now, and
+	// `RebuildTrainMesh` builds real cars with bogies, three sets of wheels and
+	// couplers off those instead.
+	//
+	// KEPT RATHER THAN DELETED, and behind the same kind of switch the track mesh,
+	// the supports and the catwalks each have: unchecking `bBuildTrainMesh` puts
+	// the boxes back. The physics is untouched either way - the sample points go on
+	// doing exactly what they always did, which is the whole point of the split.
+	RebuildTrainMesh();
+	if (Cars && Cars->IsVisible() == bBuildTrainMesh)
+	{
+		Cars->SetVisibility(!bBuildTrainMesh);
+	}
+	if (!bBuildTrainMesh)
 	{
 		const int32 Points = Train->NumSamplePoints();
 		const int32 Total = Points * Trains.Num();

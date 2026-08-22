@@ -1,6 +1,6 @@
 # The prototypes
 
-Seven standalone prototypes under `Prototypes/`, all plain C++17 with **no engine dependency**, and 33
+Seven standalone prototypes under `Prototypes/`, all plain C++17 with **no engine dependency**, and 36
 assert suites between them. They build and run without an Unreal install, which makes them the
 lowest-friction way into this codebase — and keeps the maths honest by preventing it from quietly
 depending on engine behaviour.
@@ -21,6 +21,18 @@ clang++ -std=c++17 -Wall -Wextra -O2 -o test_trackspline test_trackspline.cpp &&
 Same shape for each of the others. **Run from inside the prototype's own directory** — the tests
 include their headers by relative path. `TrainPhysics` has two suites, `test_trainphysics.cpp` and
 `test_twotrains.cpp`; build them separately.
+
+That is still the right way to iterate on ONE suite. For the other question — *is all of it still
+green* — there is a runner:
+
+```sh
+cd Prototypes
+./run_all_tests.sh          # CXX=g++ ./run_all_tests.sh to say which compiler
+```
+
+It builds and runs all thirty-six, prints the failing assertion for anything that breaks, and exits
+non-zero — so it is a CI step as it stands. It runs each suite **from its own directory**, because
+they include their headers by relative path and a couple read fixture files beside them.
 
 Tests are plain `assert`s with no framework: add to the existing file and call your function from
 `main`. `BlockSignal` and `TrackSpline` finish in well under a second; `TrainPhysics` takes about six,
@@ -403,6 +415,45 @@ in series. See [`SIGNALLING.md`](SIGNALLING.md#split-platforms-and-what-is-not-b
 of that shape — multi-position platforms and turnouts — neither of which is built. A backstage buffer
 is *not* on that list: it is brake sections with drive tyres, one train each, which the model already
 expresses. Only the authoring of several in a row is missing.
+
+## `TrackMesh/` — the track, the structure and the train
+
+Phase 4. Everything you can actually see, generated rather than imported — which is not an
+aesthetic preference: an imported model would be the only binary art asset in an MIT repository,
+it needs a provenance check generated geometry does not, and it is the one object a contributor
+cannot read a diff of.
+
+| File | What it holds |
+|---|---|
+| `TrackMesh.h` | Rails, spine and ties. `WalkTrack` is the only thing that touches an `FTrack` |
+| `TrackSupports.h` | Columns and footings, and where one must NOT go |
+| `TrackCatwalk.h` | Evacuation decks and their handrails. The deck is level; only the track banks |
+| `TrainMesh.h` | The train: chassis, bogies, three wheel sets, a lofted body, couplers |
+
+**The split that is load-bearing** appears twice, and is the same one both times. `WalkTrack` walks
+the track and `BuildTrackMesh` takes the frames it produced and has no `FTrack` at all; `BuildCarMesh`
+builds one car in the car’s own local space and `PlaceCars` decides where cars go and produces no
+geometry. `EvaluateAt` is O(track length) per call, so a mesher that called it per ring would be
+O(n²) — the exact bug the vertical slice’s debug draw had. Splitting it this way makes that
+mistake **unreachable rather than discouraged**, because neither half holds the data to make it with.
+
+**Proves:** swept surfaces are watertight and outward-wound, measured by signed volume rather than
+eyeballed — a closed mesh encloses positive volume only when every triangle faces outward, so one
+reversed cap is a number rather than an opinion. A curve tighter than half the gauge folds the inner
+rail through its own axis, and is reported rather than repaired. A column never passes through the
+track it is not carrying. The train is built from `CarCount` and `CarLengthM` — **a sample point is
+not a car**, and drawing off the nine physics samples is what made a 15 m train look accidentally
+plausible and the 6 m small-batch vehicle look like nine playing cards on edge.
+
+**Articulation comes free**, and it is the one thing here worth understanding before changing it:
+each car takes its frame from *its own arc length*, so a rigid body chords across an arc while the
+wheels stay on it. Asserted against `sqrt(R² + h²) - R`, which is not the chord sagitta — 0.0562 m
+against 0.0563 m on a 20 m radius, close enough to look right if the placement were wrong.
+
+> **THE PORT RULE, and it was backwards for months.** `M(x,y,z) = (x,-y,z)` is a reflection, so it
+> reverses triangle orientation — and UE’s front-face rule is the opposite handedness and reverses
+> it back. **Two flips. Do not swap indices at the port.** It hid because a thin tube inside out has
+> the same silhouette; it showed the day something SOLID was drawn. A car body is solid.
 
 ## `NL2Csv/` — validation fixtures
 
