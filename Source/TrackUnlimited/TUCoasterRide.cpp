@@ -6831,11 +6831,14 @@ void ATUCoasterRide::DrawConsole(UCanvas* Canvas)
 	const int32 NumDrives = static_cast<int32>(Drives->Num());
 	const float Row = 15.f;
 	const float Pad = 8.f;
-	const float W = 470.f;
+	// WIDER FOR MAINTENANCE: the drives table carries three readings, a torque
+	// bar and the CiA 402 statusword per row, and at 470 the statusword ran
+	// past the panel's edge.
+	const float W = bMaint ? 560.f : 470.f;
 	const float StripH = bMaint ? 46.f + Row : 46.f;   // schematic, + the counts row
 	const int32 Rows = 2                           // title, status
 		+ 1 + NumDrives                            // DRIVES heading + VFD modules
-		+ (bMaint ? 2 : 0)                         // CONTROLLER + DETECTION
+		+ (bMaint ? 3 : 0)                         // scan line, CONTROLLER, DETECTION
 		+ (Platforms.Num() > 0 ? 1 + Platforms.Num() + 2 : 0)    // + CONSOLE heading, lamps
 		+ (EventLog.Num() > 0 ? 1 + FMath::Min(EventLog.Num(), 4) : 0);
 	// The console row sat on the bottom edge, half off it: the section gaps are
@@ -6884,19 +6887,27 @@ void ATUCoasterRide::DrawConsole(UCanvas* Canvas)
 		FString Status = FString::Printf(TEXT("%s   %d TRAIN%s"),
 			bManualDispatch ? TEXT("MANUAL") : TEXT("AUTO"),
 			Trains.Num(), Trains.Num() == 1 ? TEXT("") : TEXT("S"));
+		if (Signals->Violations() > 0)
+		{
+			Status += FString::Printf(TEXT("   %d VIOLATION(S)"),
+				static_cast<int32>(Signals->Violations()));
+		}
+		PanelLabel(Canvas, Lx, Ty, Status, Signals->Violations() > 0 ? PanelRed : PanelDim);
 		if (bMaint)
 		{
 			// THE SCAN RATE IS AN ENGINEERING FACT, and overruns are the one thing
 			// that makes it stop being a constant. A dropped backlog means the ride
 			// ran slower than real time for a moment, which is safe and is still
 			// something a maintainer wants to know happened.
-			Status += FString::Printf(TEXT("   %d Hz SCAN"), SimHz);
+			// ON ITS OWN LINE, under the status: on the same line it ran into the
+			// stop box and off the panel.
+			FString Scan = FString::Printf(TEXT("%d Hz SCAN"), SimHz);
 			if (ScanOverruns > 0)
 			{
 				// THE SECONDS, NOT JUST THE COUNT. 545 overruns reads as "a bit
 				// stuttery"; 54 s dropped says the ride on screen is not the ride
 				// the model computed, and nothing watched across it can be judged.
-				Status += FString::Printf(TEXT("   %d OVERRUN%s, %.1f s DROPPED"),
+				Scan += FString::Printf(TEXT("   %d OVERRUN%s, %.1f s DROPPED"),
 					ScanOverruns, ScanOverruns == 1 ? TEXT("") : TEXT("S"),
 					ScanTimeDroppedS);
 			}
@@ -6904,16 +6915,11 @@ void ATUCoasterRide::DrawConsole(UCanvas* Canvas)
 			// running hash, so two rides only agree AT THE SAME POINT — a digest
 			// without its scan number is not a comparable quantity, it is a number
 			// that happens to be printed.
-			Status += FString::Printf(TEXT("   #%lld %08x"),
+			Scan += FString::Printf(TEXT("   #%lld %08x"),
 				static_cast<long long>(ScanNumber),
 				static_cast<uint32>(SimFingerprint.Value() & 0xFFFFFFFFull));
+			PanelLabel(Canvas, Lx, Ty + Row, Scan, PanelDim);
 		}
-		if (Signals->Violations() > 0)
-		{
-			Status += FString::Printf(TEXT("   %d VIOLATION(S)"),
-				static_cast<int32>(Signals->Violations()));
-		}
-		PanelLabel(Canvas, Lx, Ty, Status, Signals->Violations() > 0 ? PanelRed : PanelDim);
 
 		// THE STOP AUTHORITY IN ITS OWN BOX, outlined red, away from everything
 		// else. Straight off the console photo: the operating controls are grouped
@@ -6955,7 +6961,7 @@ void ATUCoasterRide::DrawConsole(UCanvas* Canvas)
 		}
 		PanelLabel(Canvas, StopX + 5.f, Ty, StopText,
 			bStopped ? PanelRed : (PlcWhy != nullptr ? PanelAmber : PanelGreen));
-		Ty += Row + 6.f;
+		Ty += Row + 6.f + (bMaint ? Row : 0.f);   // the scan line, in maintenance
 	}
 
 	// ---- THE CIRCUIT, AS A SCHEMATIC ----------------------------------------
