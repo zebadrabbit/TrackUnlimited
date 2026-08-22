@@ -1919,8 +1919,9 @@ private:
 	TArray<FVector4> EditorRowRects;
 	TArray<int32> EditorRowField;    // EEditField as int, or -1000-n for a segment row
 
-	void DrawSegmentEditor(class UCanvas* Canvas);
 	void ClickSegmentEditor();
+	void ShowEditorWidget(bool bShow);
+	UPROPERTY(Transient) TObjectPtr<class UTUSegmentEditorWidget> EditorWidget;
 	void TypeDigit(int32 D);
 	void TypePoint();
 	void TypeMinus();
@@ -2016,6 +2017,13 @@ public:
 	/** One menu row chosen: >=0 template, -1 open, -8 settings, -9 quit, -1000-i track. The UMG menu calls this. */
 	void MenuAction(int32 Action);
 	friend class UTUMenuWidget;   // ponytail: reads Session and the track lists directly rather than through accessors
+	friend class UTUSegmentEditorWidget;
+	/** One editor row clicked: EEditField as int, or -1000-n for segment n. Shift extends the selection. */
+	void EditorAction(int32 Action, bool bShift);
+	static const TCHAR* KindNameOf(ETUSegmentKind K);
+	static const TCHAR* ZoneNameOf(ETUSegmentZone Z);
+	/** Bumped by every RebuildFromSegments, so a panel can tell the segments changed without diffing them. */
+	int32 SegmentsRevision = 0;
 	/**
 	 * Enter a mode directly — what a clicked tab calls, where [Tab] calls
 	 * CycleAppMode. BOTH GO THROUGH ApplyAppMode, so the keyboard and the mouse

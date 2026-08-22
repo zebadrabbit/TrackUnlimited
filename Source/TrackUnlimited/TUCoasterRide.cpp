@@ -5,6 +5,7 @@
 #include "Blueprint/UserWidget.h"
 #include "UI/TUFrameWidget.h"
 #include "UI/TUMenuWidget.h"
+#include "UI/TUSegmentEditorWidget.h"
 #include "UI/TUStyle.h"
 #include "Framework/Application/NavigationConfig.h"
 #include "Framework/Application/SlateApplication.h"
@@ -1141,6 +1142,7 @@ TArray<FTUTrackSegment> ATUCoasterRide::ReferenceLayout()
 
 void ATUCoasterRide::RebuildFromSegments()
 {
+	++SegmentsRevision;
 	// A REBUILD IS NOT A TRANSITION. After this, channel 4 may be a different
 	// block from the channel 4 being watched, so every stale baseline is a
 	// transition that never happened — on most channels at once. Reseed.
@@ -2698,234 +2700,6 @@ void ATUCoasterRide::WriteField(FTUTrackSegment& S, EEditField F, double V)
 	}
 }
 
-void ATUCoasterRide::DrawSegmentEditor(UCanvas* Canvas)
-{
-	if (!bShowSegmentEditor || !Canvas || !GEngine) { return; }
-
-	EditorRowRects.Reset();
-	EditorRowField.Reset();
-
-	const float Row = 16.f;
-	const float W = 380.f;   // wider since a row now carries arc length and a zone tag
-
-	// LOWER RIGHT, because it is the only corner nothing else wants. The upper
-	// left is the telemetry readout's and this drew straight over it; the upper
-	// right belongs to the diagnostics panel, which is 620 wide.
-	//
-	// ANCHORED TO THE CANVAS rather than typed, so it stays in the corner at any
-	// resolution — and the tooltip's two lines are counted into the anchor, or
-	// the thing that explains a field is the thing that falls off the bottom of
-	// the screen.
-	const float BodyH = 24.f + Row * 20.f;
-	const float TipH = 6.f + Row * 2.f;
-	const float Ox = Canvas->SizeX - W - 20.f;
-	float Y = Canvas->SizeY - (BodyH + TipH) - 20.f;
-
-	PanelTile(Canvas, Ox - 8.f, Y - 8.f, W + 16.f, BodyH, PanelGround);
-
-	if (Segments.Num() == 0)
-	{
-		// Nothing to select yet, so the heading offers the one thing that
-		// applies. The full heading ran off the panel's right edge here.
-		PanelLabel(Canvas, Ox, Y, TEXT("SEGMENTS   [I] insert  ·  [B] hide"), PanelDim);
-		// THE EMPTY STATE, WRAPPED TO THE PANEL: one line of it was drawn and
-		// the rest left the panel with the sentence cut mid-word.
-		FString Rest = UTF8_TO_TCHAR(EmptyStateFor(EPanelKind::SegmentList));
-		float Ly = Y + 20.f;
-		while (!Rest.IsEmpty())
-		{
-			int32 Cut = Rest.Len();
-			while (Cut > 0 && PanelTextWidth(Canvas, Rest.Left(Cut)) > W)
-			{
-				int32 Space = INDEX_NONE;
-				Rest.Left(Cut - 1).FindLastChar(TEXT(' '), Space);
-				Cut = Space > 0 ? Space : Cut - 1;
-			}
-			PanelLabel(Canvas, Ox, Ly, Rest.Left(Cut).TrimEnd(), PanelDim);
-			Rest = Rest.Mid(Cut).TrimStart();
-			Ly += 16.f;
-		}
-		return;
-	}
-
-	// EDITS ARE A MODE QUESTION, and the panel says so rather than simply
-	// ignoring keystrokes — a field that has stopped accepting numbers with no
-	// explanation is indistinguishable from a broken one.
-	// NOT bEditable -- AActor already has one under WITH_EDITORONLY_DATA, and a
-	// local that shadows it compiles in a packaged build and fails only in the
-	// editor. Named for what it asks rather than for what it is.
-	const bool bEditsAllowed = Session.EditsAllowed();
-	PanelLabel(Canvas, Ox, Y, bEditsAllowed
-		? TEXT("SEGMENTS   [B] hide   click a field, type, Enter")
-		: TEXT("SEGMENTS   read-only while the ride runs   [Tab] to BUILD"),
-		bEditsAllowed ? PanelDim : PanelAmber);
-	Y += 20.f;
-
-	// ---- The list. Windowed around the selection, because a 23-segment layout
-	// fits and a CSV import of four thousand does not — and a list that drew all
-	// of them would be a wall rather than a panel.
-	const int32 Window = 8;
-	const int32 First = FMath::Max(0, FMath::Min(SelectedSegment - Window / 2,
-		Segments.Num() - Window));
-	const int32 Last = FMath::Min(Segments.Num(), First + Window);
-
-	// WHERE, AND NOT ONLY WHAT. A row that says only its kind and its length
-	// cannot be matched to anything else on the screen, and the question somebody
-	// actually has is the reverse of the one the list answers: not "what is
-	// segment 12" but "which index is the piece I am looking at".
-	//
-	// Arc length is what makes that answerable, because it is the coordinate
-	// everything else here already uses — the ride-profile graph is plotted
-	// against S, its scrubber reads out in S, every diagnostics row carries S,
-	// and REFERENCE_LAYOUT.md publishes its zones as S ranges. Without this
-	// column the only way across was to select an index, press [Z], and look.
-	//
-	// The zone tag is the other half: adding a brake means finding somewhere that
-	// is not already a device, and a list that did not say which segments are
-	// devices made that a second pass through the Details panel.
-	double SAt = 0.0;
-	for (int32 i = 0; i < FMath::Max(0, First); ++i)
-	{
-		SAt += static_cast<double>(Segments[i].Length);
-	}
-	for (int32 i = FMath::Max(0, First); i < Last; ++i)
-	{
-		EditorRowRects.Add(FVector4(Ox, Y, Ox + W, Y + Row));
-		EditorRowField.Add(-1000 - i);
-		const bool bSel = i == SelectedSegment;
-		if (bSel) { PanelTile(Canvas, Ox - 4.f, Y - 1.f, W + 8.f, Row, PanelRule); }
-		const bool bDevice = Segments[i].Zone != ETUSegmentZone::None;
-		PanelLabel(Canvas, Ox + 4.f, Y,
-			FString::Printf(TEXT("%2d  %-8s %6.1f m  @%.0f  %s"), i,
-				*UEnum::GetDisplayValueAsText(Segments[i].Kind).ToString(),
-				Segments[i].Length, SAt,
-				bDevice ? ZoneKindName(Segments[i].Zone) : TEXT("")),
-			bSel ? PanelCyan : (bDevice ? PanelAmber : PanelText));
-		SAt += static_cast<double>(Segments[i].Length);
-		Y += Row;
-	}
-	if (Segments.Num() > Window)
-	{
-		// NO SILENT WINDOWING, same rule as the diagnostics list.
-		PanelLabel(Canvas, Ox + 4.f, Y,
-			FString::Printf(TEXT("   %d of %d"), Last - FMath::Max(0, First), Segments.Num()),
-			PanelDim);
-		Y += Row;
-	}
-
-	if (SelectedSegment < 0 || SelectedSegment >= Segments.Num()) { return; }
-	const FTUTrackSegment& Seg = Segments[SelectedSegment];
-	Y += 8.f;
-
-	// ---- The fields, per kind. EditConditionHides, reimplemented — and the
-	// visibility rule lives in the tested model rather than being asked again
-	// here, or the two would drift the first time a kind gained a field.
-	const EEditKind Kind = KindOf(Seg.Kind);
-	// ONCE PER DRAW, not per row. The selection is a handful, but asking the model
-	// eighteen times for the same answer is how a panel becomes the slow thing.
-	const bool bMulti = IsMultiSelect();
-	const std::vector<FFieldView> MultiFields =
-		bMulti ? BuildSelectionEditor().Fields() : std::vector<FFieldView>();
-	for (std::size_t f = 0; f < static_cast<std::size_t>(EEditField::Count); ++f)
-	{
-		const EEditField F = static_cast<EEditField>(f);
-		if (!KindUsesField(Kind, F)) { continue; }
-		// ONE LIST, not five ifs. The rates are device fields exactly as the speed
-		// is, and the model's VisibleOn says so too -- two places that must agree,
-		// which is an argument for the list being short enough to read.
-		const bool bDeviceField = F == EEditField::ZoneSpeed
-			|| F == EEditField::ZoneAccel || F == EEditField::ZoneDecel
-			|| F == EEditField::ZoneBrakeDecel || F == EEditField::StartsNewDevice;
-		if (bDeviceField && Seg.Zone == ETUSegmentZone::None) { continue; }
-		// MULTI-SELECT SHOWS THE INTERSECTION, from the tested model. A field only
-		// some of the selection uses is not editable across it — writing it would
-		// give an arc's radius to a straight — so it is not offered.
-		if (bMulti && (static_cast<std::size_t>(f) >= MultiFields.size()
-			|| !MultiFields[static_cast<std::size_t>(f)].bVisible))
-		{
-			continue;
-		}
-
-		EditorRowRects.Add(FVector4(Ox, Y, Ox + W, Y + Row));
-		EditorRowField.Add(static_cast<int32>(f));
-
-		const bool bFocus = FocusedField == F;
-		if (bFocus) { PanelTile(Canvas, Ox - 4.f, Y - 1.f, W + 8.f, Row, PanelRule); }
-
-		// A CHOICE IS NOT A NUMBER, and that is why these two rows were skipped
-		// rather than merely unfinished: a device kind is an enumeration and
-		// "starts a new device" is a flag, and neither has anything to type into
-		// a numeric field. The panel could not show them, so changing a brake to
-		// a block brake meant leaving play for the Details panel — which for the
-		// one edit somebody makes most often is the wrong place to send them.
-		//
-		// CLICK CYCLES. That is not the direct manipulation constraint 1 rules
-		// out: nothing is dragged, nothing is placed, and it is the same discrete
-		// pick the Details panel's dropdown already offers — only reachable
-		// without leaving the ride you are looking at.
-		// ASKED, NOT LISTED. This was a hand-kept expression and the help suite kept
-		// a second one; adding Kind made them disagree, so both now ask the model.
-		const bool bChoice = IsChoiceField(F);
-		FString Value;
-		if (F == EEditField::Kind)
-		{
-			Value = SegmentKindName(Seg.Kind);
-		}
-		else if (F == EEditField::ZoneKind)
-		{
-			Value = Seg.Zone == ETUSegmentZone::None
-				? FString(TEXT("none")) : FString(ZoneKindName(Seg.Zone));
-		}
-		else if (F == EEditField::StartsNewDevice)
-		{
-			Value = Seg.bStartsNewDevice ? TEXT("yes") : TEXT("no");
-		}
-		else
-		{
-			// THE VALUE, AND A CARET WHILE TYPING. What is shown mid-edit is the
-			// buffer rather than the stored number, because showing the stored one
-			// would make typing look like it was doing nothing.
-			// A DIFFERING VALUE SAYS SO RATHER THAN SHOWING THE FIRST ONE'S, which
-			// is the failure the model was written against: somebody edits what
-			// looks like the shared value and silently flattens seven others onto
-			// the one they happened to see. Typing over it is still allowed and
-			// still writes all of them — that is the intent — but they are told
-			// what they are replacing.
-			const std::size_t Fx = static_cast<std::size_t>(f);
-			const bool bDiffers = bMulti && Fx < MultiFields.size() && MultiFields[Fx].bDiffers;
-			Value = bFocus
-				? FieldBuffer + TEXT("_")
-				: (bDiffers ? FString(TEXT("--  (differs)"))
-							: FString::Printf(TEXT("%.4g"), ReadField(Seg, F)));
-		}
-
-		// UNITS ARE ALWAYS SHOWN WHERE THERE IS ONE. Turns is a count and has
-		// none, which is a distinction rather than a gap.
-		PanelLabel(Canvas, Ox + 4.f, Y, UTF8_TO_TCHAR(FieldName(F)), PanelDim);
-		PanelLabel(Canvas, Ox + 150.f, Y,
-			bChoice ? FString::Printf(TEXT("%s  <click"), *Value)
-			        : FString::Printf(TEXT("%s %s"), *Value, UTF8_TO_TCHAR(FieldUnit(F))),
-			bFocus ? PanelCyan : (bChoice ? PanelAmber : PanelText));
-		Y += Row;
-	}
-
-	// ---- The tooltip for whatever is focused, because a numeric box with no
-	// context is a box somebody types 1000 into to see what happens.
-	if (FocusedField != EEditField::Count)
-	{
-		const FFieldHelp Help = HelpFor(FocusedField);
-		Y += 6.f;
-		PanelLabel(Canvas, Ox, Y, UTF8_TO_TCHAR(Help.Tooltip), PanelDim);
-		if (Help.bHasRange)
-		{
-			PanelLabel(Canvas, Ox, Y + Row,
-				FString::Printf(TEXT("typically %.4g to %.4g %s   ·  Enter to apply, Esc to cancel"),
-					Help.TypicalMin, Help.TypicalMax, UTF8_TO_TCHAR(FieldUnit(FocusedField))),
-				PanelDim);
-		}
-	}
-}
-
 void ATUCoasterRide::SelectSegment(int32 Index, bool bExtend)
 {
 	if (!Segments.IsValidIndex(Index))
@@ -2994,17 +2768,23 @@ FSegmentEditor ATUCoasterRide::BuildSelectionEditor() const
 
 void ATUCoasterRide::ClickSegmentEditor()
 {
-	APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr;
-	if (!PC || !bShowSegmentEditor) { return; }
-	float Mx = 0.f, My = 0.f;
-	if (!PC->GetMousePosition(Mx, My)) { return; }
+	// THE WIDGET TAKES ITS OWN CLICKS; a press that reached here missed every
+	// row, and a click outside every row cancels rather than committing, because
+	// a half-typed number applied because somebody looked elsewhere is worse
+	// than one lost.
+	if (bShowSegmentEditor) { CancelField(); }
+}
 
-	for (int32 i = 0; i < EditorRowRects.Num() && i < EditorRowField.Num(); ++i)
+void ATUCoasterRide::EditorAction(int32 Action, bool bShift)
+{
+	if (!bShowSegmentEditor) { return; }
+	// KEYS GO BACK TO THE GAME. A clicked button holds Slate focus, and the
+	// digits somebody is about to type would land on the button, not the field.
+	if (FSlateApplication::IsInitialized())
 	{
-		const FVector4& R = EditorRowRects[i];
-		if (Mx < R.X || Mx > R.Z || My < R.Y || My > R.W) { continue; }
-
-		const int32 Action = EditorRowField[i];
+		FSlateApplication::Get().SetAllUserFocusToGameViewport();
+	}
+	{
 		if (Action <= -1000)
 		{
 			// SELECTING A DIFFERENT SEGMENT BREAKS THE EDIT RUN, or typing here,
@@ -3016,11 +2796,11 @@ void ATUCoasterRide::ClickSegmentEditor()
 			// and [.] do on a focused field. A shift that lands on a segment row is
 			// a selection; one that does not is still a boost, and nobody is flying
 			// the camera and clicking a row in the same gesture.
-			SelectSegment(-1000 - Action, bBoost);
+			SelectSegment(-1000 - Action, bShift);
 			// FRAMED ONLY ON A PLAIN CLICK. Re-framing on every shift-click would
 			// swing the camera across the layout while somebody is assembling a
 			// selection, which is motion sickness rather than help.
-			if (!bBoost) { FrameSelectedSegment(); }
+			if (!bShift) { FrameSelectedSegment(); }
 		}
 		else if (Session.EditsAllowed())
 		{
@@ -3081,13 +2861,11 @@ void ATUCoasterRide::ClickSegmentEditor()
 			FocusedField = F;
 			FieldBuffer.Empty();
 		}
-		return;
 	}
-	// A click outside every row cancels rather than committing, because a
-	// half-typed number applied because somebody looked elsewhere is worse than
-	// one lost.
-	CancelField();
 }
+
+const TCHAR* ATUCoasterRide::KindNameOf(ETUSegmentKind K) { return SegmentKindName(K); }
+const TCHAR* ATUCoasterRide::ZoneNameOf(ETUSegmentZone Z) { return ZoneKindName(Z); }
 
 void ATUCoasterRide::KeyBackspace()
 {
@@ -3982,6 +3760,24 @@ void ATUCoasterRide::MenuAction(int32 Action)
 			}
 		}
 	}
+}
+
+void ATUCoasterRide::ShowEditorWidget(bool bShow)
+{
+	if (!bShow)
+	{
+		if (EditorWidget) { EditorWidget->RemoveFromParent(); }
+		return;
+	}
+	if (!EditorWidget)
+	{
+		APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr;
+		if (!PC) { return; }
+		EditorWidget = CreateWidget<UTUSegmentEditorWidget>(PC, UTUSegmentEditorWidget::StaticClass());
+		if (!EditorWidget) { return; }
+		EditorWidget->Ride = this;
+	}
+	if (!EditorWidget->IsInViewport()) { EditorWidget->AddToViewport(10); }
 }
 
 void ATUCoasterRide::ShowMenuWidget(bool bShow)
@@ -6850,7 +6646,6 @@ void ATUCoasterRide::DrawPanels(UCanvas* Canvas)
 	// console's top edge landed this frame.
 	ConsolePanelTopY = 1.0e9f;
 	DrawConsole(Canvas);
-	DrawSegmentEditor(Canvas);
 	DrawModeBanner(Canvas);
 	DrawTelemetry(Canvas);
 	DrawProfileGraph(Canvas);
@@ -9884,6 +9679,11 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 	// THE MENU YIELDS TO A QUESTION. The confirm, the recovery offer and the
 	// settings page are above it (canvas, or the frame's slot); a widget that
 	// kept taking clicks under them would answer a question nobody asked it.
+	// THE EDITOR FOLLOWS ITS FLAG, which [B], [U] and the mode switch all flip
+	// from different places; syncing here is one line against four call sites.
+	ShowEditorWidget(bShowSegmentEditor && !bHideOverlays
+		&& Session.Mode() != EAppMode::Boot && Session.Mode() != EAppMode::MainMenu
+		&& !(FrameWidget && FrameWidget->IsSettingsOpen()));
 	if (MenuWidget && MenuWidget->IsInViewport())
 	{
 		const bool bAsking = bConfirmingMenu || Session.HasRecovery();
