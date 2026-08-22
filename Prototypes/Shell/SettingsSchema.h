@@ -244,6 +244,7 @@ inline std::vector<FSettingEntry> SettingsSchema()
             {"key.mode",        "Cycle mode",           "Tab"},
             {"key.camera",      "Cycle camera",         "C"},
             {"key.train",       "Next train",           "T"},
+            {"key.seat",        "Next seat",            "N"},
             {"key.frameAll",    "Frame whole track",    "F"},
             {"key.frameSel",    "Frame selection",      "Z"},
             {"key.segPrev",     "Previous segment",     "LeftBracket"},

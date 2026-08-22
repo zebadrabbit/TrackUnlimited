@@ -13,6 +13,7 @@
 #include "GameFramework/Pawn.h"
 
 #include "TrainPhysics/TrainPhysics.h"
+#include "TrainPhysics/Seat.h"
 #include "TrainPhysics/RideProfile.h"
 #include "TrackSpline/TrackProfile.h"
 // FTrackDiagnostic is a MEMBER type below, not just something the .cpp uses.
@@ -539,9 +540,8 @@ public:
 	 * curvature each is sitting on at any instant — and on an asymmetric crest
 	 * that is worth most of a G. The back row is not folklore.
 	 */
-	UPROPERTY(EditAnywhere, Category = "TrackUnlimited",
-		meta = (ClampMin = "-1.0", ClampMax = "1.0"))
-	float RiderPosition = 0.f;
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited", meta = (ClampMin = "0"))
+	int32 RiderSeat = 0;
 
 	/**
 	 * WHICH TRAIN YOU ARE ON. [T] cycles it.
@@ -569,6 +569,7 @@ public:
 	}
 
 	void NextRiderTrain();
+	void NextRiderSeat();
 
 private:
 	void RebuildFromSegments();

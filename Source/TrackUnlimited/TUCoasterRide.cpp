@@ -2375,6 +2375,9 @@ void ATUCoasterRide::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 	// other letter bound here.
 	PlayerInputComponent->BindKey(EKeys::T, IE_Pressed, this,
 		&ATUCoasterRide::NextRiderTrain);
+	// [N] -- the next seat: car by car from the nose, left then right.
+	PlayerInputComponent->BindKey(EKeys::N, IE_Pressed, this,
+		&ATUCoasterRide::NextRiderSeat);
 
 	// [M] — back to the MENU, and [K] saves.
 	//
@@ -4271,6 +4274,7 @@ void ATUCoasterRide::ApplyAppMode(EAppMode Want)
 	case EAppMode::Ride:
 		PanelView = ETUPanelView::Off;
 		CameraMode = ETUCameraMode::Rider;
+		bShowSegmentEditor = false;   // a list of segments is not a view from a seat; [B] brings it back
 		break;
 	case EAppMode::Boot:
 	case EAppMode::MainMenu:
@@ -4374,6 +4378,12 @@ void ATUCoasterRide::DrawModeBanner(UCanvas* Canvas)
 	{
 		Line += FString::Printf(TEXT("   train %d/%d  [T]"),
 			ActiveTrainIndex() + 1, Trains.Num());
+	}
+	if (CameraMode == ETUCameraMode::Rider && CarCount > 0)
+	{
+		const FSeat Seat = SeatByIndex(RiderSeat, CarCount, 1.0);
+		Line += FString::Printf(TEXT("   car %d %s  [N]"),
+			Seat.Car + 1, Seat.LateralM > 0.0 ? TEXT("left") : TEXT("right"));
 	}
 
 	// THE CLOCK IS ALWAYS STATED WHEN IT IS NOT 1x. A ride running at quarter
@@ -9708,6 +9718,12 @@ static void SetNearPlaneMetres(double Metres)
 // The wireframe and the ride-profile trace are PERSISTENT debug lines drawn once
 // at BeginPlay rather than every frame, so hiding them means flushing and
 // unhiding means redrawing. Everything else is a per-frame gate.
+void ATUCoasterRide::NextRiderSeat()
+{
+	RiderSeat = (RiderSeat + 1) % FMath::Max(1, CarCount * 2);
+	UE_LOG(LogTUEvents, Log, TEXT("[N] seat %d"), RiderSeat);
+}
+
 void ATUCoasterRide::NextRiderTrain()
 {
 	if (Trains.Num() <= 1)
@@ -10054,9 +10070,16 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 		DrawBlockMarkers();
 	}
 
-	// Where the rider is sitting, which is a real choice now that cars differ.
-	const double SeatOffset = RiderPosition * TrainLengthM * 0.5;
-	const FTrackFrame& Frame = Train->GetFrameAt(SeatOffset);
+	// WHERE THE RIDER IS SITTING IS A SEAT, not a fraction of a train. The
+	// continuous -1..+1 slider described a rider half in one car; a real ride
+	// has row 1 and row 2. Seat.h is the one answer for along, across and up,
+	// and the camera sits exactly in it -- the eye offset that used to be
+	// added here is the seat's VerticalM.
+	FSeat Seat = SeatByIndex(RiderSeat, CarCount,
+		TrainMeshSettings().BodyWidthM * 0.25);   // a seat each side of centre
+	Seat.VerticalM = RiderEyeAboveHeartlineM;     // the knob still owns the eye height
+	const double SeatOffset = SeatOffsetAlongM(Seat, CarCount, static_cast<double>(CarLengthM));
+	const FTrackFrame Frame = SeatFrame(Train->GetFrameAt(SeatOffset), Seat);
 	const FQuat Rotation = ToWorldRotation(Frame);
 
 	// THE BODY OF THE TRAIN, ONE BOX PER SAMPLE POINT — and the boxes ABUT into
@@ -10284,8 +10307,7 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 		// about and what the banking is built around; moving it to suit a camera
 		// would change every G number on the ride to fix a framing problem. This
 		// is a cosmetic offset on the view alone and touches no physics.
-		Camera->SetWorldLocationAndRotation(
-			ToWorld(Frame.Position + Frame.Up * RiderEyeAboveHeartlineM), Rotation);
+		Camera->SetWorldLocationAndRotation(ToWorld(Frame.Position), Rotation);
 		// Centimetres in a seat, or the restraint in front of the rider is clipped
 		// off — the other end of the same trade the orbit camera makes. 2 cm is
 		// twice the engine's own 1 cm floor, so it survives the clamp.
