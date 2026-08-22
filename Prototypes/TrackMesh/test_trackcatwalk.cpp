@@ -301,6 +301,24 @@ void TestTheDeckStaysLEVELThroughABankedTurn()
 }
 
 // Nothing asked for is nothing built — not an empty run, not a degenerate quad.
+// ===================== NOTHING ON THE CATWALK IS ABOVE THE CAR =====================
+//
+// A rider who puts an arm outside the car must not be able to reach the
+// handrail. The car's top edge is 0.90 m above the rail plane and the
+// heartline 1.10, so the rail's top must stay under heartline - 0.20; on this
+// flat track the heartline is z = 0.
+void TestTheHandrailIsBelowTheCarsTopEdge()
+{
+    std::printf("The handrail is below the car's top edge, where an arm cannot reach it\n");
+    const FTrack T = Straight();
+    const FCatwalkMesh M = BuildCatwalks(WalkTrack(T, 0.5), OneSpan(5.0, 35.0, EWalkway::Left), FTrackProfile());
+    double Top = -1e9;
+    for (const FVec3& P : M.Rail.Position) { Top = std::max(Top, P.Z); }
+    for (const FVec3& P : M.Deck.Position) { Top = std::max(Top, P.Z); }
+    assert(Top < -0.20);
+    std::printf("  highest point %.2f m under the heartline, car top is 0.20 under\n", -Top);
+}
+
 void TestNoWalkwayIsNoGeometry()
 {
     std::printf("No walkway is no geometry\n");
@@ -324,6 +342,7 @@ int main()
     TestASpanBoundaryENDSTheDeck();
     TestUnwalkableBankIsREPORTEDNotDropped();
     TestTheDeckStaysLEVELThroughABankedTurn();
+    TestTheHandrailIsBelowTheCarsTopEdge();
     TestNoWalkwayIsNoGeometry();
 
     std::printf("\ntest_trackcatwalk: all assertions passed.\n");

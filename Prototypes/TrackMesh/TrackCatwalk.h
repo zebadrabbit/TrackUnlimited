@@ -59,10 +59,17 @@ struct FCatwalkSettings
     // train goes past — which is the whole reason a catwalk is outboard.
     double InboardGapM = 0.25;
 
-    // How far below the rail centreline the deck surface sits. Roughly at the
-    // spine's top, so somebody walking is level with the track rather than
-    // wading through it.
-    double DeckDropM = 0.18;
+    // How far below the HEARTLINE the deck surface sits.
+    //
+    // BELOW THE CAR'S TOP EDGE, HANDRAIL INCLUDED. It was 0.18, which put the
+    // deck level with the top of the car body (0.90 above the rail plane, the
+    // heartline 1.10) and the top rail a metre above that -- exactly where a
+    // rider's arm reaches if they put it outside the car. A catwalk a rider can
+    // touch is a strike hazard, not a walkway. With the deck 1.35 under the
+    // heartline (0.25 below the rail plane, which is where NL2 puts one) the
+    // rail's top is 1.05 higher, 0.30 under the heartline and 0.10 under the
+    // body's top edge: nothing on the catwalk is above the car.
+    double DeckDropM = 1.35;
 
     // GUARDRAIL, at the heights industrial practice uses: a top rail at about
     // 1.1 m and a mid rail halfway. Two rails rather than three because the third
