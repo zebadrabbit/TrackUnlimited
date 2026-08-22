@@ -375,6 +375,125 @@ void TestTheBodyLeavesTheHEARTLINEInTheOpen()
     assert(BodySwallowsHeartline(Tall, H));
 }
 
+// ===================== THE SHELL CLEARS EVERY WHEEL IT PASSES =====================
+//
+// THE TEST BELOW THIS ONE USED TO BE THE WHOLE STORY, AND IT WAS HALF OF IT. It
+// measured the shell at the floor line against the RAILS, while its own comment
+// claimed the wheels were the reason -- so the shell was drawn straight through
+// the running wheels by 0.168 m and through the side-friction wheels by 0.167 m
+// and the suite said nothing. The first was reported from a screenshot. The
+// second could not be: it is buried inside the floor, where nothing can see it.
+//
+// A WHEEL IS A BAND OF HEIGHTS, NOT A POINT, which is the whole reason one Z
+// sample missed it. What matters is the widest the shell gets ANYWHERE in the
+// band a wheel occupies, and that maximum falls between section vertices rather
+// than on one -- so this walks the section POLYLINE instead of its points.
+static double ShellHalfWidthAt(const std::vector<FVec2>& Sec, double BodyCentreZ, double Z)
+{
+    const double B = Z - BodyCentreZ;
+    double Best = -1.0;
+    for (std::size_t i = 0; i < Sec.size(); ++i)
+    {
+        const FVec2& P = Sec[i];
+        const FVec2& Q = Sec[(i + 1) % Sec.size()];
+        const double Lo = std::min(P.V, Q.V), Hi = std::max(P.V, Q.V);
+        if (B < Lo - 1e-9 || B > Hi + 1e-9) { continue; }
+        const double T = std::fabs(Q.V - P.V) < 1e-12 ? 0.0 : (B - P.V) / (Q.V - P.V);
+        const double A = P.U + T * (Q.U - P.U);
+        Best = std::max(Best, std::fabs(A));
+    }
+    return Best;
+}
+
+// The worst (smallest) clearance between the shell and any wheel, in metres.
+// Negative means the shell is inside a wheel.
+static double WorstWheelClearance(const FTrainSettings& S, const FTrackProfile& P,
+                                  double HeartlineHeight, const char** Which)
+{
+    const double RailZ = -HeartlineHeight;
+    const double RailR = P.RailDiameter * 0.5;
+    const double HalfGauge = P.Gauge * 0.5;
+    const double BodyCentreZ = RailZ + S.BodyHeightM * 0.5;
+    const std::vector<FVec2> Sec = CarBodySection(S, ShellKeepOut(S, P));
+
+    struct W { const char* Name; double Zlo, Zhi, InnerY; };
+    const double RunC = RailZ + RailR + S.RunningWheelDiameterM * 0.5;
+    const double UpC = RailZ - RailR - S.UpstopWheelDiameterM * 0.5;
+    const double SideY = HalfGauge - (RailR + S.SideWheelDiameterM * 0.5);
+    const W Wheels[] = {
+        {"running", RunC - S.RunningWheelDiameterM * 0.5, RunC + S.RunningWheelDiameterM * 0.5,
+         HalfGauge - S.WheelWidthM * 0.5},
+        {"upstop",  UpC - S.UpstopWheelDiameterM * 0.5,  UpC + S.UpstopWheelDiameterM * 0.5,
+         HalfGauge - S.WheelWidthM * 0.5},
+        {"side",    RailZ - S.WheelWidthM * 0.5,          RailZ + S.WheelWidthM * 0.5,
+         SideY - S.SideWheelDiameterM * 0.5},
+    };
+
+    double Worst = 1e9;
+    for (const W& w : Wheels)
+    {
+        for (int i = 0; i <= 400; ++i)
+        {
+            const double Z = w.Zlo + (w.Zhi - w.Zlo) * (i / 400.0);
+            const double HW = ShellHalfWidthAt(Sec, BodyCentreZ, Z);
+            if (HW < 0.0) { continue; }   // the shell is not at this height at all
+            const double Clear = w.InnerY - HW;
+            if (Clear < Worst) { Worst = Clear; if (Which) { *Which = w.Name; } }
+        }
+    }
+    return Worst;
+}
+
+void TestTheShellCLEARSEveryWheelItPasses()
+{
+    std::printf("The shell clears every wheel it passes\n");
+
+    const FTrackProfile P;
+    const FTrainSettings S;
+    const char* Which = "";
+    const double Clear = WorstWheelClearance(S, P, 1.1, &Which);
+    std::printf("  worst clearance %.4f m, at the %s wheel\n", Clear, Which);
+    assert(Clear > 0.0 && "the shell is drawn through its own wheels");
+    assert(Clear >= S.WheelClearanceM - 1e-6 && "the shell is closer than the fitted gap");
+
+    // ---- IT IS DERIVED, WHICH IS THE CLAIM WORTH ASSERTING. Three numbers in
+    // settings would clear these wheels too, and would go on clearing THESE
+    // wheels after somebody changed a diameter. Move the hardware and the shell
+    // has to move out of its way on its own, or this is taste wearing a formula.
+    const double Gauges[] = {0.90, 1.10, 1.35};
+    const double RunDias[] = {0.24, 0.30, 0.42};
+    for (double G : Gauges)
+    {
+        for (double D : RunDias)
+        {
+            FTrackProfile P2 = P;
+            P2.Gauge = G;
+            FTrainSettings S2 = S;
+            S2.RunningWheelDiameterM = D;
+            const char* W2 = "";
+            const double C2 = WorstWheelClearance(S2, P2, 1.1, &W2);
+            assert(C2 > 0.0 && "a changed wheel put the shell back inside one");
+        }
+    }
+    std::printf("  and it stays clear across 9 gauge x wheel-size combinations\n");
+
+    // ---- AND IT BITES. Zero the fitted gap and ask for a floor as wide as the
+    // car: the clamp still keeps geometry out of the wheels, so what proves the
+    // check works is that the clearance collapses to exactly nothing.
+    FTrainSettings Tight = S;
+    Tight.WheelClearanceM = 0.0;
+    Tight.BodyFloorWidthM = 1.40;
+    const double Touching = WorstWheelClearance(Tight, P, 1.1, nullptr);
+    std::printf("  with no fitted gap the shell touches at %.6f m\n", Touching);
+    assert(std::fabs(Touching) < 1e-6 && "the clamp is not what is holding it out");
+
+    // ---- And asking for that floor is REPORTED, because the author asked for
+    // something they did not get.
+    const std::vector<FMeshFinding> F = AuditTrain(Tight, 1.1, P, 1288.0);
+    assert(F.size() == 1);
+    std::printf("  %s\n", F[0].What.c_str());
+}
+
 // ===================== THE FLOOR CLEARS THE RAILS =====================
 //
 // The taper is not styling. The floor line runs through the rail plane, so a
@@ -681,6 +800,7 @@ int main()
     TestEveryPartIsCLOSEDAndENCLOSESVolume();
     TestTheThreeWheelSetsGRIPTheRail();
     TestTheBodyLeavesTheHEARTLINEInTheOpen();
+    TestTheShellCLEARSEveryWheelItPasses();
     TestTheTaperedFloorClearsBOTHRunningRails();
     TestCarsCHORDAcrossACurveRatherThanBendingWithIt();
     TestCouplersJOINAdjacentCarsOnAStraightAndACurve();

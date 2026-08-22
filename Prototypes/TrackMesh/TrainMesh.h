@@ -114,7 +114,7 @@ struct FTrainSettings
     // ---- The shell. THE ONLY PART WITH TASTE IN IT; see CarBodySection.
     double BodyWidthM = 1.40;         // at its widest, which is the top
     double BodyHeightM = 0.90;        // LOAD-BEARING — see BodySwallowsHeartline
-    double BodyFloorWidthM = 0.85;    // at the floor, and it must clear the rails
+    double BodyFloorWidthM = 0.52;    // at the floor, and it must clear the WHEELS
     double BodyTaperFraction = 0.45;  // how far up the flank reaches full width
     double BodyCornerRadiusM = 0.15;
     double BodyGapM = 0.30;           // pitch minus shell, so cars do not weld
@@ -130,6 +130,12 @@ struct FTrainSettings
     double SideWheelDiameterM = 0.20;
     double UpstopWheelDiameterM = 0.20;
     double WheelWidthM = 0.10;
+
+    // HARDWARE NEEDS A GAP, and this is the one number here that is a fitter's
+    // judgement rather than a derivation. The shell is held this far clear of
+    // every wheel; at zero they would touch exactly, which is a rendering
+    // coin-toss rather than a design.
+    double WheelClearanceM = 0.03;
 
     // How far in from each end of the car the wheel assembly sits.
     double BogieInsetM = 0.50;
@@ -350,23 +356,85 @@ inline void SweepSection(FMeshBuffer& Out, const std::vector<FTubeRing>& Rings,
 // entire reason this reads as a coaster rather than a bus — would be buried
 // inside it. Real car bodies taper toward the floor for the same reason.
 //
+// ===================== WHERE THE WHEELS WILL NOT LET THE SHELL GO =====================
+//
+// DERIVED FROM THE WHEELS, NEVER AUTHORED. Two of the three sets sit in the same
+// vertical band as the bottom of the shell, so each one says how wide the shell
+// may be while it is passing them. Leaving these as taste numbers is what
+// produced the defect this replaces: the shell was drawn through the running
+// wheels by 0.168 m and through the side wheels by 0.167 m, and only the first
+// was ever visible, because the second is buried inside the floor.
+//
+// Heights are measured ABOVE THE FLOOR rather than in car space, which is what
+// keeps CarBodySection a pure shape function that knows nothing about a track.
+struct FShellKeepOut
+{
+    double FloorHalfWidth = 0.0;  // between the side-friction wheels
+    double SideTopM       = 0.0;  // ... which the shell is past at this height
+    double MidHalfWidth   = 0.0;  // inboard of the running wheels
+    double RunTopM        = 0.0;  // ... which the shell is past at this height
+};
+
+inline FShellKeepOut ShellKeepOut(const FTrainSettings& S, const FTrackProfile& Profile)
+{
+    const double HalfGauge = Profile.Gauge * 0.5;
+    const double RailR = Profile.RailDiameter * 0.5;
+    const double Gap = std::max(0.0, S.WheelClearanceM);
+
+    FShellKeepOut K;
+
+    // SIDE FRICTION RUNS AGAINST THE RAIL'S INNER FACE, so it is a puck lying flat
+    // at rail height with its axis vertical — the same height as the floor, which
+    // is exactly why it constrains the floor and why nothing else does.
+    K.SideTopM = S.WheelWidthM * 0.5;
+    K.FloorHalfWidth = HalfGauge - RailR - S.SideWheelDiameterM - Gap;
+
+    // THE RUNNING WHEEL STANDS ON TOP OF THE RAIL, so it reaches a whole diameter
+    // above the rail plane and the shell must stay inboard of its inner face for
+    // all of that. This is the one the eye catches first.
+    K.RunTopM = RailR + S.RunningWheelDiameterM;
+    K.MidHalfWidth = HalfGauge - S.WheelWidthM * 0.5 - Gap;
+
+    // The upstop hangs BELOW the rail, and the floor is above it, so it never
+    // meets the shell and gets no entry here. Asserted rather than assumed.
+    return K;
+}
+
 // Returned counter-clockwise in (AxisA = rider's left, AxisB = up), relative to
 // the BODY CENTRE, which is the winding SweepSection wants.
-inline std::vector<FVec2> CarBodySection(const FTrainSettings& S)
+inline std::vector<FVec2> CarBodySection(const FTrainSettings& S,
+                                        const FShellKeepOut& K)
 {
     std::vector<FVec2> Out;
     const double W = S.BodyWidthM * 0.5;
     const double H = S.BodyHeightM * 0.5;
-    const double Wf = std::min(S.BodyFloorWidthM * 0.5, W);
     const double R = std::min(S.BodyCornerRadiusM, std::min(W, H) * 0.9);
-    const double Taper = std::max(0.0, std::min(1.0, S.BodyTaperFraction)) * S.BodyHeightM;
+
+    // CLAMPED, NOT REFUSED, and the audit reports what was asked for. A shell
+    // merely narrower than requested is still a car; one drawn through its own
+    // wheels is a defect, so the clamp fails in the direction that stays a car.
+    const double Wf = std::min(std::min(S.BodyFloorWidthM * 0.5, K.FloorHalfWidth), W);
+    const double Wm = std::min(std::max(Wf, K.MidHalfWidth), W);
+
+    // FULL WIDTH CANNOT ARRIVE BEFORE THE WHEELS ARE PAST. The authored taper is
+    // taste and is honoured wherever it is legal; below the running wheels it is
+    // not, so the taper gets pushed UP rather than the shell being pushed OUT.
+    const double Shoulder = S.BodyHeightM - R;
+    const double hAuthored = std::max(0.0, std::min(1.0, S.BodyTaperFraction)) * S.BodyHeightM;
+    const double hFull = std::max(std::min(hAuthored, Shoulder),
+                                  std::min(K.RunTopM + 0.02, Shoulder));
 
     const double Quarter = TrackMeshTwoPi * 0.25;
     const int ArcSteps = 3;
 
-    // Up the LEFT flank: floor outward to full width, then straight to the roof.
+    // Up the LEFT flank, and it has TWO KNEES rather than one straight flare: a
+    // narrow pan between the side wheels, out over the running wheels, then full
+    // width at the shoulder. That is the shape the wheel envelope forces, and it
+    // is also the shape a real car has, which is not a coincidence.
     Out.push_back({Wf, -H});
-    Out.push_back({W, -H + Taper});
+    Out.push_back({Wf, -H + K.SideTopM});
+    Out.push_back({Wm, -H + K.RunTopM});
+    Out.push_back({W, -H + hFull});
     Out.push_back({W, H - R});
 
     // Top-left corner. Three points reads as rounded without spending vertices
@@ -386,7 +454,9 @@ inline std::vector<FVec2> CarBodySection(const FTrainSettings& S)
         Out.push_back({-(W - R) - R * std::cos(A), H - R + R * std::sin(A)});
     }
     Out.push_back({-W, H - R});
-    Out.push_back({-W, -H + Taper});
+    Out.push_back({-W, -H + hFull});
+    Out.push_back({-Wm, -H + K.RunTopM});
+    Out.push_back({-Wf, -H + K.SideTopM});
     Out.push_back({-Wf, -H});
     return Out;
 }
@@ -443,7 +513,8 @@ inline FTrainMesh BuildCarMesh(const FTrainSettings& S, double HeartlineHeight,
         std::vector<FTubeRing> Rings(2);
         Rings[0] = {FVec3{-ShellHalf, 0.0, BodyCentreZ}, Across, Vertical, 0.0};
         Rings[1] = {FVec3{ ShellHalf, 0.0, BodyCentreZ}, Across, Vertical, S.CarLengthM};
-        SweepSection(M.Body, Rings, CarBodySection(S), S.TextureMetres, true, true);
+        SweepSection(M.Body, Rings, CarBodySection(S, ShellKeepOut(S, Profile)),
+                     S.TextureMetres, true, true);
     }
 
     // ---- The chassis: a beam between the bogies, hung just under the rail plane
@@ -725,16 +796,20 @@ inline std::vector<FMeshFinding> AuditTrain(const FTrainSettings& S,
         Out.push_back({0.0, 0.0, 0.0, Buf});
     }
 
-    // The floor line runs through the rail plane, so a floor wider than the rails
-    // are apart is drawn straight through both of them.
+    // THE SIDE WHEELS BIND BEFORE THE RAILS DO, which is why this reports against
+    // them. The floor line runs through the rail plane and the side-friction
+    // pucks lie flat in that same plane, INBOARD of the rails — so a floor that
+    // clears the rails can still be drawn straight through both pucks, and that
+    // one is invisible from outside because the wheel is inside the shell.
     const double FloorHalf = S.BodyFloorWidthM * 0.5;
-    const double RailInner = Profile.Gauge * 0.5 - Profile.RailDiameter * 0.5;
-    if (FloorHalf > RailInner)
+    const FShellKeepOut K = ShellKeepOut(S, Profile);
+    if (FloorHalf > K.FloorHalfWidth)
     {
         std::snprintf(Buf, sizeof(Buf),
-            "the body floor is %.2f m across where the rails leave only %.2f m clear "
-            "between them, so the shell is drawn through both rails. Narrow the floor, "
-            "or widen the gauge.", S.BodyFloorWidthM, RailInner * 2.0);
+            "the body floor is %.2f m across where the side-friction wheels leave only "
+            "%.2f m clear between them, so the shell would be drawn through both. It is "
+            "built narrow instead. Narrow the floor, or widen the gauge.",
+            S.BodyFloorWidthM, K.FloorHalfWidth * 2.0);
         Out.push_back({0.0, 0.0, 0.0, Buf});
     }
 
