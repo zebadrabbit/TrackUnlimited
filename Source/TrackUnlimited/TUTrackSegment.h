@@ -245,6 +245,14 @@ struct FTUTrackStyle
 	UPROPERTY(EditAnywhere, Category = "Style")
 	FLinearColor TieColour = FLinearColor(0.30f, 0.32f, 0.35f);
 
+	// Supports and the train body: the two other things a style chooses the
+	// colour of. Galvanised steel and a body colour that is not the rail's.
+	UPROPERTY(EditAnywhere, Category = "Style")
+	FLinearColor SupportColour = FLinearColor(0.58f, 0.60f, 0.63f);
+
+	UPROPERTY(EditAnywhere, Category = "Style")
+	FLinearColor TrainColour = FLinearColor(0.55f, 0.06f, 0.05f);
+
 	// ---- Section. The same knobs FTrackProfile carries, surfaced so a style is
 	// one thing to pick rather than a colour plus six numbers somewhere else.
 	UPROPERTY(EditAnywhere, Category = "Style", meta = (ClampMin = "0.4", ClampMax = "2.0"))

@@ -8629,6 +8629,9 @@ void ATUCoasterRide::RebuildTrainMesh()
 	PushOrUpdateMeshSection(TrainChassisMesh, All.Chassis);
 	PushOrUpdateMeshSection(TrainWheelMesh, All.Wheels);
 	PushOrUpdateMeshSection(TrainCouplerMesh, All.Couplers);
+	// The train is built after the track, so its sections did not exist when
+	// the style was applied. Cheap: the instances are cached.
+	ApplyTrackStyle();
 }
 
 void ATUCoasterRide::PushMeshSection(UProceduralMeshComponent* Target, const FMeshBuffer& M) const
@@ -8705,6 +8708,7 @@ FTUTrackStyle ATUCoasterRide::StylePreset(ETUTrackStyleName Which)
 		S.RailColour = FLinearColor(0.55f, 0.56f, 0.58f);
 		S.SpineColour = FLinearColor(0.16f, 0.35f, 0.55f);
 		S.TieColour = FLinearColor(0.22f, 0.24f, 0.26f);
+		S.TrainColour = FLinearColor(0.08f, 0.22f, 0.50f);   // blue cars on a blue spine
 		S.GaugeM = 1.22f;              // the wide end of the real range
 		S.RailDiameterM = 0.127f;      // and the fat end of the rail range
 		S.SpineDropM = 0.38f;
@@ -8717,6 +8721,7 @@ FTUTrackStyle ATUCoasterRide::StylePreset(ETUTrackStyleName Which)
 		S.RailColour = FLinearColor(0.70f, 0.72f, 0.75f);
 		S.SpineColour = FLinearColor(0.20f, 0.60f, 0.42f);
 		S.TieColour = FLinearColor(0.34f, 0.36f, 0.38f);
+		S.TrainColour = FLinearColor(0.90f, 0.55f, 0.05f);   // a family ride is bright
 		// NARROW GAUGE FOR THE SMALL VEHICLES the small-batch preset already
 		// ships. 0.76 m is the bottom of the real range and it is where a
 		// six-metre car belongs.
@@ -8779,6 +8784,21 @@ void ATUCoasterRide::ApplyTrackStyle()
 	Paint(RailMaterial, RailMesh, S.RailColour);
 	Paint(SpineMaterial, SpineMesh, S.SpineColour);
 	Paint(TieMaterial, TieMesh, S.TieColour);
+
+	// AND THE OTHER SEVEN, which were all the engine's grey. The sections exist
+	// BECAUSE they are different materials, and every one drew as the same one.
+	// Supports and the body are the style's; the rest are what they are on any
+	// ride -- a deck is dark grating, a handrail is safety yellow, a chassis is
+	// dark steel, a wheel is polyurethane over a hub, a coupler is steel.
+	// ponytail: colour only on one engine material; roughness/metal per section
+	// wants a material asset, which is an editor job.
+	Paint(SupportMaterial, SupportMesh, S.SupportColour);
+	Paint(CatwalkDeckMaterial, CatwalkDeckMesh, FLinearColor(0.16f, 0.17f, 0.18f));
+	Paint(CatwalkRailMaterial, CatwalkRailMesh, FLinearColor(0.85f, 0.62f, 0.08f));
+	Paint(TrainBodyMaterial, TrainBodyMesh, S.TrainColour);
+	Paint(TrainChassisMaterial, TrainChassisMesh, FLinearColor(0.10f, 0.11f, 0.12f));
+	Paint(TrainWheelMaterial, TrainWheelMesh, FLinearColor(0.05f, 0.05f, 0.05f));
+	Paint(TrainCouplerMaterial, TrainCouplerMesh, FLinearColor(0.28f, 0.29f, 0.30f));
 }
 
 void ATUCoasterRide::LoadBrakeSounds()

@@ -863,6 +863,20 @@ private:
 	TObjectPtr<class UMaterialInstanceDynamic> SpineMaterial;
 	UPROPERTY(Transient)
 	TObjectPtr<class UMaterialInstanceDynamic> TieMaterial;
+	UPROPERTY(Transient)
+	TObjectPtr<class UMaterialInstanceDynamic> SupportMaterial;
+	UPROPERTY(Transient)
+	TObjectPtr<class UMaterialInstanceDynamic> CatwalkDeckMaterial;
+	UPROPERTY(Transient)
+	TObjectPtr<class UMaterialInstanceDynamic> CatwalkRailMaterial;
+	UPROPERTY(Transient)
+	TObjectPtr<class UMaterialInstanceDynamic> TrainBodyMaterial;
+	UPROPERTY(Transient)
+	TObjectPtr<class UMaterialInstanceDynamic> TrainChassisMaterial;
+	UPROPERTY(Transient)
+	TObjectPtr<class UMaterialInstanceDynamic> TrainWheelMaterial;
+	UPROPERTY(Transient)
+	TObjectPtr<class UMaterialInstanceDynamic> TrainCouplerMaterial;
 
 	/** Metres between rings. THE quality/cost knob, and a distance rather than a
 	 *  count so a long track does not come out coarser than a short one. */
