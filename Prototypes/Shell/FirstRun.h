@@ -205,7 +205,7 @@ inline const char* WhyCannotIDragTheTrack()
 // The one-line version, for a tooltip on the viewport itself.
 inline const char* ViewportHint()
 {
-    return "This view is a preview — edit the numbers on the left. Why?";
+    return "This view is a preview — edit the numbers in the panel. Why?";
 }
 
 // ===================== TEMPLATES =====================

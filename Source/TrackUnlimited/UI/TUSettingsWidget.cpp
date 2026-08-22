@@ -158,6 +158,29 @@ void UTUSettingsWidget::BuildPageTabs()
 		TabBindings.Add(B);
 		Tab->OnClicked.AddDynamic(B, &UTUSettingBinding::OnPageClicked);
 	}
+
+	// CLOSE, after the pages. Generated here for the same reason the tabs are:
+	// no asset edit, and it cannot be forgotten.
+	{
+		UButton* Close = WidgetTree->ConstructWidget<UButton>();
+		UTextBlock* Label = WidgetTree->ConstructWidget<UTextBlock>();
+		Label->SetText(FText::FromString(TEXT("CLOSE  [O]")));
+		Label->SetColorAndOpacity(FSlateColor(FTUStyle::TextPrimary));
+		Close->AddChild(Label);
+		if (UHorizontalBoxSlot* S = PageTabs->AddChildToHorizontalBox(Close))
+		{
+			S->SetPadding(FMargin(24.f, 6.f, 4.f, 6.f));
+		}
+		Close->OnClicked.AddDynamic(this, &UTUSettingsWidget::OnClose);
+	}
+}
+
+void UTUSettingsWidget::OnClose()
+{
+	if (ATUCoasterRide* R = Ride.Get())
+	{
+		R->ToggleSettings();
+	}
 }
 
 void UTUSettingsWidget::ShowPage(ESettingPage Page)

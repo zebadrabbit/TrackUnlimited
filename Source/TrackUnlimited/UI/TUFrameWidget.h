@@ -76,6 +76,12 @@ public:
 	 */
 	void ToggleSettings();
 
+	/** Close it if it is open. Every mode change calls this: a settings page left
+	 *  in the content slot over a new mode is a menu nobody can get rid of. */
+	void CloseSettings();
+
+	bool IsSettingsOpen() const { return SettingsWidget != nullptr; }
+
 	/** Found by path, like the frame itself. Null is a valid state. */
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|UI")
 	TSubclassOf<class UTUSettingsWidget> SettingsWidgetClass;

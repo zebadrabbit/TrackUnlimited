@@ -1640,6 +1640,31 @@ private:
 	TArray<FVector4> MenuRowRects;
 	TArray<int32> MenuRowAction;   // >=0 template, -1000-n recent index, -1 open, -2 save
 
+	/** The [ MENU ] button in the mode banner: the one on-screen way back out of
+	 *  a track. [M] is the same action; a key nobody knows about is not a way out. */
+	FVector4 MenuButtonRect = FVector4(0.f, 0.f, 0.f, 0.f);
+
+	/** The telemetry readout, keyed so a line replaces itself. It used to be
+	 *  AddOnScreenDebugMessage, which draws wherever the engine likes -- which was
+	 *  on top of the mode banner and the frame. Drawn by DrawTelemetry in a slot. */
+	TMap<int32, TPair<FColor, FString>> TelemetryLines;
+	void Telemetry(int32 Key, float /*unused*/, const FColor& Col, const FString& Text)
+	{
+		TelemetryLines.Add(Key, TPair<FColor, FString>(Col, Text));
+	}
+	void DrawTelemetry(class UCanvas* Canvas);
+
+	/** Top edge of the control panel as last drawn, so the graph can sit above it
+	 *  instead of through it. Reset to "off the bottom" each frame it is not drawn. */
+	float ConsolePanelTopY = 1.0e9f;
+
+	/** The orbit is posed at the menu's shallow backdrop angle, to be replaced by
+	 *  the real default the next time there is a track to frame. */
+	bool bOrbitIsBackdrop = false;
+
+	/** Height the control panel's contents actually took last frame. */
+	float ConsoleContentH = 0.f;
+
 	/** [M] — back to the menu. The one navigation this shell was missing, and the
 	 *  one transition that can discard work. */
 	void OpenMainMenu();
@@ -1835,6 +1860,8 @@ private:
 	 * draws this, then the menu, the drag answer and the confirm.
 	 */
 	void DrawPanels(class UCanvas* Canvas);
+	/** The generated control panel proper; DrawPanels calls it first. */
+	void DrawConsole(class UCanvas* Canvas);
 
 	/**
 	 * THE SEGMENT EDITOR, AS A RUNTIME PANEL.
@@ -1972,6 +1999,10 @@ public:
 	 * MayEnter is a separate call the shell is expected to make first.
 	 */
 	void EnterAppMode(EAppMode Wanted, bool bConfirmed = false);
+
+	/** [O] — the settings screen, hosted by the frame. Public because the page's
+	 *  own CLOSE button comes back through it. */
+	void ToggleSettings();
 
 	/**
 	 * THE SHELL'S FRAME. Created once at BeginPlay and given this actor to read.
@@ -2253,8 +2284,6 @@ private:
 	bool bHideOverlays = false;
 	void ToggleOverlays();
 
-	/** [O] — the settings screen, hosted by the frame. */
-	void ToggleSettings();
 
 	/** [F] — frame the whole track. The thing you press constantly when a
 	 *  validation warning points somewhere and you have no idea where. */

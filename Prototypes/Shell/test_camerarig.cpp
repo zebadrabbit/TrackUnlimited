@@ -162,6 +162,24 @@ void TestZOOMIsMultiplicativeBecauseAdditiveIsUnusable()
     std::printf("  a wheel notch moves the same proportion at 10 m and at 1000 m\n");
 }
 
+void TestNEGATIVEPitchLooksDOWN()
+{
+    // The comment on PitchDeg says negative looks down, matching Unreal. For as
+    // long as nothing checked, the maths put a -25 deg camera BELOW its focus,
+    // looking up -- every track framed from underneath.
+    FOrbitState O;
+    O.YawDeg = 0.0;
+    O.PitchDeg = -25.0;
+    O.Distance = 100.0;
+    const FCamVec P = O.Position();
+    assert(P.Z > O.Focus.Z);                 // above the subject
+    // And the pan plane agrees: screen-up from there is still mostly world-up.
+    const FCamVec Before = O.Focus;
+    O.Pan(0.0, 100.0);
+    assert(O.Focus.Z > Before.Z);
+    std::printf("  negative pitch stands above the focus and looks down\n");
+}
+
 void TestPANNINGMovesTheFocusInTheCameraPlane()
 {
     // Dragging across the screen should move the world by about the same fraction
@@ -255,6 +273,7 @@ int main()
     TestFramingUsesTheSPHERESoItSurvivesOrbiting();
     TestTheNEARPlaneFollowsTheCamera();
     TestPITCHIsCLAMPEDNotWrapped();
+    TestNEGATIVEPitchLooksDOWN();
     TestZOOMIsMultiplicativeBecauseAdditiveIsUnusable();
     TestPANNINGMovesTheFocusInTheCameraPlane();
     TestSMOOTHINGIsFrameRateIndependent();

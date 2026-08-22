@@ -177,7 +177,7 @@ struct FOrbitState
         const double Y = CamRad(YawDeg);
         const double P = CamRad(PitchDeg);
         const FCamVec Right{-std::sin(Y), std::cos(Y), 0.0};
-        const FCamVec Up{-std::cos(Y) * std::sin(P), -std::sin(Y) * std::sin(P), std::cos(P)};
+        const FCamVec Up{std::cos(Y) * std::sin(P), std::sin(Y) * std::sin(P), std::cos(P)};
         const double Scale = Distance * 0.001;
         Focus = Focus + Right * (ScreenRight * Scale) + Up * (ScreenUp * Scale);
     }
@@ -186,7 +186,10 @@ struct FOrbitState
     {
         const double Y = CamRad(YawDeg);
         const double P = CamRad(PitchDeg);
-        const FCamVec Back{-std::cos(Y) * std::cos(P), -std::sin(Y) * std::cos(P), -std::sin(P)};
+        // NEGATIVE PITCH LOOKS DOWN, which is what the field's comment always
+        // said and what the sign here did not do: the default -25 deg framed
+        // every track from underneath, looking up at its own spine. Asserted now.
+        const FCamVec Back{-std::cos(Y) * std::cos(P), -std::sin(Y) * std::cos(P), std::sin(P)};
         return Focus - Back * Distance;
     }
 

@@ -9,6 +9,7 @@
 #include "Components/Button.h"
 #include "Components/NamedSlot.h"
 #include "TUSettingsWidget.h"
+#include "Framework/Application/SlateApplication.h"
 #include "UObject/ConstructorHelpers.h"
 
 UTUFrameWidget::UTUFrameWidget(const FObjectInitializer& Init)
@@ -153,8 +154,7 @@ void UTUFrameWidget::ToggleSettings()
 	{
 		// REMOVED, NOT HIDDEN. A hidden settings screen keeps ticking and keeps
 		// its generated rows alive behind whatever is in front of it.
-		ContentSlot->ClearChildren();
-		SettingsWidget = nullptr;
+		CloseSettings();
 		return;
 	}
 	if (!SettingsWidgetClass)
@@ -167,6 +167,19 @@ void UTUFrameWidget::ToggleSettings()
 	{
 		SettingsWidget->AttachTo(Ride.Get());
 		ContentSlot->SetContent(SettingsWidget);
+	}
+}
+
+void UTUFrameWidget::CloseSettings()
+{
+	if (SettingsWidget && ContentSlot)
+	{
+		ContentSlot->ClearChildren();
+		SettingsWidget = nullptr;
+	}
+	if (FSlateApplication::IsInitialized())
+	{
+		FSlateApplication::Get().SetAllUserFocusToGameViewport();
 	}
 }
 

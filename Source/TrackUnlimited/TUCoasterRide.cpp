@@ -4,6 +4,8 @@
 #include "RenderCore.h"                 // SetNearClipPlaneGlobals
 #include "Blueprint/UserWidget.h"
 #include "UI/TUFrameWidget.h"
+#include "Framework/Application/NavigationConfig.h"
+#include "Framework/Application/SlateApplication.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 
@@ -1173,6 +1175,12 @@ void ATUCoasterRide::RebuildFromSegments()
 		Drives.Reset();
 		BlockSensors.Reset();
 		Counter.Reset();
+		// THE MESH GOES TOO. Returning here skipped the mesh rebuild at the bottom,
+		// so an empty document -- the menu, the Blank template -- kept drawing the
+		// last track that was open, rails, supports, trains and all.
+		RebuildTrackMesh();
+		RebuildTrainMesh();
+		if (Cars) { Cars->ClearInstances(); }
 		return;
 	}
 
@@ -1896,6 +1904,11 @@ void ATUCoasterRide::RebuildFromSegments()
 		Profile_ = FRideProfile();
 		LastDeviceFindings.clear();
 		BuildDiagnostics();
+		// Same as above: the track is still drawn, the trains that are not there
+		// are not.
+		RebuildTrackMesh();
+		RebuildTrainMesh();
+		if (Cars) { Cars->ClearInstances(); }
 		return;
 	}
 	Profile_ = RunRideProfile(*Trains[0], Track, 1.0);
@@ -3193,7 +3206,7 @@ void ATUCoasterRide::AnswerRecovery(bool bAccept)
 			ResetHistory();
 			Session.Enter(EAppMode::MainMenu);
 			Session.Enter(EAppMode::Build);
-			CameraMode = ETUCameraMode::Orbit;
+			ApplyAppMode(EAppMode::Build);
 			FrameWholeTrack();
 			UE_LOG(LogTUEvents, Log, TEXT("boot: recovered %d segments, unsaved"),
 				Segments.Num());
@@ -3277,7 +3290,7 @@ void ATUCoasterRide::DrawMainMenu(UCanvas* Canvas)
 	const std::vector<FTrackEntry> Rows = FTrackBrowser::Rows(KnownTracks, TrackPaths);
 	const float TrackRow = 34.f;
 	const float ThumbSize = 28.f;
-	const float BodyH = 190.f + static_cast<float>(NumTemplates()) * Row
+	const float BodyH = 190.f + static_cast<float>(NumTemplates()) * TrackRow
 		+ (Rows.empty() ? Row : static_cast<float>(Rows.size()) * TrackRow);
 
 	PanelTile(Canvas, Ox - 20.f, 50.f, W + 40.f, BodyH, PanelGround);
@@ -3297,11 +3310,17 @@ void ATUCoasterRide::DrawMainMenu(UCanvas* Canvas)
 	for (std::size_t i = 0; i < NumTemplates(); ++i)
 	{
 		const FTemplate T = TemplateAt(i);
-		MenuRowRects.Add(FVector4(Ox, Y, Ox + W, Y + Row));
+		MenuRowRects.Add(FVector4(Ox, Y, Ox + W, Y + TrackRow));
 		MenuRowAction.Add(static_cast<int32>(i));
-		PanelLabel(Canvas, Ox + 12.f, Y, UTF8_TO_TCHAR(T.Name), PanelText);
-		PanelLabel(Canvas, Ox + 230.f, Y + 2.f, UTF8_TO_TCHAR(T.Description), PanelDim);
-		Y += Row;
+		PanelLabel(Canvas, Ox + 12.f, Y + 2.f, UTF8_TO_TCHAR(T.Name), PanelText);
+		// ONE LINE OF DESCRIPTION, CLIPPED TO THE PANEL. These ran out past the
+		// right edge and across the viewport; the full text is the template's to
+		// keep, the row gets what fits.
+		FString Desc(UTF8_TO_TCHAR(T.Description));
+		const int32 Fit = static_cast<int32>((W - 24.f) / 6.2f);
+		if (Desc.Len() > Fit) { Desc = Desc.Left(Fit - 3) + TEXT("..."); }
+		PanelLabel(Canvas, Ox + 12.f, Y + 17.f, Desc, PanelDim);
+		Y += TrackRow;
 	}
 
 	// ---- TRACKS: what has been opened recently, then whatever else is in the
@@ -3525,7 +3544,7 @@ void ATUCoasterRide::StartFromTemplate(int32 Index)
 	}
 
 	Session.Enter(EAppMode::Build);
-	CameraMode = ETUCameraMode::Orbit;
+	ApplyAppMode(EAppMode::Build);   // the editor on, the orbit, settings closed
 	RebuildFromSegments();
 
 	// ===================== A NEW DOCUMENT IS NOT A MODIFIED ONE =====================
@@ -3574,6 +3593,18 @@ void ATUCoasterRide::ClickPrimary()
 	if (bConfirmingMenu) { ClickLeaveConfirm(); return; }
 	// The menu owns the click while it is up; everything else is the editor's.
 	if (Session.Mode() == EAppMode::MainMenu) { ClickMainMenu(); return; }
+
+	if (APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr)
+	{
+		float Bx = 0.f, ByPx = 0.f;
+		if (!bHideOverlays && PC->GetMousePosition(Bx, ByPx)
+			&& Bx >= MenuButtonRect.X && Bx <= MenuButtonRect.Z
+			&& ByPx >= MenuButtonRect.Y && ByPx <= MenuButtonRect.W)
+		{
+			OpenMainMenu();
+			return;
+		}
+	}
 
 	// THE CONSOLE BEFORE THE EDITOR, because in Operate it is the only thing on
 	// screen anybody is working and the editor is refusing edits anyway. The graph
@@ -4096,6 +4127,13 @@ void ATUCoasterRide::FrameStation()
 	const double Pad = 25.0;
 	B.Add({B.Min.X - Pad, B.Min.Y - Pad, B.Min.Z - 2.0});
 	B.Add({B.Max.X + Pad, B.Max.Y + Pad, B.Max.Z + Pad});
+	if (bOrbitIsBackdrop)
+	{
+		// The menu's horizon angle framed the platform from the sky.
+		Orbit.PitchDeg = -25.0;
+		Orbit.YawDeg = -45.0;
+		bOrbitIsBackdrop = false;
+	}
 	Orbit.Frame(B, Camera ? static_cast<double>(Camera->FieldOfView) : 90.0, 16.0 / 9.0);
 	bOrbitFramed = true;
 }
@@ -4139,6 +4177,15 @@ void ATUCoasterRide::EnterAppMode(EAppMode Wanted, bool bConfirmed)
 
 void ATUCoasterRide::ApplyAppMode(EAppMode Want)
 {
+	// KEYS GO TO THE GAME AGAIN. Clicking a frame tab or a settings control
+	// leaves Slate holding keyboard focus, and from then on [Tab], [M] and the
+	// rest went to a button rather than to the ride -- the keyboard "stopped
+	// working" after the first click on the chrome. Every mode change and
+	// every settings close hands focus back.
+	if (FSlateApplication::IsInitialized())
+	{
+		FSlateApplication::Get().SetAllUserFocusToGameViewport();
+	}
 	// THE MODE DECIDES THE VIEW, which is what makes it a mode rather than a
 	// label. Operate is the operator's console and the ride seen from outside;
 	// Ride is the seat; Build is the thing you are editing, framed.
@@ -4154,29 +4201,64 @@ void ATUCoasterRide::ApplyAppMode(EAppMode Want)
 		break;
 	case EAppMode::Ride:
 		PanelView = ETUPanelView::Off;
-		// AND THE CAMERA IS AN ORBIT. Whatever the level serialised could be Rider,
-		// which with no trains returns early and leaves the view exactly where it
-		// was -- at the origin, inside the geometry. The mode picks the view, and a
-		// menu is no exception to that rule.
-		// AND IT IS PLACED HERE, not left to the camera tick -- that returns before
-		// it ever reaches the camera when there is no train, which at a menu over an
-		// empty document is always. The result was a first screen from inside the
-		// floor.
-		//
-		// A fixed pose rather than a framing, because there is nothing to frame: back,
-		// up, and looking at the horizon over open ground.
-		CameraMode = ETUCameraMode::Orbit;
-		bOrbitFramed = false;
-		if (Camera)
-		{
-			Camera->SetRelativeLocation(FVector(-6000.f, -4500.f, 2200.f));
-			Camera->SetRelativeRotation(FRotator(-6.f, 36.f, 0.f));
-		}
 		CameraMode = ETUCameraMode::Rider;
 		break;
+	case EAppMode::Boot:
+	case EAppMode::MainMenu:
+	{
+		// ===================== THE MENU OPENS OVER NOTHING =====================
+		//
+		// Whatever was open is CLOSED here, on every road into the menu -- boot,
+		// [M], the confirm's two "leave" answers. Before this only boot closed it,
+		// so [M] from a running ride drew the menu over five moving trains, a
+		// block strip, a telemetry readout and the orbit camera still tracking.
+		// The session already asked about unsaved work on the way in, so nothing
+		// is lost that somebody was not told about.
+		PanelView = ETUPanelView::Off;
+		SelectedSegment = -1;
+		Segments.Reset();
+		RebuildFromSegments();
+		Session.DidCreateNew(TCHAR_TO_UTF8(*SerialiseDocument()));
+		ResetHistory();
+		if (UWorld* World = GetWorld())
+		{
+			FlushPersistentDebugLines(World);
+		}
+		if (FrameWidget)
+		{
+			FrameWidget->CloseSettings();
+		}
+
+		// AND THE CAMERA IS PLACED HERE, not left to the camera tick -- that
+		// returns before it ever reaches the camera when there is no train, which
+		// at a menu over an empty document is always. The result was a first
+		// screen from inside the floor. A fixed pose rather than a framing, because
+		// there is nothing to frame: back, up, looking at the horizon.
+		CameraMode = ETUCameraMode::Orbit;
+		bOrbitFramed = false;
+		bOrbitIsBackdrop = true;   // whatever opens next gets the default angle
+		if (Camera)
+		{
+			Camera->SetWorldLocation(GetActorLocation() + FVector(-6000.f, -4500.f, 2200.f));
+			Camera->SetWorldRotation(FRotator(-6.f, 36.f, 0.f));
+		}
+		break;
+	}
 	default:
 		PanelView = ETUPanelView::Off;
 		CameraMode = ETUCameraMode::Orbit;
+		// BUILD SHOWS THE EDITOR. The boot path quiets every overlay so the menu
+		// is not a wall of numbers, and that quiet reached Build too: the hint
+		// said "edit the numbers" over a viewport with no numbers on it. [B] still
+		// hides it again.
+		if (Want == EAppMode::Build) { bShowSegmentEditor = true; }
+		if (FrameWidget)
+		{
+			// A SETTINGS PAGE LEFT OPEN ACROSS A MODE CHANGE IS A STUCK MENU. It
+			// sits in the frame's content slot over the whole viewport, and the
+			// only thing that closed it was the key that opened it.
+			FrameWidget->CloseSettings();
+		}
 		break;
 	}
 }
@@ -4225,8 +4307,21 @@ void ATUCoasterRide::DrawModeBanner(UCanvas* Canvas)
 		Line += FString::Printf(TEXT("   %.2fx  [,] slower  [/] faster"), TimeScale);
 	}
 
-	PanelTile(Canvas, 10.f, 6.f, 8.f + Line.Len() * 6.2f, 18.f, PanelGround);
-	PanelLabel(Canvas, 12.f, 8.f, Line, Ink);
+	// BELOW THE FRAME'S HEADER, not under it. The UMG frame owns the top 40 px
+	// (mode, document, tabs) and this sat at y = 6, so two copies of the word
+	// BUILD were drawn through each other.
+	const float By = 46.f;
+	const float Bw = 8.f + Line.Len() * 6.2f;
+	PanelTile(Canvas, 10.f, By, Bw, 18.f, PanelGround);
+	PanelLabel(Canvas, 12.f, By + 2.f, Line, Ink);
+
+	// THE WAY OUT, ON SCREEN. [M] existed and nothing said so outside the menu
+	// itself, which is the one place somebody who needs it is not.
+	const FString MenuText = TEXT("[ MENU ]  M");
+	const float Mw = 8.f + MenuText.Len() * 6.2f;
+	MenuButtonRect = FVector4(10.f + Bw + 6.f, By, 10.f + Bw + 6.f + Mw, By + 18.f);
+	PanelTile(Canvas, MenuButtonRect.X, MenuButtonRect.Y, Mw, 18.f, PanelRule);
+	PanelLabel(Canvas, MenuButtonRect.X + 4.f, By + 2.f, MenuText, PanelText);
 
 	// ===================== THE ONE-LINE VERSION, IN BUILD ONLY =====================
 	//
@@ -4241,8 +4336,8 @@ void ATUCoasterRide::DrawModeBanner(UCanvas* Canvas)
 	if (Session.Mode() == EAppMode::Build && SelectedSegment < 0 && !bHideOverlays)
 	{
 		const FString Hint(UTF8_TO_TCHAR(ViewportHint()));
-		PanelTile(Canvas, 10.f, 28.f, 8.f + Hint.Len() * 6.2f, 16.f, PanelGround);
-		PanelLabel(Canvas, 12.f, 29.f, Hint, PanelDim);
+		PanelTile(Canvas, 10.f, 66.f, 8.f + Hint.Len() * 6.2f, 16.f, PanelGround);
+		PanelLabel(Canvas, 12.f, 67.f, Hint, PanelDim);
 	}
 }
 
@@ -4454,6 +4549,17 @@ void ATUCoasterRide::FrameWholeTrack()
 		// the floor.
 		Orbit.PitchDeg = -8.0;
 		Orbit.YawDeg = -35.0;
+		bOrbitIsBackdrop = true;
+	}
+	else if (bOrbitIsBackdrop)
+	{
+		// COMING BACK FROM THE BACKDROP, the shallow angle stays unless it is put
+		// back: the first track opened from the menu was framed at -8 deg, level
+		// with its own lift hill. A person's own orbit angle is kept; only the
+		// backdrop's is replaced.
+		Orbit.PitchDeg = -25.0;
+		Orbit.YawDeg = -45.0;
+		bOrbitIsBackdrop = false;
 	}
 
 	// FOV from the camera itself, aspect from the viewport, because framing that
@@ -5914,6 +6020,10 @@ void ATUCoasterRide::BeginPlay()
 		Session.DidCreateNew(TCHAR_TO_UTF8(*SerialiseDocument()));
 		ResetHistory();
 		BootSession();
+		// The menu's camera. BootSession only changes the session's mode; this is
+		// what stops the first screen being the level's serialised camera, which
+		// on the vertical slice is under the station.
+		ApplyAppMode(EAppMode::MainMenu);
 	}
 	else
 	{
@@ -5988,6 +6098,16 @@ void ATUCoasterRide::BeginPlay()
 			{
 				FrameWidget->AttachTo(this);
 				FrameWidget->AddToViewport();
+				// [TAB] IS THE MODE KEY, NOT SLATE'S. Once a frame button has been
+				// clicked, Slate's default navigation takes Tab as "focus the next
+				// button" and the game binding never sees it -- which reads as the
+				// mode key being broken after the first mouse click on a tab.
+				if (FSlateApplication::IsInitialized())
+				{
+					TSharedRef<FNavigationConfig> Nav = MakeShared<FNavigationConfig>();
+					Nav->bTabNavigation = false;
+					FSlateApplication::Get().SetNavigationConfig(Nav);
+				}
 			}
 		}
 	}
@@ -6134,7 +6254,7 @@ void ATUCoasterRide::DrawDiagnosticsPanel(UCanvas* Canvas)
 	const int32 Shown = FMath::Min(static_cast<int32>(Diagnostics.Num()), 14);
 	const float H = 26.f + Row * FMath::Max(Shown, 1);
 	const float Ox = Canvas->SizeX - W - 20.f;
-	const float Oy = 20.f;
+	const float Oy = 64.f;   // under the frame's mode tabs, which own the top-right
 
 	PanelTile(Canvas, Ox - 8.f, Oy - 8.f, W + 16.f, H + 16.f, PanelGround);
 	PanelLabel(Canvas, Ox, Oy,
@@ -6214,7 +6334,9 @@ void ATUCoasterRide::GraphRect(float ViewportHeight, float& OutX, float& OutY,
 	// THE HEIGHT COMES IN rather than a canvas, so the hit test does not need one
 	// — there is no canvas outside a draw call, and a hit test that had to invent
 	// one would be the second source of truth this exists to avoid.
-	OutY = ViewportHeight - OutH - 96.f;
+	// ABOVE THE CONTROL PANEL when there is one. Both sat bottom-left and the
+	// graph was drawn straight through the block strip.
+	OutY = FMath::Min(ViewportHeight - 96.f, ConsolePanelTopY - 16.f) - OutH;
 }
 
 bool ATUCoasterRide::PressGraph(float Mx, float My)
@@ -6459,6 +6581,17 @@ void ATUCoasterRide::DrawControlPanel(UCanvas* Canvas, APlayerController* /*PC*/
 	//
 	// The menu and the recovery offer are drawn either way, below, because those
 	// ARE the screen in those two modes.
+	// THE SETTINGS PAGE OWNS THE SCREEN. The debug canvas draws ABOVE Slate, so
+	// every panel here was painted over the settings page while it was up.
+	if (FrameWidget && FrameWidget->IsSettingsOpen())
+	{
+		MenuRowRects.Reset();
+		MenuRowAction.Reset();
+		ConsoleRects.Reset();
+		ConsoleAction.Reset();
+		return;
+	}
+
 	const EAppMode Now = Session.Mode();
 	if (Now != EAppMode::Boot && Now != EAppMode::MainMenu)
 	{
@@ -6523,11 +6656,44 @@ void ATUCoasterRide::DrawPanels(UCanvas* Canvas)
 {
 	if (bHideOverlays) { return; }
 
+	// The console first, because the graph places itself above wherever the
+	// console's top edge landed this frame.
+	ConsolePanelTopY = 1.0e9f;
+	DrawConsole(Canvas);
 	DrawSegmentEditor(Canvas);
 	DrawModeBanner(Canvas);
+	DrawTelemetry(Canvas);
 	DrawProfileGraph(Canvas);
 	DrawDiagnosticsPanel(Canvas);
+}
 
+void ATUCoasterRide::DrawTelemetry(UCanvas* Canvas)
+{
+	if (!Canvas || TelemetryLines.IsEmpty()) { return; }
+
+	// ITS OWN SLOT, under the banner and the hint. As on-screen debug messages
+	// these were drawn by the engine wherever it chose, which was over the frame
+	// header and the banner; the text itself is unchanged.
+	TArray<int32> Keys;
+	TelemetryLines.GetKeys(Keys);
+	Keys.Sort();
+	float Y = 90.f;
+	for (int32 K : Keys)
+	{
+		const TPair<FColor, FString>& L = TelemetryLines[K];
+		TArray<FString> Parts;
+		L.Value.ParseIntoArray(Parts, TEXT("\n"), false);
+		for (const FString& Part : Parts)
+		{
+			PanelTile(Canvas, 10.f, Y, 8.f + Part.Len() * 6.2f, 16.f, PanelGround);
+			PanelLabel(Canvas, 12.f, Y + 1.f, Part, FLinearColor(L.Key));
+			Y += 16.f;
+		}
+	}
+}
+
+void ATUCoasterRide::DrawConsole(UCanvas* Canvas)
+{
 	if (PanelView == ETUPanelView::Off || !Canvas || !Signals || !Drives || !GEngine)
 	{
 		return;
@@ -6561,10 +6727,16 @@ void ATUCoasterRide::DrawPanels(UCanvas* Canvas)
 		+ (EventLog.Num() > 0 ? 1 + FMath::Min(EventLog.Num(), 4) : 0);
 	// The console row sat on the bottom edge, half off it: the section gaps are
 	// worth about a row and a half between them and were not being counted.
-	const float H = Pad * 2.f + Rows * Row + StripH + 34.f;
+	// MEASURED, NOT ONLY COUNTED. The count above is an estimate that has been
+	// wrong twice (section gaps, then the event log), each time with the bottom
+	// rows drawn outside the panel. What was actually drawn last frame is the
+	// height; the estimate only covers the first frame.
+	const float H = FMath::Max(Pad * 2.f + Rows * Row + StripH + 34.f, ConsoleContentH);
 
 	const float X = 16.f;
-	const float Y = FMath::Max(16.f, Canvas->SizeY - H - 16.f);
+	// 40 from the bottom, not 16: the frame's status line lives there.
+	const float Y = FMath::Max(16.f, Canvas->SizeY - H - 40.f);
+	ConsolePanelTopY = Y;
 
 	PanelTile(Canvas, X, Y, W, H, PanelGround);
 	PanelTile(Canvas, X, Y, W, 1.f, PanelRule);
@@ -7355,6 +7527,7 @@ void ATUCoasterRide::DrawPanels(UCanvas* Canvas)
 				Ty += Row;
 			}
 		}
+		ConsoleContentH = (Ty - Y) + Pad;
 	}
 }
 
@@ -9838,7 +10011,10 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 		// The invert flips from THAT convention, not from the raw axis — so
 		// somebody who ticks it gets the opposite of what they were just feeling,
 		// which is the only reading of the word that is useful.
-		Orbit.AddPitch(-LookPitch * OrbitSens * (bOrbitInvertY ? -1.0 : 1.0));   // clamped, not wrapped
+		// The sign here used to compensate for Position() having pitch backwards;
+		// Position() is right now, so this is the plain axis. Mouse down still
+		// swings the camera up and over the subject.
+		Orbit.AddPitch(LookPitch * OrbitSens * (bOrbitInvertY ? -1.0 : 1.0));   // clamped, not wrapped
 		Orbit.Pan(MoveRight * DeltaSeconds * 120.0, MoveUp * DeltaSeconds * 120.0);
 
 		const FCamVec P = Orbit.Position();
@@ -9909,16 +10085,17 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 			(Target - ChaseLocation).ToOrientationQuat());
 	}
 
+	TelemetryLines.Reset();
 	if (bShowTelemetry && !bHideOverlays && GEngine)
 	{
 		// What the RIDER feels, at whichever row they are sitting in — not the
 		// train's centre. That is the whole point of choosing a seat.
 		const FGForces G = Train->GetForcesAt(SeatOffset);
 		const double S = Train->GetDistance();
-		GEngine->AddOnScreenDebugMessage(1, 0.f, FColor::White,
+		Telemetry(1, 0.f, FColor::White,
 			FString::Printf(TEXT("%6.1f km/h    %5.1f m along %.0f m    height %5.1f m"),
 				Train->GetSpeed() * 3.6, S, Track.TotalLength(), Frame.Position.Z));
-		GEngine->AddOnScreenDebugMessage(2, 0.f,
+		Telemetry(2, 0.f,
 			G.Vertical > 4.5 || G.Vertical < -1.0 ? FColor::Red : FColor::Green,
 			FString::Printf(TEXT("vertical %+5.2f G    lateral %+5.2f G    fore-aft %+5.2f G"),
 				G.Vertical, G.Lateral, Train->GetTangentialG()));
@@ -9929,12 +10106,12 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 		if (TrainLengthM > 0.f)
 		{
 			const double Half = TrainLengthM * 0.5;
-			GEngine->AddOnScreenDebugMessage(6, 0.f, FColor(200, 200, 120),
+			Telemetry(6, 0.f, FColor(200, 200, 120),
 				FString::Printf(TEXT("%.0f m train:  front %+5.2f G    back %+5.2f G"),
 					TrainLengthM, Train->GetForcesAt(+Half).Vertical,
 					Train->GetForcesAt(-Half).Vertical));
 		}
-		GEngine->AddOnScreenDebugMessage(3, 0.f, FColor::Silver,
+		Telemetry(3, 0.f, FColor::Silver,
 			S >= BrakeStartS ? TEXT("BRAKE RUN") : TEXT("on course"));
 
 		// The block row. Making the causal chain VISIBLE is the pillar, not
@@ -9987,17 +10164,17 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 					HeldRow += FString::Printf(TEXT("train %d HELD at %.0f m   "), t, At);
 				}
 			}
-			GEngine->AddOnScreenDebugMessage(8, 0.f,
+			Telemetry(8, 0.f,
 				HeldRow.IsEmpty() ? FColor(120, 200, 140) : FColor(255, 176, 32), Row);
 
 			if (!HeldRow.IsEmpty())
 			{
-				GEngine->AddOnScreenDebugMessage(9, 0.f, FColor(255, 176, 32),
+				Telemetry(9, 0.f, FColor(255, 176, 32),
 					HeldRow + TEXT("— dispatch permissive not satisfied"));
 			}
 			if (Signals->Violations() > 0)
 			{
-				GEngine->AddOnScreenDebugMessage(10, 0.f, FColor::Red,
+				Telemetry(10, 0.f, FColor::Red,
 					FString::Printf(TEXT("%d SIGNALLING VIOLATION(S)"),
 						static_cast<int32>(Signals->Violations())));
 			}
@@ -10019,7 +10196,7 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 			}
 			if (!CaughtRow.IsEmpty())
 			{
-				GEngine->AddOnScreenDebugMessage(11, 0.f, FColor(255, 90, 60),
+				Telemetry(11, 0.f, FColor(255, 90, 60),
 					CaughtRow + TEXT("— the catch worked, the layout did not"));
 			}
 
@@ -10056,7 +10233,7 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 			}
 			if (!StationRow.IsEmpty())
 			{
-				GEngine->AddOnScreenDebugMessage(12, 0.f, FColor(120, 170, 255),
+				Telemetry(12, 0.f, FColor(120, 170, 255),
 					StationRow + (bManualDispatch
 						? TEXT("   [Space] dispatch") : TEXT("   auto")));
 			}
@@ -10065,7 +10242,7 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 			// stop nobody has looked at has not been dealt with.
 			if (Drives && Drives->IsEmergencyStopped())
 			{
-				GEngine->AddOnScreenDebugMessage(13, 0.f, FColor::Red,
+				Telemetry(13, 0.f, FColor::Red,
 					FString::Printf(
 						TEXT("*** EMERGENCY STOP — %s ***   power is cut to every drive; ")
 						TEXT("trains run to the next brake and hold.   %s"),
@@ -10076,7 +10253,7 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 			}
 			else
 			{
-				GEngine->AddOnScreenDebugMessage(13, 0.f, FColor(120, 120, 120),
+				Telemetry(13, 0.f, FColor(120, 120, 120),
 					TEXT("[Backspace] emergency stop"));
 			}
 		}
@@ -10104,14 +10281,14 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 				Orbit.Distance);
 			break;
 		}
-		GEngine->AddOnScreenDebugMessage(7, 0.f, FColor(120, 170, 200), CamLine);
+		Telemetry(7, 0.f, FColor(120, 170, 200), CamLine);
 
 		// The ride's own worst case, alongside the current reading, so a number
 		// on screen means something without having to remember the whole lap.
 		// Roll rate is here rather than in the G line because it belongs to a
 		// different question: G is what presses on you, roll rate is what spins
 		// you, and no amount of looking at the first will show you the second.
-		GEngine->AddOnScreenDebugMessage(4, 0.f, FColor(150, 150, 150),
+		Telemetry(4, 0.f, FColor(150, 150, 150),
 			FString::Printf(
 				TEXT("this ride: %.0f km/h max, %+.2f..%+.2f vertical, %.2f lateral, ")
 				TEXT("%.0f deg/s roll"),
@@ -10119,7 +10296,7 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 				Profile_.MaxAbsLateralG, Profile_.MaxAbsRollRate));
 		if (!Profile_.bCompleted)
 		{
-			GEngine->AddOnScreenDebugMessage(5, 0.f, FColor::Red,
+			Telemetry(5, 0.f, FColor::Red,
 				FString::Printf(TEXT("TRAIN DOES NOT GET ROUND — stalls at %.0f m"),
 					Profile_.StalledAtS));
 		}

@@ -131,6 +131,11 @@ protected:
 	UFUNCTION()
 	void OnResetPage();
 
+	/** The close button, generated beside the page tabs. The page had no way off
+	 *  it but the key that opened it, which from the menu nobody knows. */
+	UFUNCTION()
+	void OnClose();
+
 private:
 	UPROPERTY()
 	TWeakObjectPtr<ATUCoasterRide> Ride;
