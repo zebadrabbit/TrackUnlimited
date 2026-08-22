@@ -1,0 +1,22 @@
+# The engine-free half of the project, on every push and pull request.
+#
+# Everything under Prototypes/ compiles with a plain C++17 compiler and asserts
+# its own results, so this is the whole model -- geometry, physics, signalling,
+# shell -- checked on a runner that has never heard of Unreal. The packaged
+# build and -TUSmokeTest need the engine and stay on the developer's machine;
+# run_all_tests.sh is already the CI step, it just had no CI.
+name: prototype suites
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  suites:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: build and run every assert suite
+        run: ./Prototypes/run_all_tests.sh
+        env:
+          CXX: g++
