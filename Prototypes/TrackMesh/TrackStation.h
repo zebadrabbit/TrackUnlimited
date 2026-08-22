@@ -31,6 +31,10 @@ struct FStationSpan
     double StartS = 0.0;
     double EndS = 0.0;
     bool bLeft = true;   // which side the platform is on, in the rider's terms
+    // ONE CABINET PER PLATFORM, NOT PER POSITION. A four-position platform is
+    // four of these spans and one console; the caller marks the span the
+    // console belongs to, which is the dispatch end of the contiguous run.
+    bool bCabinet = true;
 };
 
 struct FStationSettings
@@ -140,7 +144,7 @@ inline FStationMesh BuildStations(const std::vector<FTrackFrame>& Frames,
 
         // ---- THE CABINET, at the dispatch end: the operator stands where the
         // train leaves. Against the outboard edge, so it is not in the gates.
-        if (Len > St.CabinetLengthM + 1.0)
+        if (Span.bCabinet && Len > St.CabinetLengthM + 1.0)
         {
             const FTrackFrame F = FrameAt(Frames, S, Span.EndS - St.CabinetLengthM * 0.5 - 0.5);
             const FVec3 Left = FlatOutward(F, true);

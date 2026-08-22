@@ -115,6 +115,19 @@ void TestOneGatePerCarAndInsideTheSpan()
     const FStationMesh Short = Build(true, 10.0, 12.0);
     assert(Short.Steel.NumTriangles() == 0);
     assert(Short.Concrete.NumTriangles() > 0);
+    // A four-position platform is four spans and ONE cabinet: three marked
+    // bCabinet = false and the last one carrying it.
+    {
+        FTrack T; T.AddSegment(MakeStraight(60.0));
+        std::vector<FStationSpan> Four;
+        for (int p = 0; p < 4; ++p)
+        {
+            FStationSpan Sp; Sp.StartS = 10.0 + p * 10.0; Sp.EndS = 20.0 + p * 10.0; Sp.bCabinet = p == 3;
+            Four.push_back(Sp);
+        }
+        const FStationMesh M = BuildStations(WalkTrack(T, 0.5), Four);
+        assert(M.Steel.NumTriangles() == 4 * 3 * Gate + 12);
+    }
     // And an empty span builds nothing at all.
     assert(Build(true, 10.0, 10.0).NumTriangles() == 0);
     std::printf("  10 gates at either spacing, 1 cabinet; a 2 m span has neither\n");

@@ -9114,6 +9114,13 @@ void ATUCoasterRide::RebuildTrackMesh()
 			P.StartS = Z.StartS;
 			P.EndS = Z.EndS;
 			P.bLeft = PresetWalkwaySide != ETUWalkway::Right;
+			// THE CABINET GOES ON THE LAST POSITION OF A CONTIGUOUS PLATFORM:
+			// a span whose end is the next station span's start is not the end
+			// of the platform, and a console per position is four consoles.
+			if (!StSpans.empty() && std::fabs(StSpans.back().EndS - P.StartS) < 1e-6)
+			{
+				StSpans.back().bCabinet = false;
+			}
 			StSpans.push_back(P);
 		}
 		if (!StSpans.empty())
@@ -10319,7 +10326,11 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 		// train, which is what every station photograph this was corrected against
 		// shows. Height is from the HEARTLINE, so it is eye level rather than
 		// track level.
-		const FVector Eye = Base + Side * (2.5 * MetresToUU) + FVector(0.f, 0.f, 1.6f * MetresToUU);
+		// ON THE PLATFORM SIDE, which is the walkway side, and at a standing
+		// person's eye height above the PLATFORM: the platform top is 0.75 m
+		// under the heartline, so eyes are 0.85 m over it rather than 1.6.
+		const double SideSign = PresetWalkwaySide != ETUWalkway::Right ? 1.0 : -1.0;
+		const FVector Eye = Base + Side * (SideSign * 2.5 * MetresToUU) + FVector(0.f, 0.f, 0.85f * MetresToUU);
 		// LOOKING DOWN THE TRACK, slightly toward it. An operator watches the train
 		// and the way out, which is the same direction.
 		const FVector Aim = Base + Along * (18.0 * MetresToUU);
