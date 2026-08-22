@@ -4,6 +4,7 @@
 #include "RenderCore.h"                 // SetNearClipPlaneGlobals
 #include "Blueprint/UserWidget.h"
 #include "UI/TUFrameWidget.h"
+#include "UI/TUStyle.h"
 #include "Framework/Application/NavigationConfig.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Materials/MaterialInstanceDynamic.h"
@@ -160,17 +161,35 @@ ATUCoasterRide::ATUCoasterRide()
 // the first time somebody adjusts one.
 namespace
 {
-	// The drawing's own palette, so the panel and the splash are the same object
-	// seen twice. Near-black ground, amber for what is working, cyan for what is
-	// measured, red for what has stopped.
-	const FLinearColor PanelGround(0.043f, 0.055f, 0.067f, 0.92f);
-	const FLinearColor PanelRule(0.20f, 0.24f, 0.28f, 1.f);
-	const FLinearColor PanelText(0.72f, 0.78f, 0.82f, 1.f);
-	const FLinearColor PanelDim(0.42f, 0.47f, 0.52f, 1.f);
-	const FLinearColor PanelAmber(0.98f, 0.62f, 0.16f, 1.f);
-	const FLinearColor PanelCyan(0.35f, 0.74f, 1.00f, 1.f);
-	const FLinearColor PanelGreen(0.35f, 0.82f, 0.45f, 1.f);
-	const FLinearColor PanelRed(0.95f, 0.28f, 0.24f, 1.f);
+	// ===================== ONE PALETTE, ONE TYPE =====================
+	//
+	// These are FTUStyle's colours, not a second set that happened to be near
+	// them. The frame is UMG and every panel is the debug canvas, and with two
+	// palettes the screen read as a designed header stapled onto a developer
+	// overlay. Alpha on the ground is the only thing the canvas adds.
+	const FLinearColor PanelGround(FTUStyle::Panel.R, FTUStyle::Panel.G, FTUStyle::Panel.B, 0.92f);
+	const FLinearColor PanelRule = FTUStyle::Border;
+	const FLinearColor PanelText = FTUStyle::TextPrimary;
+	const FLinearColor PanelDim = FTUStyle::TextSecondary;
+	const FLinearColor PanelAmber = FTUStyle::LampOccupied;
+	const FLinearColor PanelCyan = FTUStyle::LampMeasured;
+	const FLinearColor PanelGreen = FTUStyle::LampClear;
+	const FLinearColor PanelRed = FTUStyle::LampFault;
+
+	// THE FRAME'S BODY SIZE, as near as a UFont gets. The canvas drew everything
+	// in the engine's "small" font, which is the one size smaller than anything
+	// else on screen -- that, more than colour, is what made the panels look
+	// like debug output.
+	UFont* PanelFont() { return GEngine->GetMediumFont(); }
+
+	// MEASURED, NOT ESTIMATED. Every tile behind a line of text was sized as
+	// `Len * 6.2`, which was a guess for one font and is wrong for any other.
+	float PanelTextWidth(UCanvas* C, const FString& S)
+	{
+		float W = 0.f, H = 0.f;
+		C->TextSize(PanelFont(), S, W, H);
+		return W;
+	}
 
 	void PanelTile(UCanvas* C, float X, float Y, float W, float H, const FLinearColor& Col)
 	{
@@ -181,7 +200,7 @@ namespace
 
 	void PanelLabel(UCanvas* C, float X, float Y, const FString& S, const FLinearColor& Col)
 	{
-		FCanvasTextItem Item(FVector2D(X, Y), FText::FromString(S), GEngine->GetSmallFont(), Col);
+		FCanvasTextItem Item(FVector2D(X, Y), FText::FromString(S), PanelFont(), Col);
 		Item.EnableShadow(FLinearColor::Black);
 		C->DrawItem(Item);
 	}
@@ -2559,7 +2578,7 @@ void ATUCoasterRide::DrawSegmentEditor(UCanvas* Canvas)
 	EditorRowRects.Reset();
 	EditorRowField.Reset();
 
-	const float Row = 15.f;
+	const float Row = 16.f;
 	const float W = 380.f;   // wider since a row now carries arc length and a zone tag
 
 	// LOWER RIGHT, because it is the only corner nothing else wants. The upper
@@ -3317,8 +3336,10 @@ void ATUCoasterRide::DrawMainMenu(UCanvas* Canvas)
 		// right edge and across the viewport; the full text is the template's to
 		// keep, the row gets what fits.
 		FString Desc(UTF8_TO_TCHAR(T.Description));
-		const int32 Fit = static_cast<int32>((W - 24.f) / 6.2f);
-		if (Desc.Len() > Fit) { Desc = Desc.Left(Fit - 3) + TEXT("..."); }
+		while (Desc.Len() > 4 && PanelTextWidth(Canvas, Desc) > W - 24.f)
+		{
+			Desc = Desc.Left(Desc.Len() - 4) + TEXT("...");
+		}
 		PanelLabel(Canvas, Ox + 12.f, Y + 17.f, Desc, PanelDim);
 		Y += TrackRow;
 	}
@@ -4311,14 +4332,14 @@ void ATUCoasterRide::DrawModeBanner(UCanvas* Canvas)
 	// (mode, document, tabs) and this sat at y = 6, so two copies of the word
 	// BUILD were drawn through each other.
 	const float By = 46.f;
-	const float Bw = 8.f + Line.Len() * 6.2f;
+	const float Bw = 8.f + PanelTextWidth(Canvas, Line);
 	PanelTile(Canvas, 10.f, By, Bw, 18.f, PanelGround);
 	PanelLabel(Canvas, 12.f, By + 2.f, Line, Ink);
 
 	// THE WAY OUT, ON SCREEN. [M] existed and nothing said so outside the menu
 	// itself, which is the one place somebody who needs it is not.
 	const FString MenuText = TEXT("[ MENU ]  M");
-	const float Mw = 8.f + MenuText.Len() * 6.2f;
+	const float Mw = 8.f + PanelTextWidth(Canvas, MenuText);
 	MenuButtonRect = FVector4(10.f + Bw + 6.f, By, 10.f + Bw + 6.f + Mw, By + 18.f);
 	PanelTile(Canvas, MenuButtonRect.X, MenuButtonRect.Y, Mw, 18.f, PanelRule);
 	PanelLabel(Canvas, MenuButtonRect.X + 4.f, By + 2.f, MenuText, PanelText);
@@ -4336,7 +4357,7 @@ void ATUCoasterRide::DrawModeBanner(UCanvas* Canvas)
 	if (Session.Mode() == EAppMode::Build && SelectedSegment < 0 && !bHideOverlays)
 	{
 		const FString Hint(UTF8_TO_TCHAR(ViewportHint()));
-		PanelTile(Canvas, 10.f, 66.f, 8.f + Hint.Len() * 6.2f, 16.f, PanelGround);
+		PanelTile(Canvas, 10.f, 66.f, 8.f + PanelTextWidth(Canvas, Hint), 16.f, PanelGround);
 		PanelLabel(Canvas, 12.f, 67.f, Hint, PanelDim);
 	}
 }
@@ -6250,7 +6271,7 @@ void ATUCoasterRide::DrawDiagnosticsPanel(UCanvas* Canvas)
 	if (!bShowDiagnostics || !Canvas || !GEngine) { return; }
 
 	const float W = 620.f;
-	const float Row = 14.f;
+	const float Row = 16.f;
 	const int32 Shown = FMath::Min(static_cast<int32>(Diagnostics.Num()), 14);
 	const float H = 26.f + Row * FMath::Max(Shown, 1);
 	const float Ox = Canvas->SizeX - W - 20.f;
@@ -6336,7 +6357,8 @@ void ATUCoasterRide::GraphRect(float ViewportHeight, float& OutX, float& OutY,
 	// one would be the second source of truth this exists to avoid.
 	// ABOVE THE CONTROL PANEL when there is one. Both sat bottom-left and the
 	// graph was drawn straight through the block strip.
-	OutY = FMath::Min(ViewportHeight - 96.f, ConsolePanelTopY - 16.f) - OutH;
+	// The tile runs 34 px below the plot (axis labels), so that is the clearance.
+	OutY = FMath::Min(ViewportHeight - 96.f, ConsolePanelTopY - 46.f) - OutH;
 }
 
 bool ATUCoasterRide::PressGraph(float Mx, float My)
@@ -6410,7 +6432,7 @@ void ATUCoasterRide::DrawProfileGraph(UCanvas* Canvas)
 	float Ox = 0.f, Oy = 0.f, Wx = 0.f, Hy = 0.f;
 	GraphRect(static_cast<float>(Canvas->SizeY), Ox, Oy, Wx, Hy);
 
-	PanelTile(Canvas, Ox - 8.f, Oy - 24.f, Wx + 16.f, Hy + 58.f, PanelGround);
+	PanelTile(Canvas, Ox - 8.f, Oy - 24.f, Wx + 56.f, Hy + 58.f, PanelGround);   // +40 for the axis labels on the right
 
 	// A STALLED RIDE SHOWS THE STALL AND NOTHING ELSE. The envelope suite already
 	// had this failure — "within envelope, zero findings" over a train that
@@ -6685,7 +6707,7 @@ void ATUCoasterRide::DrawTelemetry(UCanvas* Canvas)
 		L.Value.ParseIntoArray(Parts, TEXT("\n"), false);
 		for (const FString& Part : Parts)
 		{
-			PanelTile(Canvas, 10.f, Y, 8.f + Part.Len() * 6.2f, 16.f, PanelGround);
+			PanelTile(Canvas, 10.f, Y, 8.f + PanelTextWidth(Canvas, Part), 16.f, PanelGround);
 			PanelLabel(Canvas, 12.f, Y + 1.f, Part, FLinearColor(L.Key));
 			Y += 16.f;
 		}
@@ -6716,7 +6738,7 @@ void ATUCoasterRide::DrawConsole(UCanvas* Canvas)
 	// more indicators without anything here being told about it.
 	const int32 NumBlocks = static_cast<int32>(Signals->NumBlocks());
 	const int32 NumDrives = static_cast<int32>(Drives->Num());
-	const float Row = 13.f;
+	const float Row = 15.f;
 	const float Pad = 8.f;
 	const float W = 470.f;
 	const float StripH = bMaint ? 46.f + Row : 46.f;   // schematic, + the counts row
