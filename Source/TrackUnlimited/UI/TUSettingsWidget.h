@@ -69,6 +69,11 @@ public:
 	UFUNCTION() void OnChoice(FString Selected, ESelectInfo::Type Info);
 	UFUNCTION() void OnPageClicked();
 
+	/** A key row's button: arms the screen to take the next key press. */
+	UFUNCTION() void OnKeyClicked();
+	/** The text inside that button, so the capture can say "press a key". */
+	UPROPERTY() TObjectPtr<UTextBlock> KeyText;
+
 	/**
 	 * A SLIDER IS RELEASED, AND ONLY THEN IS THE FILE WRITTEN.
 	 *
@@ -95,8 +100,14 @@ public:
 	/** Rebuild the visible page. Called on construct and whenever a tab changes. */
 	void ShowPage(ESettingPage Page);
 
+	/** Arm the next key press for this row's action. Escape cancels. */
+	void BeginKeyCapture(UTUSettingBinding* Row);
+
 protected:
 	virtual void NativeConstruct() override;
+	/** The capture itself. Only does anything while a row is armed. */
+	virtual FReply NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent) override;
+	virtual void NativeOnFocusLost(const FFocusEvent& InFocusEvent) override;
 
 	/** A BACKSTOP, not the main path. Every control persists its own change as it
 	 *  is made; this catches a slider moved with the keyboard, which never sends
@@ -141,6 +152,9 @@ private:
 	TWeakObjectPtr<ATUCoasterRide> Ride;
 
 	ESettingPage Current = ESettingPage::Video;
+
+	/** The row waiting for a key, or null. */
+	UPROPERTY() TObjectPtr<UTUSettingBinding> Capturing;
 
 	void BuildPageTabs();
 	void BuildRow(const FSettingEntry& Entry);

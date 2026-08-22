@@ -98,6 +98,83 @@ void UTUSettingBinding::OnPageClicked()
 	if (Owner.IsValid()) { Owner->ShowPage(Page); }
 }
 
+void UTUSettingBinding::OnKeyClicked()
+{
+	if (Owner.IsValid()) { Owner->BeginKeyCapture(this); }
+}
+
+// ===================== KEY CAPTURE =====================
+//
+// Click the key, press the next one. The screen takes keyboard focus for
+// exactly as long as a row is armed, and gives it back on the key, on Escape,
+// or on losing focus -- a capture left armed is a settings page that eats the
+// next key somebody presses for the ride.
+void UTUSettingsWidget::BeginKeyCapture(UTUSettingBinding* Row)
+{
+	if (Capturing && Capturing->KeyText)
+	{
+		// Re-arming another row: the first goes back to showing its key.
+		Capturing->KeyText->SetText(FText::FromString(ReadValue(Capturing->Entry)));
+	}
+	Capturing = Row;
+	if (Row && Row->KeyText)
+	{
+		Row->KeyText->SetText(FText::FromString(TEXT("press a key...")));
+		Row->KeyText->SetColorAndOpacity(FSlateColor(FTUStyle::LampOccupied));
+	}
+	SetIsFocusable(true);
+	SetKeyboardFocus();
+}
+
+FReply UTUSettingsWidget::NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent)
+{
+	if (!Capturing)
+	{
+		return Super::NativeOnKeyDown(InGeometry, InKeyEvent);
+	}
+	const FKey Key = InKeyEvent.GetKey();
+	ATUCoasterRide* R = Ride.Get();
+	if (Key == EKeys::Escape || !R)
+	{
+		Capturing = nullptr;
+		ShowPage(Current);
+		return FReply::Handled();
+	}
+	// Modifiers on their own are not a binding; wait for the real key.
+	if (Key == EKeys::LeftShift || Key == EKeys::RightShift || Key == EKeys::LeftControl
+		|| Key == EKeys::RightControl || Key == EKeys::LeftAlt || Key == EKeys::RightAlt)
+	{
+		return FReply::Handled();
+	}
+	const FString Name = Key.GetFName().ToString();
+	if (!R->RebindKey(UTF8_TO_TCHAR(Capturing->Entry.Key.c_str()), Name))
+	{
+		// Refused (an F key, the editor's) -- said on the row rather than
+		// silently kept armed.
+		if (Capturing->KeyText)
+		{
+			Capturing->KeyText->SetText(FText::FromString(
+				FString::Printf(TEXT("%s is the editor's"), *Name)));
+			Capturing->KeyText->SetColorAndOpacity(FSlateColor(FTUStyle::LampFault));
+		}
+		return FReply::Handled();
+	}
+	Capturing = nullptr;
+	// Rebuilt, because a rebind can create or clear a conflict on ANOTHER row.
+	ShowPage(Current);
+	return FReply::Handled();
+}
+
+void UTUSettingsWidget::NativeOnFocusLost(const FFocusEvent& InFocusEvent)
+{
+	Super::NativeOnFocusLost(InFocusEvent);
+	if (Capturing)
+	{
+		Capturing = nullptr;
+		ShowPage(Current);
+	}
+}
+
 void UTUSettingsWidget::AttachTo(ATUCoasterRide* InRide)
 {
 	Ride = InRide;
@@ -307,15 +384,55 @@ void UTUSettingsWidget::BuildRow(const FSettingEntry& Entry)
 	case ESettingKind::Key:
 	default:
 	{
-		// SHOWN, NOT YET REBINDABLE. A rebind control has to capture the next
-		// keypress, detect conflicts and offer to swap — FInputMap already
-		// reports conflicts and this row has nowhere to put that answer yet.
-		// Displaying the binding is honest; a button that looks rebindable and
-		// is not would be worse than a label.
+		// REBINDABLE: click the key, press the next one. The button is the
+		// key's own text, which is what every remap screen looks like.
+		UHorizontalBox* KeyRow = WidgetTree->ConstructWidget<UHorizontalBox>();
+		UButton* Btn = WidgetTree->ConstructWidget<UButton>();
 		UTextBlock* Key = WidgetTree->ConstructWidget<UTextBlock>();
 		Key->SetText(FText::FromString(Value));
-		Key->SetColorAndOpacity(FSlateColor(FTUStyle::TextSecondary));
-		ControlBox->AddChild(Key);
+		Key->SetColorAndOpacity(FSlateColor(FTUStyle::TextPrimary));
+		Key->SetFont(FTUStyle::Get().GetFontStyle("Font.Body"));
+		Btn->AddChild(Key);
+		KeyRow->AddChildToHorizontalBox(Btn);
+		UTUSettingBinding* B = Bind(Entry);
+		B->KeyText = Key;
+		Btn->OnClicked.AddDynamic(B, &UTUSettingBinding::OnKeyClicked);
+
+		// THE CONFLICT, ON THE ROW. FInputMap reports every pair that fights
+		// and has since it was written; this is the first place the answer is
+		// shown. Stored rather than refused (its own comment says why), so
+		// what the person gets is both rows saying "also: <the other>" until
+		// they move one.
+		if (const ATUCoasterRide* R = Ride.Get())
+		{
+			FString Also;
+			for (const FBindingConflict& C : R->GetBindings().Conflicts())
+			{
+				const std::string* Other = C.ActionA == Entry.Key ? &C.ActionB
+					: (C.ActionB == Entry.Key ? &C.ActionA : nullptr);
+				if (!Other) { continue; }
+				for (const FSettingEntry& O : SettingsSchema())
+				{
+					if (O.Key == *Other)
+					{
+						Also += (Also.IsEmpty() ? TEXT("also: ") : TEXT(", "));
+						Also += UTF8_TO_TCHAR(O.Label.c_str());
+					}
+				}
+			}
+			if (!Also.IsEmpty())
+			{
+				UTextBlock* Warn = WidgetTree->ConstructWidget<UTextBlock>();
+				Warn->SetText(FText::FromString(Also));
+				Warn->SetColorAndOpacity(FSlateColor(FTUStyle::LampFault));
+				Warn->SetFont(FTUStyle::Get().GetFontStyle("Font.Body"));
+				if (UHorizontalBoxSlot* S = KeyRow->AddChildToHorizontalBox(Warn))
+				{
+					S->SetPadding(FMargin(8.f, 4.f, 0.f, 0.f));
+				}
+			}
+		}
+		ControlBox->AddChild(KeyRow);
 		break;
 	}
 	}
@@ -442,7 +559,13 @@ void UTUSettingsWidget::ResetValue(const FSettingEntry& Entry)
 	}
 	if (Entry.Owner == ESettingOwner::Input)
 	{
-		return;   // nothing was ever written; there is nothing to erase
+		// Back to the default key, which for a binding IS the deletion: the
+		// keys file only carries the ones that differ.
+		if (ATUCoasterRide* R = Ride.Get())
+		{
+			R->RebindKey(UTF8_TO_TCHAR(Entry.Key.c_str()), UTF8_TO_TCHAR(Entry.Default.c_str()));
+		}
+		return;
 	}
 	if (ATUCoasterRide* R = Ride.Get())
 	{

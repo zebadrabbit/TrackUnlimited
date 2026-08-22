@@ -2097,6 +2097,13 @@ public:
 	 *  that was never offered. */
 	void WriteShellSettings() const;
 
+	/** Move an action to a key: the live input component, the FInputMap record,
+	 *  and (if asked) the keys file. False if the key is refused or unknown. */
+	bool RebindKey(const FString& Action, const FString& KeyName, bool bPersist = true);
+	void WriteKeyBindings() const;
+	void LoadKeyBindings();
+	FString KeyBindingsPath() const;
+
 	/**
 	 * THE DOCUMENT, AS THE TEXT THAT WOULD BE SAVED.
 	 *
@@ -2250,6 +2257,9 @@ private:
 	 */
 	FSettings ShellSettings;
 	FInputMap Bindings;
+	/** For each schema action, the KeyBindings entries that are it -- recorded
+	 *  at setup while every action still holds its unique default. */
+	TMap<FString, TArray<int32>> ActionBindingIndex;
 
 	/** Read the file, or start from defaults if there is none. Called once, at
 	 *  BeginPlay — before the first Tick, which is what lets a restart-flagged

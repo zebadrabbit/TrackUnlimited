@@ -2495,6 +2495,119 @@ void ATUCoasterRide::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 	// second thing to keep true — it drifted once already, promising [F2] after F2
 	// was given back to the editor.
 	CheckBindingsAgainstInput(PlayerInputComponent);
+
+	// ===================== WHICH BINDINGS ARE WHICH ACTION =====================
+	//
+	// Recorded ONCE, here, while every action still holds its default key and
+	// the defaults are unique: an action is the set of KeyBindings entries on
+	// its default key. That is what makes a later rebind unambiguous -- two
+	// actions somebody has put on one key are still two different index sets,
+	// so moving one does not move the other. Rebinding by key would.
+	ActionBindingIndex.Reset();
+	for (const FSettingEntry& E : SettingsSchema())
+	{
+		if (E.Kind != ESettingKind::Key) { continue; }
+		const FName Named(UTF8_TO_TCHAR(E.Default.c_str()));
+		TArray<int32>& Idx = ActionBindingIndex.FindOrAdd(UTF8_TO_TCHAR(E.Key.c_str()));
+		for (int32 i = 0; i < PlayerInputComponent->KeyBindings.Num(); ++i)
+		{
+			const FInputKeyBinding& B = PlayerInputComponent->KeyBindings[i];
+			if (B.Chord.Key.GetFName() == Named && !B.Chord.bShift && !B.Chord.bCtrl && !B.Chord.bAlt)
+			{
+				Idx.Add(i);
+			}
+		}
+	}
+
+	// The person's own keys, over the defaults, and applied to the component.
+	LoadKeyBindings();
+}
+
+// ===================== REBINDING =====================
+//
+// The settings file must never carry a `key.` line (one home per fact), so the
+// bindings have their own: Saved/TrackUnlimited.keys, one `action=Key` a line,
+// only the ones somebody changed. A default is not a value here either.
+FString ATUCoasterRide::KeyBindingsPath() const
+{
+	return FPaths::ConvertRelativePathToFull(
+		FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("TrackUnlimited.keys")));
+}
+
+void ATUCoasterRide::LoadKeyBindings()
+{
+	FString Text;
+	if (FFileHelper::LoadFileToString(Text, *KeyBindingsPath()))
+	{
+		TArray<FString> Lines;
+		Text.ParseIntoArrayLines(Lines);
+		for (const FString& L : Lines)
+		{
+			FString Action, Key;
+			if (L.Split(TEXT("="), &Action, &Key))
+			{
+				RebindKey(Action.TrimStartAndEnd(), Key.TrimStartAndEnd(), false);
+			}
+		}
+	}
+}
+
+void ATUCoasterRide::WriteKeyBindings() const
+{
+	FString Out;
+	for (const FSettingEntry& E : SettingsSchema())
+	{
+		if (E.Kind != ESettingKind::Key) { continue; }
+		const std::string Bound = Bindings.KeyFor(E.Key);
+		if (!Bound.empty() && Bound != E.Default)
+		{
+			Out += FString::Printf(TEXT("%s=%s") LINE_TERMINATOR, UTF8_TO_TCHAR(E.Key.c_str()),
+				UTF8_TO_TCHAR(Bound.c_str()));
+		}
+	}
+	if (!FFileHelper::SaveStringToFile(Out, *KeyBindingsPath(),
+		FFileHelper::EEncodingOptions::ForceUTF8WithoutBOM))
+	{
+		UE_LOG(LogTUEvents, Warning, TEXT("controls: could not write %s"), *KeyBindingsPath());
+	}
+}
+
+bool ATUCoasterRide::RebindKey(const FString& Action, const FString& KeyName, bool bPersist)
+{
+	// F1-F12 ARE THE EDITOR'S and their bindings are live in PIE -- the lesson
+	// that moved Settings off F1. Refused here, so the one key that would make
+	// the world change rendering at the same moment the UI did cannot be chosen.
+	if (KeyName.Len() >= 2 && KeyName[0] == TEXT('F') && FChar::IsDigit(KeyName[1]))
+	{
+		UE_LOG(LogTUEvents, Warning, TEXT("controls: [%s] belongs to the editor; not bound"), *KeyName);
+		return false;
+	}
+	const TArray<int32>* Idx = ActionBindingIndex.Find(Action);
+	if (!Idx || !InputComponent)
+	{
+		return false;
+	}
+	const FKey Key(*KeyName);
+	if (!Key.IsValid())
+	{
+		return false;
+	}
+	for (int32 i : *Idx)
+	{
+		if (InputComponent->KeyBindings.IsValidIndex(i))
+		{
+			InputComponent->KeyBindings[i].Chord.Key = Key;
+		}
+	}
+	// The record the settings page reads. A conflict is stored, never refused:
+	// refusing leaves somebody stuck half-way through a remap (FInputMap's own
+	// comment), and the page shows the clash instead.
+	Bindings.Bind(TCHAR_TO_UTF8(*Action), TCHAR_TO_UTF8(*KeyName));
+	if (bPersist)
+	{
+		WriteKeyBindings();
+	}
+	return true;
 }
 
 void ATUCoasterRide::CycleCameraMode()
@@ -5880,9 +5993,55 @@ bool ATUCoasterRide::RunDocumentSmokeTest()
 	}
 	RefreshTrackList();
 
+	// ===================== REBINDING, END TO END =====================
+	//
+	// The settings page's key capture cannot be driven from here (it is UMG
+	// and needs a real key event), so what is proved is everything UNDER it:
+	// a rebind moves the LIVE chord, is written to the keys file, a conflict
+	// with another action is reported, an F key is refused, and the default
+	// restores. Done on [N], the newest binding, and put back after.
+	{
+		FString SavedKeys;
+		const bool bHadKeys = FFileHelper::LoadFileToString(SavedKeys, *KeyBindingsPath());
+		auto LiveKeyFor = [this](const FString& Action) -> FString
+		{
+			const TArray<int32>* Idx = ActionBindingIndex.Find(Action);
+			if (!Idx || Idx->Num() == 0 || !InputComponent) { return TEXT("?"); }
+			return InputComponent->KeyBindings[(*Idx)[0]].Chord.Key.GetFName().ToString();
+		};
+		const bool bMoved = RebindKey(TEXT("key.seat"), TEXT("Y")) && LiveKeyFor(TEXT("key.seat")) == TEXT("Y");
+		FString Written;
+		FFileHelper::LoadFileToString(Written, *KeyBindingsPath());
+		const bool bWritten = Written.Contains(TEXT("key.seat=Y"));
+		// Onto [T], which is "Next train": both rows must report the other.
+		RebindKey(TEXT("key.seat"), TEXT("T"));
+		int32 Reported = 0;
+		for (const FBindingConflict& C : Bindings.Conflicts())
+		{
+			if ((C.ActionA == "key.seat" && C.ActionB == "key.train")
+				|| (C.ActionA == "key.train" && C.ActionB == "key.seat")) { ++Reported; }
+		}
+		const bool bRefusedF = !RebindKey(TEXT("key.seat"), TEXT("F5")) && LiveKeyFor(TEXT("key.seat")) == TEXT("T");
+		const bool bRestored = RebindKey(TEXT("key.seat"), TEXT("N")) && LiveKeyFor(TEXT("key.seat")) == TEXT("N")
+			&& Bindings.Conflicts().empty();
+		if (!(bMoved && bWritten && Reported == 1 && bRefusedF && bRestored))
+		{
+			UE_LOG(LogTUEvents, Error,
+				TEXT("smoke: rebinding is wrong (moved %d, written %d, conflicts %d, refused F %d, restored %d)"),
+				bMoved, bWritten, Reported, bRefusedF, bRestored);
+			Failures.Add(TEXT("rebind"));
+		}
+		else
+		{
+			UE_LOG(LogTUEvents, Log, TEXT("smoke: [N] rebinds live, persists, reports a clash with [T], refuses F5, restores"));
+		}
+		if (bHadKeys) { FFileHelper::SaveStringToFile(SavedKeys, *KeyBindingsPath()); }
+		else { Files.Delete(*KeyBindingsPath(), false, true, true); }
+	}
+
 	if (Failures.Num() > 0)
 	{
-		UE_LOG(LogTUEvents, Error, TEXT("smoke: %d of 10 checks failed: %s"),
+		UE_LOG(LogTUEvents, Error, TEXT("smoke: %d of 11 checks failed: %s"),
 			Failures.Num(), *FString::Join(Failures, TEXT(", ")));
 	}
 	return Failures.Num() == 0;
@@ -5940,7 +6099,9 @@ void ATUCoasterRide::LoadShellSettings()
 	// having two homes.
 	for (const FSettingEntry& E : SettingsSchema())
 	{
-		if (E.Kind == ESettingKind::Key)
+		// Only where nothing is bound yet: the keys file may already have been
+		// applied, and Bind REPLACES.
+		if (E.Kind == ESettingKind::Key && Bindings.KeyFor(E.Key).empty())
 		{
 			Bindings.Bind(E.Key, E.Default);
 		}
