@@ -549,3 +549,51 @@ inline FGVerdict JudgeRideProfile(const FRideProfile& P,
 // dropped, because the numbers are part of the table and losing them loses the
 // intent. Add it when a layout is found that trips it; nothing measured so far
 // reverses that fast.
+
+// ===================== A SEAT OFF THE HEARTLINE =====================
+//
+// Felt G is computed at the heartline, and a rider who is not on it feels
+// something else through every roll: the seat swings about the heartline at
+// the roll rate, so it carries the heartline's acceleration PLUS the
+// acceleration of that swing. For a seat a lateral distance y from the
+// heartline (+y is the rider's left, the frame's own sign):
+//
+//   vertical:  alpha * y      the angular ACCELERATION lifts or drops the seat --
+//                             the "snap" an outboard seat gets that the centre
+//                             never does, and why a wing coaster feels the way it does
+//   lateral:  -omega^2 * y    the centripetal pull back toward the heartline
+//
+// COASTER_TYPES.md argues this is worth building for every wide train rather
+// than for wing coasters alone; what a four-across train's outer seat feels is
+// the same term at a smaller y. Nothing in it is new data: RollRateDegPerSec
+// is already on every sample, so this is a transform of a profile into the
+// profile that seat would have recorded. Judge it with JudgeRideProfile like
+// any other, which is the "run it once per seat" rule the facing sign follows.
+//
+// Signs follow the frame: Tangent x Lateral = Up, so a positive roll rate
+// carries +Lateral toward +Up, and a seat at +y rises -- an upward seat
+// acceleration presses the rider into it, which is +Gz. The centripetal term
+// points at the heartline: for +y that is -Lateral, which the rider feels as a
+// push toward their RIGHT (LateralG's positive sense), hence the sign below.
+// The finite difference for alpha is per-sample and noisy; the 5 Hz filter
+// the judge already applies is what makes it a measurement.
+inline FRideProfile OffsetProfile(const FRideProfile& P, double LateralM)
+{
+    FRideProfile Out = P;
+    if (Out.Samples.size() < 2 || LateralM == 0.0) { return Out; }
+    const double G = 9.80665;
+    const double ToRad = 3.14159265358979323846 / 180.0;
+    for (std::size_t i = 0; i < Out.Samples.size(); ++i)
+    {
+        const std::size_t A = (i == 0) ? 0 : i - 1;
+        const std::size_t B = (i + 1 < Out.Samples.size()) ? i + 1 : i;
+        const double Dt = P.Samples[B].Time - P.Samples[A].Time;
+        const double Omega = P.Samples[i].RollRateDegPerSec * ToRad;
+        const double Alpha = (Dt > 1e-9)
+            ? (P.Samples[B].RollRateDegPerSec - P.Samples[A].RollRateDegPerSec) * ToRad / Dt
+            : 0.0;
+        Out.Samples[i].VerticalG += Alpha * LateralM / G;
+        Out.Samples[i].LateralG  += Omega * Omega * LateralM / G;
+    }
+    return Out;
+}

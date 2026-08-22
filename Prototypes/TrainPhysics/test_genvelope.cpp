@@ -580,6 +580,52 @@ void TestTheSAMEEventIsJudgedDifferentlyByFacing()
     // Recorded here so a verified table has something to answer.
 }
 
+// ===================== THE OUTER SEAT =====================
+void TestAnOffsetSeatFeelsTheRollAndTheCentreDoesNot()
+{
+    // Level track, 1 g, with the roll rate ramping 0 -> 180 deg/s over one
+    // second then holding: alpha = pi rad/s^2 during the ramp, omega = pi after.
+    FRideProfile P = Hold(1.0, 0.0, 0.0, 4.0);
+    for (FRideSample& S : P.Samples)
+    {
+        S.RollRateDegPerSec = S.Time < 1.0 ? 180.0 * S.Time : 180.0;
+    }
+    const double G = 9.80665, Pi = 3.14159265358979323846;
+
+    // The centre seat is unchanged, to the bit.
+    const FRideProfile C = OffsetProfile(P, 0.0);
+    for (std::size_t i = 0; i < P.Samples.size(); ++i)
+    {
+        assert(C.Samples[i].VerticalG == P.Samples[i].VerticalG);
+        assert(C.Samples[i].LateralG == P.Samples[i].LateralG);
+    }
+
+    // 1.2 m out on the rider's left (a wing seat), mid-ramp at t = 0.5 s:
+    // vertical snap alpha * y / g, no steady centripetal yet to speak of.
+    const FRideProfile L = OffsetProfile(P, 1.2);
+    const std::size_t Mid = 100;   // 0.5 s at 200 Hz
+    const double ExpectSnap = Pi * 1.2 / G;
+    assert(std::fabs(L.Samples[Mid].VerticalG - (1.0 + ExpectSnap)) < 1e-3);
+    // On the plateau at t = 3 s: no snap, centripetal omega^2 y / g toward the
+    // heartline, felt as a push to the rider's right (positive LateralG).
+    const std::size_t Late = 600;
+    const double ExpectCent = Pi * Pi * 1.2 / G;
+    assert(std::fabs(L.Samples[Late].VerticalG - 1.0) < 1e-3);
+    assert(std::fabs(L.Samples[Late].LateralG - ExpectCent) < 1e-3);
+
+    // The right-hand seat mirrors BOTH: the snap drops it, and the pull is
+    // toward the heartline from the other side.
+    const FRideProfile R = OffsetProfile(P, -1.2);
+    assert(std::fabs(R.Samples[Mid].VerticalG - (1.0 - ExpectSnap)) < 1e-3);
+    assert(std::fabs(R.Samples[Late].LateralG + ExpectCent) < 1e-3);
+
+    // And the magnitudes are real: 180 deg/s at 1.2 m is about 0.38 g of snap
+    // and 1.2 g of lateral that the heartline reports as zero.
+    assert(ExpectSnap > 0.35 && ExpectCent > 1.1);
+    std::printf("  outer seat at 1.2 m through a 180 deg/s roll: +%.2f g snap, %.2f g lateral; centre 0\n",
+        ExpectSnap, ExpectCent);
+}
+
 int main()
 {
     std::printf("GEnvelope: judging a ride against acceleration envelopes\n");
@@ -602,6 +648,7 @@ int main()
     TestRealRideIsJudgedAndLocatable();
     TestABackwardFacingSeatFlipsFOREAFTAndLATERALButNotVERTICAL();
     TestTheSAMEEventIsJudgedDifferentlyByFacing();
+    TestAnOffsetSeatFeelsTheRollAndTheCentreDoesNot();
 
     std::printf("\nAll GEnvelope assertions passed.\n");
     return 0;

@@ -5935,13 +5935,27 @@ bool ATUCoasterRide::RunDocumentSmokeTest()
 			if (S.Zone == ETUSegmentZone::Brake) { ++Trims; }
 		}
 
+		// AND IT IS WITHIN THE ENVELOPE, at the centre and at the outer seat.
+		// Judged for real (both verdicts run on a completed ride and their
+		// findings land in the panel), so a showcase that snapped an outboard
+		// rider through its helix would fail here rather than demonstrate it.
+		int32 EnvelopeRows = 0;
+		for (std::size_t i = 0; i < Diagnostics.Num(); ++i)
+		{
+			if (Diagnostics.At(i).Group == "Envelope") { ++EnvelopeRows; }
+		}
+		const FGVerdict Outer = JudgeRideProfile(OffsetProfile(Profile_,
+			TrainMeshSettings().BodyWidthM * 0.25));
+		const bool bJudged = Outer.SamplesJudged > 0;
+
 		if (!bTrackIsCircuit || !Profile_.bCompleted || Pads < 2 || Trims != 1
-			|| !bEmptied || !bReturned || !bTrainExact)
+			|| !bEmptied || !bReturned || !bTrainExact || EnvelopeRows != 0 || !bJudged)
 		{
 			UE_LOG(LogTUEvents, Error,
 				TEXT("smoke: the showcase is wrong (circuit %d, completed %d, pads %d, ")
-				TEXT("trims %d, shed to zero %d, returned %d, train exact %d)"),
-				bTrackIsCircuit, Profile_.bCompleted, Pads, Trims, bEmptied, bReturned, bTrainExact);
+				TEXT("trims %d, shed to zero %d, returned %d, train exact %d, envelope rows %d, judged %d)"),
+				bTrackIsCircuit, Profile_.bCompleted, Pads, Trims, bEmptied, bReturned, bTrainExact,
+				EnvelopeRows, bJudged);
 			Failures.Add(TEXT("showcase"));
 		}
 		else
@@ -6520,6 +6534,37 @@ void ATUCoasterRide::BuildDiagnostics()
 	}
 	Diagnostics.AddRideProfile(Profile_.bCompleted, Profile_.StalledAtS,
 		Top, PeakG, PeakAt, Lap);
+
+	// ===================== THE ENVELOPE, AT LAST IN THE PANEL =====================
+	//
+	// JudgeRideProfile had only ever been called from its own suite. It runs
+	// here on a COMPLETED ride only (the suite's own old failure: a verdict on a
+	// ride that did not happen), for the centre seat and for the outer seat --
+	// OffsetProfile adds what a rider BodyWidth/4 off the heartline feels
+	// through every roll, which the heartline reports as nothing. Two runs,
+	// one per seat, which is the rule the facing sign already follows.
+	// Limits are unverified research (the header says so); a finding is a row
+	// to go and look at, never a repair.
+	if (Profile_.bCompleted)
+	{
+		const double OuterM = TrainMeshSettings().BodyWidthM * 0.25;
+		struct { const char* Seat; double LateralM; } Seats[] = {{"centre", 0.0}, {"outer seat", OuterM}};
+		for (const auto& Seat : Seats)
+		{
+			const FGVerdict V = JudgeRideProfile(OffsetProfile(Profile_, Seat.LateralM));
+			for (const FGFinding& F : V.Findings)
+			{
+				static const char* KindName[] = {"sustained", "impact", "jerk", "combined", "reversal"};
+				FDiagTarget T;
+				T.S = F.AtS;
+				Diagnostics.Add(EDiagSeverity::Warning, "Envelope",
+					TCHAR_TO_UTF8(*FString::Printf(TEXT("%s %s %.2f g for %.2f s, limit %.2f (%s, %s)"),
+						UTF8_TO_TCHAR(F.Axis), UTF8_TO_TCHAR(KindName[static_cast<int32>(F.Kind)]),
+						F.Value, F.Duration, F.Limit, UTF8_TO_TCHAR(Seat.Seat),
+						V.Standard == EGStandard::ASTM_F2291 ? TEXT("ASTM") : TEXT("EN"))), T);
+			}
+		}
+	}
 
 	// Support placement, which refuses more than it places on a layout with a
 	// helix — and the hole its refusals leave is the number an engineer asks for.

@@ -14,6 +14,7 @@
 
 #include "TrainPhysics/TrainPhysics.h"
 #include "TrainPhysics/Seat.h"
+#include "TrainPhysics/GEnvelope.h"
 #include "TrainPhysics/RideProfile.h"
 #include "TrackSpline/TrackProfile.h"
 // FTrackDiagnostic is a MEMBER type below, not just something the .cpp uses.
