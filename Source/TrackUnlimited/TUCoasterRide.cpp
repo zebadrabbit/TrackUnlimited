@@ -3309,7 +3309,12 @@ void ATUCoasterRide::DrawMainMenu(UCanvas* Canvas)
 	const std::vector<FTrackEntry> Rows = FTrackBrowser::Rows(KnownTracks, TrackPaths);
 	const float TrackRow = 34.f;
 	const float ThumbSize = 28.f;
-	const float BodyH = 190.f + static_cast<float>(NumTemplates()) * TrackRow
+	// A template row is taller than a track row because its picture is the
+	// reason to pick it, where a track row's is a reminder of something already
+	// chosen once.
+	const float TemplateRow = 52.f;
+	const float TemplateThumb = 44.f;
+	const float BodyH = 190.f + static_cast<float>(NumTemplates()) * TemplateRow
 		+ (Rows.empty() ? Row : static_cast<float>(Rows.size()) * TrackRow);
 
 	PanelTile(Canvas, Ox - 20.f, 50.f, W + 40.f, BodyH, PanelGround);
@@ -3329,19 +3334,40 @@ void ATUCoasterRide::DrawMainMenu(UCanvas* Canvas)
 	for (std::size_t i = 0; i < NumTemplates(); ++i)
 	{
 		const FTemplate T = TemplateAt(i);
-		MenuRowRects.Add(FVector4(Ox, Y, Ox + W, Y + TrackRow));
+		MenuRowRects.Add(FVector4(Ox, Y, Ox + W, Y + TemplateRow));
 		MenuRowAction.Add(static_cast<int32>(i));
-		PanelLabel(Canvas, Ox + 12.f, Y + 2.f, UTF8_TO_TCHAR(T.Name), PanelText);
+
+		// THE SHAPE, drawn from the preset's own walk. Blank has none and shows
+		// an empty frame, which is an honest picture of it.
+		const float Tx = Ox + 10.f;
+		const float Ty = Y + (TemplateRow - TemplateThumb) * 0.5f;
+		PanelTile(Canvas, Tx, Ty, TemplateThumb, TemplateThumb, PanelRule);
+		if (TemplatePlans.IsValidIndex(static_cast<int32>(i)))
+		{
+			const std::vector<float>& Pl = TemplatePlans[static_cast<int32>(i)];
+			for (std::size_t p = 0; p + 3 < Pl.size(); p += 2)
+			{
+				PanelLine(Canvas,
+					Tx + 3.f + Pl[p] * (TemplateThumb - 6.f),
+					Ty + 3.f + (1.f - Pl[p + 1]) * (TemplateThumb - 6.f),
+					Tx + 3.f + Pl[p + 2] * (TemplateThumb - 6.f),
+					Ty + 3.f + (1.f - Pl[p + 3]) * (TemplateThumb - 6.f),
+					PanelCyan);
+			}
+		}
+
+		const float Lx = Ox + 10.f + TemplateThumb + 12.f;
+		PanelLabel(Canvas, Lx, Y + 9.f, UTF8_TO_TCHAR(T.Name), PanelText);
 		// ONE LINE OF DESCRIPTION, CLIPPED TO THE PANEL. These ran out past the
 		// right edge and across the viewport; the full text is the template's to
 		// keep, the row gets what fits.
 		FString Desc(UTF8_TO_TCHAR(T.Description));
-		while (Desc.Len() > 4 && PanelTextWidth(Canvas, Desc) > W - 24.f)
+		while (Desc.Len() > 4 && PanelTextWidth(Canvas, Desc) > W - (Lx - Ox) - 12.f)
 		{
 			Desc = Desc.Left(Desc.Len() - 4) + TEXT("...");
 		}
-		PanelLabel(Canvas, Ox + 12.f, Y + 17.f, Desc, PanelDim);
-		Y += TrackRow;
+		PanelLabel(Canvas, Lx, Y + 26.f, Desc, PanelDim);
+		Y += TemplateRow;
 	}
 
 	// ---- TRACKS: what has been opened recently, then whatever else is in the
@@ -3538,6 +3564,20 @@ void ATUCoasterRide::DrawLeaveConfirm(UCanvas* Canvas)
 	PanelLabel(Canvas, Ox + 320.f, Y, TEXT("[ Cancel ]"), PanelText);
 }
 
+bool ATUCoasterRide::PresetForTemplate(ETemplatePreset T, ETUPresetLayout& Out)
+{
+	switch (T)
+	{
+	case ETemplatePreset::FlatRig:         Out = ETUPresetLayout::FlatRig; return true;
+	case ETemplatePreset::OutAndBack:      Out = ETUPresetLayout::OutAndBack; return true;
+	case ETemplatePreset::TwoTrainCircuit: Out = ETUPresetLayout::TwoTrainCircuit; return true;
+	case ETemplatePreset::SmallBatch:      Out = ETUPresetLayout::SmallBatch; return true;
+	case ETemplatePreset::Showcase:        Out = ETUPresetLayout::Showcase; return true;
+	case ETemplatePreset::Blank:           return false;
+	default:                               Out = ETUPresetLayout::Reference; return true;
+	}
+}
+
 void ATUCoasterRide::StartFromTemplate(int32 Index)
 {
 	if (Index < 0 || static_cast<std::size_t>(Index) >= NumTemplates()) { return; }
@@ -3547,17 +3587,11 @@ void ATUCoasterRide::StartFromTemplate(int32 Index)
 	// measured worked examples already ship, and a parallel set of starter
 	// layouts would be a second set of tracks to keep working — drifting from the
 	// ones every number in the docs is quoted from.
-	switch (T.Preset)
+	if (!PresetForTemplate(T.Preset, Preset))
 	{
-	case ETemplatePreset::FlatRig:         Preset = ETUPresetLayout::FlatRig; break;
-	case ETemplatePreset::OutAndBack:      Preset = ETUPresetLayout::OutAndBack; break;
-	case ETemplatePreset::TwoTrainCircuit: Preset = ETUPresetLayout::TwoTrainCircuit; break;
-	case ETemplatePreset::SmallBatch:      Preset = ETUPresetLayout::SmallBatch; break;
-	case ETemplatePreset::Showcase:        Preset = ETUPresetLayout::Showcase; break;
-	case ETemplatePreset::Blank:           Segments.Reset(); break;
-	default:                               Preset = ETUPresetLayout::Reference; break;
+		Segments.Reset();
 	}
-	if (T.Preset != ETemplatePreset::Blank)
+	else
 	{
 		Segments = PresetLayout(Preset);
 		ApplyPresetTrainSetup(Preset);
@@ -4218,6 +4252,7 @@ void ATUCoasterRide::ApplyAppMode(EAppMode Want)
 		// question in Operate is "may this train go", and that is asked and
 		// answered at the platform.
 		CameraMode = ETUCameraMode::Orbit;
+		SyncCameraRig();
 		FrameStation();
 		break;
 	case EAppMode::Ride:
@@ -4237,7 +4272,18 @@ void ATUCoasterRide::ApplyAppMode(EAppMode Want)
 		// is lost that somebody was not told about.
 		PanelView = ETUPanelView::Off;
 		SelectedSegment = -1;
-		Segments.Reset();
+
+		// ===================== AND THE BACKDROP IS A RUNNING RIDE =====================
+		//
+		// The Showcase, trains dispatching, seen from a slow orbit. It is what the
+		// application IS, and a menu over an empty desert said nothing about it.
+		// It is NOT the person's document: it is created clean, so the frame shows
+		// no asterisk, Quit does not ask, and [Tab] into Build simply makes it the
+		// track being edited -- which is the same thing that template row does.
+		Preset = ETUPresetLayout::Showcase;
+		Segments = PresetLayout(Preset);
+		ApplyPresetTrainSetup(Preset);
+		ApplyPresetWalkways();
 		RebuildFromSegments();
 		Session.DidCreateNew(TCHAR_TO_UTF8(*SerialiseDocument()));
 		ResetHistory();
@@ -4250,24 +4296,26 @@ void ATUCoasterRide::ApplyAppMode(EAppMode Want)
 			FrameWidget->CloseSettings();
 		}
 
-		// AND THE CAMERA IS PLACED HERE, not left to the camera tick -- that
-		// returns before it ever reaches the camera when there is no train, which
-		// at a menu over an empty document is always. The result was a first
-		// screen from inside the floor. A fixed pose rather than a framing, because
-		// there is nothing to frame: back, up, looking at the horizon.
+		// Framed from a little above the horizon and turning slowly (see the
+		// orbit branch of Tick). Framed here rather than on the first tick so the
+		// first frame is already the picture.
 		CameraMode = ETUCameraMode::Orbit;
-		bOrbitFramed = false;
+		SyncCameraRig();
+		FrameWholeTrack();
+		Orbit.PitchDeg = -18.0;
+		Orbit.YawDeg = -30.0;
+		Orbit.Distance *= 0.6;     // the sphere fit is conservative; the backdrop wants the ride close
+		// APPLIED NOW, not on the next tick: Tick returns before the camera while
+		// the window is unfocused or the scan has not started, and the first
+		// frame of the application was the level's serialised camera meanwhile.
+		ApplyOrbitToCamera();
 		bOrbitIsBackdrop = true;   // whatever opens next gets the default angle
-		if (Camera)
-		{
-			Camera->SetWorldLocation(GetActorLocation() + FVector(-6000.f, -4500.f, 2200.f));
-			Camera->SetWorldRotation(FRotator(-6.f, 36.f, 0.f));
-		}
 		break;
 	}
 	default:
 		PanelView = ETUPanelView::Off;
 		CameraMode = ETUCameraMode::Orbit;
+		SyncCameraRig();
 		// BUILD SHOWS THE EDITOR. The boot path quiets every overlay so the menu
 		// is not a wall of numbers, and that quiet reached Build too: the hint
 		// said "edit the numbers" over a viewport with no numbers on it. [B] still
@@ -4395,9 +4443,10 @@ void ATUCoasterRide::ClickDiagnostics()
 			FCamBounds B;
 			B.Add({F.Position.X - 8.0, F.Position.Y - 8.0, F.Position.Z - 8.0});
 			B.Add({F.Position.X + 8.0, F.Position.Y + 8.0, F.Position.Z + 8.0});
+			CameraMode = ETUCameraMode::Orbit;
+			SyncCameraRig();
 			Orbit.Frame(B, Camera ? static_cast<double>(Camera->FieldOfView) : 90.0, 16.0 / 9.0);
 			bOrbitFramed = true;
-			CameraMode = ETUCameraMode::Orbit;
 		}
 		return;
 	}
@@ -4520,9 +4569,12 @@ void ATUCoasterRide::FrameSelectedSegment()
 	B.Add({B.Min.X - Pad, B.Min.Y - Pad, B.Min.Z - Pad});
 	B.Add({B.Max.X + Pad, B.Max.Y + Pad, B.Max.Z + Pad});
 
+	// MODE FIRST, THEN THE FIT. Switching the rig after framing would hand the
+	// fit to the old mode's rig and bring back the stored one.
+	CameraMode = ETUCameraMode::Orbit;
+	SyncCameraRig();
 	Orbit.Frame(B, Camera ? static_cast<double>(Camera->FieldOfView) : 90.0, 16.0 / 9.0);
 	bOrbitFramed = true;
-	CameraMode = ETUCameraMode::Orbit;
 
 	UE_LOG(LogTemp, Log, TEXT("TrackUnlimited: framed segment %d (%.1f-%.1f m)"),
 		SelectedSegment, Start, End);
@@ -4544,6 +4596,8 @@ void ATUCoasterRide::CycleProfileChannel()
 
 void ATUCoasterRide::FrameWholeTrack()
 {
+	CameraMode = ETUCameraMode::Orbit;
+	SyncCameraRig();
 	// Walked rather than guessed: the frames the mesher already produces, swept
 	// into a bounding box. Nothing extra is integrated for this.
 	FCamBounds B;
@@ -5020,6 +5074,34 @@ void ATUCoasterRide::RedoEdit()
 
 void ATUCoasterRide::RefreshTrackList()
 {
+	// ===================== A TEMPLATE HAS A PICTURE TOO =====================
+	//
+	// The same walk the saved-track rows get, over the preset's own segments. A
+	// template row was a name and a sentence; five layouts somebody is choosing
+	// between are five shapes, and the shape is what they are choosing.
+	TemplatePlans.Reset();
+	for (std::size_t i = 0; i < NumTemplates(); ++i)
+	{
+		std::vector<float> Thumb;
+		ETUPresetLayout P;
+		if (PresetForTemplate(TemplateAt(i).Preset, P))
+		{
+			FTrackDocument Doc;
+			for (const FTUTrackSegment& S : PresetLayout(P))
+			{
+				Doc.Segments.push_back(ToAuthored(S));
+			}
+			std::vector<float> Plan;
+			for (const FTrackFrame& F : WalkTrack(::BuildTrack(Doc), 2.0))
+			{
+				Plan.push_back(static_cast<float>(F.Position.X));
+				Plan.push_back(static_cast<float>(F.Position.Y));
+			}
+			Thumb = PlanThumb(Plan, 96);
+		}
+		TemplatePlans.Add(MoveTemp(Thumb));
+	}
+
 	// ONCE, ON THE WAY INTO THE MENU — never per frame. The menu is drawn
 	// immediate-mode every frame, and reading and parsing every track file at
 	// sixty hertz to draw a list of names is the kind of cost that is invisible
@@ -6033,6 +6115,13 @@ void ATUCoasterRide::BeginPlay()
 		bShowProfileGraph = false;
 		bShowSegmentEditor = false;
 		PanelView = ETUPanelView::Off;
+		// The in-world G traces too: four coloured dotted lines along every rail
+		// are a developer's instrument, and on the menu's backdrop they read as
+		// something wrong with the track.
+		bGraphVerticalG = false;
+		bGraphLateralG = false;
+		bGraphSpeed = false;
+		bGraphRollRate = false;
 
 		Segments.Reset();
 		RebuildFromSegments();
@@ -9587,6 +9676,39 @@ void ATUCoasterRide::ToggleOverlays()
 		bHideOverlays ? TEXT("hidden") : TEXT("shown"));
 }
 
+void ATUCoasterRide::SyncCameraRig()
+{
+	// THE SWAP HAPPENS WHEN THE MODE CHANGES, NOT ON THE NEXT TICK. It used to
+	// run at the top of Tick, one frame after a mode change -- AFTER the menu,
+	// a template open and [M] had each framed the orbit, so every one of them
+	// was replaced by whatever the stored rig last held. That is the "framed
+	// tight once, far the next" bug: the distance was leaking across modes.
+	// Callers that frame call this first; Tick still calls it as a backstop.
+	if (CameraMode != LastCameraMode)
+	{
+		CameraRigs.For(static_cast<int>(LastCameraMode)) = Orbit;
+		Orbit = CameraRigs.For(static_cast<int>(CameraMode));
+		LastCameraMode = CameraMode;
+	}
+}
+
+void ATUCoasterRide::ApplyOrbitToCamera()
+{
+	if (!Camera) { return; }
+	const FCamVec P = Orbit.Position();
+	const FVector World = ToLocal(FVec3{P.X, P.Y, P.Z}) + GetActorLocation();
+	const FVector Focus = ToLocal(FVec3{Orbit.Focus.X, Orbit.Focus.Y, Orbit.Focus.Z})
+		+ GetActorLocation();
+	Camera->SetWorldLocationAndRotation(World, (Focus - World).Rotation().Quaternion());
+
+	// THE NEAR PLANE FOLLOWS THE CAMERA. A 90 m lift hill and a 2 cm bolt
+	// cannot share a fixed one: set it for the bolt and depth precision at the
+	// top of the hill is gone; set it for the hill and the restraint in front
+	// of a rider is clipped away.
+	const FDepthRange D = DepthRangeFor(Orbit.Distance, Orbit.Distance);
+	SetNearPlaneMetres(D.Near);
+}
+
 void ATUCoasterRide::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
@@ -9802,7 +9924,11 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 
 	// ---- Everything below is DRAWING, and runs once per rendered frame. It reads
 	// the state the last scan left and never advances anything.
-	if (!bHideOverlays)
+	// NO MARKERS ON THE MENU'S BACKDROP: it is a picture of a ride, not a ride
+	// being diagnosed.
+	const bool bDocumentOpen = Session.Mode() != EAppMode::MainMenu
+		&& Session.Mode() != EAppMode::Boot;
+	if (!bHideOverlays && bDocumentOpen)
 	{
 		// RESTRAINT MARKERS DO NOT DRAW FROM THE SEAT. They sit 0.35 m above the
 		// heartline and the eye sits 0.25 m above it, so on the train you are
@@ -9926,12 +10052,7 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 	// BEFORE the chain below, not inside it: the swap has to happen whichever mode
 	// is being entered, and putting it between two branches would run Free and
 	// then fall into the rest of the chain as well.
-	if (CameraMode != LastCameraMode)
-	{
-		CameraRigs.For(static_cast<int>(LastCameraMode)) = Orbit;
-		Orbit = CameraRigs.For(static_cast<int>(CameraMode));
-		LastCameraMode = CameraMode;
-	}
+	SyncCameraRig();
 
 	// LOOKING IS A DRAG NOW, because the cursor is free.
 	//
@@ -10024,6 +10145,13 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 		if (!bOrbitFramed) { FrameWholeTrack(); }
 
 		const double OrbitSens = FMath::Clamp(LookSensitivity, 0.25f, 4.f) * 2.2;
+		if (Session.Mode() == EAppMode::MainMenu || Session.Mode() == EAppMode::Boot)
+		{
+			// THE MENU'S BACKDROP TURNS. Slowly: a full circle in about two
+			// minutes, which reads as alive rather than as a camera somebody is
+			// flying. Wall-clock, because the menu is not the ride.
+			Orbit.AddYaw(3.0 * DeltaSeconds);
+		}
 		Orbit.AddYaw(LookYaw * OrbitSens * (bOrbitInvertX ? -1.0 : 1.0));
 		// ORBIT IS SUBJECT-DRAGGING, SO PITCH IS NEGATED. You are pulling the
 		// thing you are looking at, not turning your head: mouse down swings the
@@ -10039,18 +10167,7 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 		Orbit.AddPitch(LookPitch * OrbitSens * (bOrbitInvertY ? -1.0 : 1.0));   // clamped, not wrapped
 		Orbit.Pan(MoveRight * DeltaSeconds * 120.0, MoveUp * DeltaSeconds * 120.0);
 
-		const FCamVec P = Orbit.Position();
-		const FVector World = ToLocal(FVec3{P.X, P.Y, P.Z}) + GetActorLocation();
-		const FVector Focus = ToLocal(FVec3{Orbit.Focus.X, Orbit.Focus.Y, Orbit.Focus.Z})
-			+ GetActorLocation();
-		Camera->SetWorldLocationAndRotation(World, (Focus - World).Rotation().Quaternion());
-
-		// THE NEAR PLANE FOLLOWS THE CAMERA. A 90 m lift hill and a 2 cm bolt
-		// cannot share a fixed one: set it for the bolt and depth precision at the
-		// top of the hill is gone; set it for the hill and the restraint in front
-		// of a rider is clipped away.
-		const FDepthRange D = DepthRangeFor(Orbit.Distance, Orbit.Distance);
-		SetNearPlaneMetres(D.Near);
+		ApplyOrbitToCamera();
 	}
 	else if (CameraMode == ETUCameraMode::Rider)
 	{

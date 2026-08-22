@@ -1662,6 +1662,13 @@ private:
 	 *  the real default the next time there is a track to frame. */
 	bool bOrbitIsBackdrop = false;
 
+	/** Put the camera where the orbit says. The tick does this every frame;
+	 *  framing calls it once so the first frame is already right. */
+	void ApplyOrbitToCamera();
+
+	/** Swap the per-mode orbit rig the moment CameraMode changes. */
+	void SyncCameraRig();
+
 	/** Height the control panel's contents actually took last frame. */
 	float ConsoleContentH = 0.f;
 
@@ -2138,6 +2145,14 @@ private:
 	 */
 	void RefreshTrackList();
 	std::vector<FTrackEntry> KnownTracks;
+
+	/** Plan-view thumbnails for the template rows, one per template, built by
+	 *  RefreshTrackList from the preset's own segments. Empty for Blank. */
+	TArray<std::vector<float>> TemplatePlans;
+
+	/** Which preset a template opens; false for Blank. One answer for the open
+	 *  and for the thumbnail, or the two could show different shapes. */
+	static bool PresetForTemplate(ETemplatePreset T, ETUPresetLayout& Out);
 	std::vector<std::string> TrackPaths;
 
 	// ===================== UNDO, WHICH THE RUNTIME EDITOR DID NOT HAVE =====================
