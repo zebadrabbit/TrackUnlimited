@@ -211,6 +211,48 @@ namespace
 		}
 	}
 
+	// ===================== FOUR KINDS, AND RAW IS NOT ONE =====================
+	//
+	// The kinds the panel can actually show fields for. RAW IS DELIBERATELY NOT A
+	// DESTINATION: it is a sampled curvature profile the NL2 importer produces, it
+	// has no authored parameters to offer, and cycling INTO it would hand somebody
+	// a segment they can neither edit nor leave by any means the panel offers. A
+	// raw segment cycles OUT to Straight, which is an explicit edit with undo
+	// behind it rather than something that happens to an imported track quietly.
+	//
+	// ONE ANSWER, because the smoke test walks it too. A cycle written inline in
+	// the click handler could only be checked by a test that re-implemented it,
+	// which is a test that agrees with itself.
+	ETUSegmentKind NextAuthorableKind(ETUSegmentKind K)
+	{
+		static const ETUSegmentKind Authorable[] = {
+			ETUSegmentKind::Straight, ETUSegmentKind::Arc,
+			ETUSegmentKind::Clothoid, ETUSegmentKind::Helix};
+		int32 At = 0;
+		for (int32 k = 0; k < UE_ARRAY_COUNT(Authorable); ++k)
+		{
+			if (Authorable[k] == K) { At = k + 1; break; }
+		}
+		return Authorable[At % UE_ARRAY_COUNT(Authorable)];
+	}
+
+	// What a segment IS, for the editor row. RAW is listed and is NOT something
+	// the runtime editor will cycle INTO -- see CycleSegmentKind -- but an imported
+	// track can already be full of them and a row that showed one as "Straight"
+	// would be lying about the geometry under the camera.
+	const TCHAR* SegmentKindName(ETUSegmentKind K)
+	{
+		switch (K)
+		{
+		case ETUSegmentKind::Straight: return TEXT("straight");
+		case ETUSegmentKind::Arc:      return TEXT("arc");
+		case ETUSegmentKind::Clothoid: return TEXT("clothoid");
+		case ETUSegmentKind::Helix:    return TEXT("helix");
+		case ETUSegmentKind::Raw:      return TEXT("raw");
+		}
+		return TEXT("-");
+	}
+
 	// What a zone IS, for the module heading. FTrackZone drops the kind because the
 	// physics does not care; the panel is the one place that has to say it.
 	const TCHAR* ZoneKindName(ETUSegmentZone Kind)
@@ -2435,8 +2477,14 @@ EEditKind ATUCoasterRide::KindOf(ETUSegmentKind K)
 	case ETUSegmentKind::Arc:      return EEditKind::Arc;
 	case ETUSegmentKind::Clothoid: return EEditKind::Clothoid;
 	case ETUSegmentKind::Helix:    return EEditKind::Helix;
-	default:                       return EEditKind::Straight;
+	case ETUSegmentKind::Straight: return EEditKind::Straight;
+	// RAW IS SHOWN AS A STRAIGHT'S FIELD SET, and that is a real answer rather
+	// than a fallthrough: raw curvature is authored as a sampled profile by the
+	// importer and there is no vocabulary in the panel for it, so the honest
+	// thing is the shortest field list plus a row that says "raw" out loud.
+	case ETUSegmentKind::Raw:      return EEditKind::Straight;
 	}
+	return EEditKind::Straight;
 }
 
 double ATUCoasterRide::ReadField(const FTUTrackSegment& S, EEditField F) const
@@ -2449,13 +2497,20 @@ double ATUCoasterRide::ReadField(const FTUTrackSegment& S, EEditField F) const
 	case EEditField::CurvatureEnd:   return S.CurvatureEnd;
 	case EEditField::ClimbAngle:     return S.ClimbAngleDegrees;
 	case EEditField::Turns:          return S.Turns;
+	case EEditField::Kind:           return static_cast<double>(KindOf(S.Kind));
+	case EEditField::RollStart:      return S.RollStartDegrees;
 	case EEditField::Roll:           return S.RollEndDegrees;
 	case EEditField::ZoneSpeed:      return S.ZoneSpeed;
 	case EEditField::ZoneAccel:      return S.ZoneAccel;
 	case EEditField::ZoneDecel:      return S.ZoneDecel;
 	case EEditField::ZoneBrakeDecel: return S.ZoneBrakeDecel;
-	default:                         return 0.0;
+	// CHOICES ARE NOT READ AS NUMBERS. The device and the tick box are drawn
+	// from the segment directly, because "2.0" is not what a device is.
+	case EEditField::ZoneKind:
+	case EEditField::StartsNewDevice:
+	case EEditField::Count:          break;
 	}
+	return 0.0;
 }
 
 void ATUCoasterRide::WriteField(FTUTrackSegment& S, EEditField F, double V)
@@ -2468,12 +2523,19 @@ void ATUCoasterRide::WriteField(FTUTrackSegment& S, EEditField F, double V)
 	case EEditField::CurvatureEnd:   S.CurvatureEnd = static_cast<float>(V); break;
 	case EEditField::ClimbAngle:     S.ClimbAngleDegrees = static_cast<float>(V); break;
 	case EEditField::Turns:          S.Turns = static_cast<float>(V); break;
+	case EEditField::RollStart:      S.RollStartDegrees = static_cast<float>(V); break;
 	case EEditField::Roll:           S.RollEndDegrees = static_cast<float>(V); break;
 	case EEditField::ZoneSpeed:      S.ZoneSpeed = static_cast<float>(V); break;
 	case EEditField::ZoneAccel:      S.ZoneAccel = static_cast<float>(V); break;
 	case EEditField::ZoneDecel:      S.ZoneDecel = static_cast<float>(V); break;
 	case EEditField::ZoneBrakeDecel: S.ZoneBrakeDecel = static_cast<float>(V); break;
-	default: break;
+	// THE THREE CHOICES ARE CYCLED, NEVER TYPED, so there is no number on its
+	// way here for any of them -- see ClickSegmentEditor. Listed rather than
+	// defaulted so the next field added cannot go silently unwritten.
+	case EEditField::Kind:
+	case EEditField::ZoneKind:
+	case EEditField::StartsNewDevice:
+	case EEditField::Count:          break;
 	}
 }
 
@@ -2632,9 +2694,15 @@ void ATUCoasterRide::DrawSegmentEditor(UCanvas* Canvas)
 		// out: nothing is dragged, nothing is placed, and it is the same discrete
 		// pick the Details panel's dropdown already offers — only reachable
 		// without leaving the ride you are looking at.
-		const bool bChoice = (F == EEditField::ZoneKind || F == EEditField::StartsNewDevice);
+		// ASKED, NOT LISTED. This was a hand-kept expression and the help suite kept
+		// a second one; adding Kind made them disagree, so both now ask the model.
+		const bool bChoice = IsChoiceField(F);
 		FString Value;
-		if (F == EEditField::ZoneKind)
+		if (F == EEditField::Kind)
+		{
+			Value = SegmentKindName(Seg.Kind);
+		}
+		else if (F == EEditField::ZoneKind)
 		{
 			Value = Seg.Zone == ETUSegmentZone::None
 				? FString(TEXT("none")) : FString(ZoneKindName(Seg.Zone));
@@ -2793,11 +2861,29 @@ void ATUCoasterRide::ClickSegmentEditor()
 			// nothing to type into it. Committed immediately — unlike a number,
 			// which waits for Enter because "3" on the way to "30" is a rebuild
 			// nobody asked for. A pick has no half-typed state to protect.
-			if (F == EEditField::ZoneKind || F == EEditField::StartsNewDevice)
+			if (IsChoiceField(F))
 			{
 				CancelField();
 				FTUTrackSegment& S = Segments[SelectedSegment];
-				if (F == EEditField::StartsNewDevice)
+				if (F == EEditField::Kind)
+				{
+					// ===================== FOUR KINDS, AND RAW IS NOT ONE =====================
+					//
+					// Straight, Arc, Clothoid, Helix -- the vocabulary the panel can
+					// actually show fields for. RAW IS DELIBERATELY NOT A DESTINATION:
+					// it is a sampled curvature profile the NL2 importer produces, it
+					// has no authored parameters to offer, and cycling into it would
+					// hand somebody a segment they cannot edit and cannot get out of
+					// by any means the panel offers. A raw segment cycles OUT to
+					// Straight, which is an explicit edit with undo behind it.
+					//
+					// NOTHING IS CLEARED. `hidden is not deleted` is the rule, and this
+					// is the one edit that would break it if it were written as the
+					// widget tidying up after itself: every field lives on the segment
+					// whatever the kind, so a radius survives a trip through Helix.
+					S.Kind = NextAuthorableKind(S.Kind);
+				}
+				else if (F == EEditField::StartsNewDevice)
 				{
 					S.bStartsNewDevice = !S.bStartsNewDevice;
 				}
@@ -5364,6 +5450,88 @@ bool ATUCoasterRide::RunDocumentSmokeTest()
 		{
 			UE_LOG(LogTUEvents, Log,
 				TEXT("smoke: new blank opens empty, in BUILD, clean, and [I] gives it a first segment"));
+		}
+	}
+
+	// ===================== AND THE SHIPPING PATH CAN AUTHOR A CURVE =====================
+	//
+	// PROJECT_PLAN gives Phase 1 the gate "build an arbitrary coaster from scratch
+	// in-editor". That was met by the DETAILS PANEL -- the developer path -- and the
+	// shipping one had never met it with the whole Phase 1 list ticked: `EEditField`
+	// had no Kind entry, so blank plus [I] gave straights for ever, and every curve
+	// on every shipped track came from a preset or from the Details panel.
+	//
+	// So this asserts the END of that path rather than the plumbing: start with
+	// nothing, add a piece, make it a turn, and the track has to actually TURN.
+	{
+		StartFromTemplate(static_cast<int32>(NumTemplates() - 1));
+		SelectedSegment = -1;
+		InsertSegment();
+
+		// RAW IS NEVER REACHED, however long somebody sits on the row. Eight cycles
+		// is twice round the four authorable kinds.
+		bool bNeverRaw = true;
+		ETUSegmentKind Walk = ETUSegmentKind::Straight;
+		for (int32 i = 0; i < 8; ++i)
+		{
+			Walk = NextAuthorableKind(Walk);
+			if (Walk == ETUSegmentKind::Raw) { bNeverRaw = false; }
+		}
+		// ... and a raw segment cycles OUT rather than being stuck in a kind the
+		// panel has no fields for.
+		const bool bRawEscapes =
+			NextAuthorableKind(ETUSegmentKind::Raw) == ETUSegmentKind::Straight;
+
+		// Cycle to Arc exactly as a click would, then author it.
+		FTUTrackSegment& S0 = Segments[0];
+		int32 Guard = 0;
+		while (S0.Kind != ETUSegmentKind::Arc && Guard++ < 8)
+		{
+			S0.Kind = NextAuthorableKind(S0.Kind);
+		}
+		WriteField(S0, EEditField::Length, 40.0);
+		WriteField(S0, EEditField::Radius, 25.0);
+		WriteField(S0, EEditField::RollStart, 5.0);
+		WriteField(S0, EEditField::Roll, 25.0);
+		RebuildFromSegments();
+
+		// THE TRACK HAS TO TURN. A kind field that set a value nothing downstream
+		// read would pass every check above this line, so the assertion is on the
+		// geometry rather than on the field.
+		double TurnedDeg = 0.0;
+		if (Track.TotalLength() > 1.0)
+		{
+			const FTrackFrame A = Track.EvaluateAt(0.0);
+			const FTrackFrame B = Track.EvaluateAt(Track.TotalLength());
+			const double Dot = FMath::Clamp(
+				A.Tangent.X * B.Tangent.X + A.Tangent.Y * B.Tangent.Y
+				+ A.Tangent.Z * B.Tangent.Z, -1.0, 1.0);
+			TurnedDeg = FMath::RadiansToDegrees(FMath::Acos(Dot));
+		}
+
+		// ROLL IS A PAIR, and only the END of it used to be writable -- which made a
+		// hand-authored bank start at 0 and STEP at every joint, exactly what
+		// TrackValidate then complained about.
+		const bool bRollPair =
+			FMath::IsNearlyEqual(ReadField(S0, EEditField::RollStart), 5.0, 1e-4)
+			&& FMath::IsNearlyEqual(ReadField(S0, EEditField::Roll), 25.0, 1e-4);
+
+		if (!bNeverRaw || !bRawEscapes || S0.Kind != ETUSegmentKind::Arc
+			|| TurnedDeg < 45.0 || !bRollPair)
+		{
+			UE_LOG(LogTUEvents, Error,
+				TEXT("smoke: the shipping editor cannot author (never-raw %d, raw-escapes %d, ")
+				TEXT("arc %d, turned %.1f deg, roll pair %d)"),
+				bNeverRaw, bRawEscapes, S0.Kind == ETUSegmentKind::Arc, TurnedDeg, bRollPair);
+			Failures.Add(TEXT("authoring"));
+		}
+		else
+		{
+			UE_LOG(LogTUEvents, Log,
+				TEXT("smoke: from a blank track, [I] then the kind row gives a real arc -- ")
+				TEXT("%.1f m turning %.1f deg, banked %.0f to %.0f, and raw is never cycled into"),
+				Track.TotalLength(), TurnedDeg,
+				ReadField(S0, EEditField::RollStart), ReadField(S0, EEditField::Roll));
 		}
 	}
 

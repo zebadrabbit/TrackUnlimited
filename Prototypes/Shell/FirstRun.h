@@ -47,6 +47,12 @@ inline FFieldHelp HelpFor(EEditField F)
 {
     switch (F)
     {
+    case EEditField::Kind:
+        return {"What SHAPE this piece is. Straight, Arc (a constant-radius turn), "
+                "Clothoid (a transition that eases from one curvature into another), "
+                "or Helix. Click to change it. Nothing you have typed is lost when you "
+                "do -- a radius you set on an arc is still there if you come back.",
+                0.0, 0.0, false};
     case EEditField::Length:
         return {"How far this piece of track runs, measured along the track itself "
                 "rather than across the ground.",
@@ -71,10 +77,16 @@ inline FFieldHelp HelpFor(EEditField F)
         return {"How many times round. Fractions are allowed — 1.5 turns is a helix that "
                 "ends facing the opposite way.",
                 0.25, 3.0, true};
+    case EEditField::RollStart:
+        return {"How far the track is banked where this piece BEGINS. Set it to the "
+                "previous piece's roll end and the bank flows through the joint; leave "
+                "them different and it steps, which a rider feels as a jolt and the "
+                "validator reports as a roll step.",
+                -90.0, 90.0, true};
     case EEditField::Roll:
-        return {"How far the track is banked, measured from level. Positive rolls to the "
-                "rider's right. A correctly banked turn is one where the rider feels "
-                "pushed into the seat rather than sideways.",
+        return {"How far the track is banked where this piece ENDS, measured from level. "
+                "Positive rolls to the rider's right. A correctly banked turn is one "
+                "where the rider feels pushed into the seat rather than sideways.",
                 -90.0, 90.0, true};
     case EEditField::ZoneKind:
         return {"What kind of machinery is on this stretch: a lift chain, a launch, a "

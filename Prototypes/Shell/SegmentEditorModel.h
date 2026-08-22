@@ -53,12 +53,22 @@ enum class EEditKind
 // format already stores it once.
 enum class EEditField
 {
+    // KIND IS FIRST, because it decides what the rest of this list means. It
+    // is also the field that was MISSING until 2026-08-21, which made the
+    // runtime editor a tuning panel rather than an editor: a blank template
+    // plus [I] gave straights and there was no way to author anything else.
+    Kind,
     Length,
     Radius,
     CurvatureStart,
     CurvatureEnd,
     ClimbAngle,
     Turns,
+    // ROLL IS A PAIR, and only the END of it was reachable. A bank authored
+    // one segment at a time therefore started at 0 every time and STEPPED at
+    // each joint -- which TrackValidate then correctly complained about, the
+    // tool being honest about a hole it had no way to fill.
+    RollStart,
     Roll,
     ZoneKind,
     ZoneSpeed,
@@ -79,7 +89,9 @@ inline const char* FieldName(EEditField F)
     case EEditField::CurvatureEnd:    return "Curvature end";
     case EEditField::ClimbAngle:      return "Climb angle";
     case EEditField::Turns:           return "Turns";
-    case EEditField::Roll:            return "Roll";
+    case EEditField::Kind:            return "Kind";
+    case EEditField::RollStart:       return "Roll start";
+    case EEditField::Roll:            return "Roll end";
     case EEditField::ZoneKind:        return "Device";
     case EEditField::ZoneSpeed:       return "Device speed";
     case EEditField::ZoneAccel:       return "Accel";
@@ -113,6 +125,7 @@ inline const char* FieldUnit(EEditField F)
     case EEditField::CurvatureStart:
     case EEditField::CurvatureEnd:   return "1/m";
     case EEditField::ClimbAngle:
+    case EEditField::RollStart:
     case EEditField::Roll:           return "deg";
     case EEditField::ZoneSpeed:      return "m/s";
     case EEditField::ZoneAccel:
@@ -121,11 +134,31 @@ inline const char* FieldUnit(EEditField F)
     // DIMENSIONLESS, EACH FOR ITS OWN REASON, and listed rather than defaulted so
     // that a new field with a dimension cannot inherit "no unit" by silence.
     case EEditField::Turns:            // a count
+    case EEditField::Kind:             // a choice
     case EEditField::ZoneKind:         // a choice
     case EEditField::StartsNewDevice:  // a tick box
     case EEditField::Count:          return "";
     }
     return "";
+}
+
+// ===================== A CHOICE IS NOT A NUMBER =====================
+//
+// Kind, device and the tick box are PICKED rather than typed, and that one fact
+// decides three separate things: the row cycles on click instead of taking
+// focus, it carries no unit, and it has no typical range to suggest.
+//
+// ANSWERED ONCE HERE BECAUSE IT WAS ANSWERED TWICE BEFORE. The panel kept its
+// own list and the help suite kept another, both spelled out by hand, and they
+// agreed only because the set had not changed since either was written. Adding
+// Kind made them disagree immediately -- the suite asserted a dropdown ought to
+// have a typical range, which is the shape of every drift this file is written
+// against.
+inline bool IsChoiceField(EEditField F)
+{
+    return F == EEditField::Kind
+        || F == EEditField::ZoneKind
+        || F == EEditField::StartsNewDevice;
 }
 
 // ===================== WHICH FIELDS A KIND USES =====================
@@ -149,18 +182,27 @@ inline bool KindUsesField(EEditKind K, EEditField F)
     case EEditField::ClimbAngle:
     case EEditField::Turns:
         return K == EEditKind::Helix;
+    case EEditField::Kind:
+    case EEditField::RollStart:
     case EEditField::Roll:
     case EEditField::ZoneKind:
-        return true;                       // every segment can be banked and zoned
+        return true;                       // every segment has a kind, a bank and a zone
     case EEditField::ZoneSpeed:
     case EEditField::ZoneAccel:
     case EEditField::ZoneDecel:
     case EEditField::ZoneBrakeDecel:
     case EEditField::StartsNewDevice:
         return true;                       // shown only when a device is set — below
-    default:
-        return false;
+    case EEditField::Count:
+        break;
     }
+    // ===================== NO `default:`, FOR THE THIRD TIME =====================
+    //
+    // A default here would have quietly answered "no" for Kind and RollStart,
+    // and the two fields added to make the editor able to AUTHOR would have
+    // been invisible with nothing failing. The same shape shipped in HelpFor
+    // and gave three device fields the tick box's tooltip for weeks.
+    return false;
 }
 
 // One segment's authored values, as the editor holds them.
@@ -174,8 +216,25 @@ struct FEditSegment
     double Value[static_cast<std::size_t>(EEditField::Count)] = {};
     int Zone = 0;                          // 0 = plain track
 
-    double Get(EEditField F) const { return Value[static_cast<std::size_t>(F)]; }
-    void Set(EEditField F, double V) { Value[static_cast<std::size_t>(F)] = V; }
+    // KIND IS STORED ONCE, in `Kind`, and read through the SAME accessor as
+    // every other field — so multi-select, the intersection and the
+    // "differs" flag all work on it without a special case anywhere above.
+    // A copy in `Value[]` would be a second source of truth for the one field
+    // that decides what all the others mean.
+    double Get(EEditField F) const
+    {
+        if (F == EEditField::Kind) { return static_cast<double>(Kind); }
+        return Value[static_cast<std::size_t>(F)];
+    }
+    void Set(EEditField F, double V)
+    {
+        if (F == EEditField::Kind)
+        {
+            Kind = static_cast<EEditKind>(static_cast<int>(V));
+            return;
+        }
+        Value[static_cast<std::size_t>(F)] = V;
+    }
 };
 
 // ===================== WHAT TO SHOW =====================

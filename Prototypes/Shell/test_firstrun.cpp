@@ -34,7 +34,10 @@ void TestEVERYFieldHasHelpAndAUnit()
 
         // A numeric field has a typical range; a tick box and a dropdown do not,
         // and pretending otherwise would put "0 to 0" under a checkbox.
-        const bool bNumeric = F != EEditField::ZoneKind && F != EEditField::StartsNewDevice;
+        // ASKED, NOT LISTED. This line used to spell the choice fields out, which
+        // made it a second copy of what the panel believed -- and when Kind was
+        // added it asserted that a dropdown should carry a typical range.
+        const bool bNumeric = !IsChoiceField(F);
         assert(H.bHasRange == bNumeric);
         if (H.bHasRange) { assert(H.TypicalMax > H.TypicalMin); }
 

@@ -238,6 +238,77 @@ void TestDuplicatePutsTheCopyAFTERTheOriginal()
     std::printf("  a duplicate lands after its original, in travel order\n");
 }
 
+// ===================== THE TWO FIELDS THAT COULD NOT BE REACHED =====================
+//
+// Until 2026-08-21 the runtime editor could change numbers on segments that
+// already existed and nothing else, which is a TUNING PANEL rather than an
+// editor. `EEditField` had no Kind entry, so a blank template plus [I] gave
+// straights for ever and every curve on every shipped track came from a preset
+// or from the developer-only Details panel. PROJECT_PLAN gives Phase 1 the gate
+// "build an arbitrary coaster from scratch in-editor", and the SHIPPING path
+// had never met it with the whole Phase 1 list ticked.
+void TestKINDAndROLLSTARTAreEditableAtAll()
+{
+    // ---- KIND IS OFFERED ON EVERY KIND, or the way out of Straight depends on
+    // already not being in it.
+    const EEditKind All[] = {EEditKind::Straight, EEditKind::Arc,
+                             EEditKind::Clothoid, EEditKind::Helix};
+    for (EEditKind K : All)
+    {
+        FSegmentEditor E;
+        E.SetSegments({Make(K)});
+        E.Select({0});
+        assert(Visible(E, EEditField::Kind));
+        assert(Visible(E, EEditField::RollStart));
+        assert(Visible(E, EEditField::Roll));
+    }
+    std::printf("  kind and both ends of the roll are offered on all four kinds\n");
+
+    // ---- IT READS BACK AS THE KIND IT IS. Kind lives in `Kind` rather than in
+    // `Value[]`, and is reached through the same Get/Set as everything else so
+    // the intersection and the differs flag work on it -- so the two have to
+    // agree, and this is what would catch them not agreeing.
+    FSegmentEditor E;
+    E.SetSegments({Make(EEditKind::Arc)});
+    E.Select({0});
+    assert(Shown(E, EEditField::Kind) == static_cast<double>(EEditKind::Arc));
+    E.SetValue(0, EEditField::Kind, static_cast<double>(EEditKind::Helix));
+    assert(E.At(0).Kind == EEditKind::Helix);
+    assert(Shown(E, EEditField::Kind) == static_cast<double>(EEditKind::Helix));
+
+    // ---- AND CHANGING KIND THROUGH THE FIELD KEEPS WHAT IS HIDDEN, which is the
+    // one edit that would break `hidden is not deleted` if it were written as a
+    // widget clearing what it stops showing. Helix has no radius offered; the
+    // arc's radius must still be there on the way back.
+    E.SetValue(0, EEditField::Kind, static_cast<double>(EEditKind::Arc));
+    E.SetValue(0, EEditField::Radius, 42.0);
+    E.SetValue(0, EEditField::Kind, static_cast<double>(EEditKind::Clothoid));
+    assert(!Visible(E, EEditField::Radius));
+    E.SetValue(0, EEditField::Kind, static_cast<double>(EEditKind::Arc));
+    assert(Shown(E, EEditField::Radius) == 42.0);
+    std::printf("  changing kind through the FIELD keeps the radius too\n");
+
+    // ---- ROLL IS A PAIR, AND ONLY THE END OF IT WAS WRITABLE. That is what made
+    // a hand-authored bank START at zero on every segment and STEP at each
+    // joint. The two are independent values, which is the whole assertion.
+    E.SetValue(0, EEditField::RollStart, 12.0);
+    E.SetValue(0, EEditField::Roll, 30.0);
+    assert(Shown(E, EEditField::RollStart) == 12.0);
+    assert(Shown(E, EEditField::Roll) == 30.0);
+    std::printf("  roll start and roll end are two values, not one\n");
+
+    // ---- MULTI-SELECT FLAGS A DIFFERING KIND rather than showing the first
+    // one's, which is what stops somebody flattening eight segments onto
+    // whichever kind they happened to be looking at.
+    FSegmentEditor M;
+    M.SetSegments({Make(EEditKind::Arc), Make(EEditKind::Arc)});
+    M.Select({0, 1});
+    assert(!Differs(M, EEditField::Kind));
+    M.SetValue(1, EEditField::Kind, static_cast<double>(EEditKind::Straight));
+    assert(Differs(M, EEditField::Kind));
+    std::printf("  a selection of two kinds reports differing rather than the first\n");
+}
+
 void TestUNITSAreCarriedByTheFieldNotTheWidget()
 {
     // UI_CONVENTIONS: units are always shown, and authored fields stay in the
@@ -272,6 +343,7 @@ int main()
     TestANYTHINGThatIsNotTypingBREAKSTheRun();
     TestTheSELECTIONFollowsTheSegmentsItPointsAt();
     TestDuplicatePutsTheCopyAFTERTheOriginal();
+    TestKINDAndROLLSTARTAreEditableAtAll();
     TestUNITSAreCarriedByTheFieldNotTheWidget();
 
     std::printf("\ntest_segmenteditormodel: all assertions passed.\n");
