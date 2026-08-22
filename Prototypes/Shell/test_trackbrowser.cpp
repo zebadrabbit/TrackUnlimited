@@ -5,6 +5,7 @@
 #include "TrackBrowser.h"
 
 #include <cassert>
+#include <cmath>
 #include <cstdio>
 
 namespace
@@ -189,6 +190,62 @@ void TestTheCAPAppliesOnLOADAsWellAsOnTouch()
     std::printf("  a 200-line recent file yields three rows, and the list round-trips\n");
 }
 
+// ===================== THE PLAN VIEW, AND THE TWO WAYS IT LIES =====================
+void TestThePLANThumbnailFitsWithoutDISTORTING()
+{
+    // A long thin out-and-back: 400 m by 40 m. Stretched to fill a square it
+    // would read as a completely different layout, which is the failure worth
+    // asserting -- a browser whose pictures lie is worse than one with none.
+    std::vector<float> XY;
+    for (int i = 0; i <= 100; ++i)
+    {
+        XY.push_back(static_cast<float>(i) * 4.0f);
+        XY.push_back(i < 50 ? 0.0f : 40.0f);
+    }
+    const std::vector<float> P = PlanThumb(XY, 32);
+    assert(P.size() == 64);
+
+    float MinX = P[0], MaxX = P[0], MinY = P[1], MaxY = P[1];
+    for (std::size_t i = 0; i < P.size() / 2; ++i)
+    {
+        MinX = std::fmin(MinX, P[i * 2]);   MaxX = std::fmax(MaxX, P[i * 2]);
+        MinY = std::fmin(MinY, P[i * 2 + 1]); MaxY = std::fmax(MaxY, P[i * 2 + 1]);
+    }
+    // Inside the box, touching the long edge, and the short axis is scaled by the
+    // SAME factor rather than filled -- 40/400 of the box, centred.
+    assert(MinX >= 0.0f && MaxX <= 1.0f && MinY >= 0.0f && MaxY <= 1.0f);
+    assert(std::fabs(MaxX - MinX - 1.0f) < 1e-4);
+    assert(std::fabs((MaxY - MinY) - 0.1f) < 1e-4);
+    assert(std::fabs((MinY + MaxY) * 0.5f - 0.5f) < 1e-4);
+    std::printf("  a 400x40 layout fits the box at 1.00 x 0.10, centred, not stretched\n");
+
+    // THE LAST POINT IS KEPT. Every-Nth sampling drops the end whenever the count
+    // does not divide, and on a circuit that is a visible gap exactly where the
+    // track closes -- the one thing somebody is looking at the picture for.
+    assert(std::fabs(P[P.size() - 2] - 1.0f) < 1e-4);
+    std::printf("  the closing point survives the downsample\n");
+}
+
+void TestADeadSTRAIGHTStillGetsAPicture()
+{
+    // Zero extent across, so the obvious scale is a division by zero and the
+    // obvious guard draws nothing -- for the commonest first track there is.
+    std::vector<float> XY;
+    for (int i = 0; i <= 10; ++i) { XY.push_back(static_cast<float>(i) * 10.0f); XY.push_back(0.0f); }
+    const std::vector<float> P = PlanThumb(XY, 8);
+    assert(P.size() == 16);
+    for (std::size_t i = 0; i < P.size() / 2; ++i)
+    {
+        assert(P[i * 2] >= 0.0f && P[i * 2] <= 1.0f);
+        assert(std::fabs(P[i * 2 + 1] - 0.5f) < 1e-4);   // down the middle
+    }
+    // A single point is a track being built, and it is one dot rather than a NaN.
+    const std::vector<float> One = PlanThumb({5.0f, 5.0f}, 8);
+    assert(One.size() == 2 && One[0] == One[0] && One[1] == One[1]);
+    assert(PlanThumb({}).empty());
+    std::printf("  a straight draws down its own middle; a point is a point, not a NaN\n");
+}
+
 } // namespace
 
 int main()
@@ -203,6 +260,8 @@ int main()
     TestAGoodRowShowsWhatSomebodyIsChoosingBetween();
     TestTheNameDropsTheFolderAndONEExtension();
     TestTheCAPAppliesOnLOADAsWellAsOnTouch();
+    TestThePLANThumbnailFitsWithoutDISTORTING();
+    TestADeadSTRAIGHTStillGetsAPicture();
 
     std::printf("\ntest_trackbrowser: all assertions passed.\n");
     return 0;

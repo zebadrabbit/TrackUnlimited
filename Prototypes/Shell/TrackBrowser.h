@@ -46,8 +46,70 @@ struct FTrackEntry
     // WHY IT WILL NOT LOAD, verbatim from the loader. Empty means it loads.
     std::string Error;
 
+    // THE PLAN VIEW, interleaved x,y in [0,1], ready to draw. See PlanThumb, and
+    // the note at the foot of this file about why it is not a rendered picture.
+    // Empty on anything that would not load, which is the same rule the numbers
+    // above follow — a row shows its reason rather than a plausible nothing.
+    std::vector<float> Plan;
+
     bool IsUsable() const { return !bMissing && Error.empty(); }
 };
+
+// ===================== A TRACK IS ITS OWN THUMBNAIL =====================
+//
+// Takes a plan-view path as interleaved x,y in metres and returns it fitted to
+// the unit box, ready for a widget to scale into whatever rectangle it has.
+//
+// ASPECT RATIO IS PRESERVED, which is the entire point rather than a nicety: an
+// out-and-back stretched to fill a square reads as a completely different
+// layout from the one that is there, and a browser whose pictures lie is worse
+// than one with no pictures. The shorter axis is CENTRED in what is left over.
+//
+// A DEAD-STRAIGHT TRACK IS THE CASE THAT BREAKS IT. Its plan has zero extent
+// across, so the obvious scale is a division by zero, and the obvious guard --
+// bail out and draw nothing -- makes the commonest first track in the world the
+// one with no picture. It is drawn down the middle of its own axis instead.
+inline std::vector<float> PlanThumb(const std::vector<float>& XY,
+                                    std::size_t MaxPoints = 64)
+{
+    std::vector<float> Out;
+    const std::size_t N = XY.size() / 2;
+    if (N == 0) { return Out; }
+
+    float MinX = XY[0], MaxX = XY[0], MinY = XY[1], MaxY = XY[1];
+    for (std::size_t i = 0; i < N; ++i)
+    {
+        MinX = XY[i * 2] < MinX ? XY[i * 2] : MinX;
+        MaxX = XY[i * 2] > MaxX ? XY[i * 2] : MaxX;
+        MinY = XY[i * 2 + 1] < MinY ? XY[i * 2 + 1] : MinY;
+        MaxY = XY[i * 2 + 1] > MaxY ? XY[i * 2 + 1] : MaxY;
+    }
+
+    const float SpanX = MaxX - MinX;
+    const float SpanY = MaxY - MinY;
+    const float Span = SpanX > SpanY ? SpanX : SpanY;
+    // Both axes flat is a single point -- a one-segment track of zero length, or
+    // a track being built. One dot in the middle, and no division.
+    const float Scale = Span > 1e-6f ? 1.0f / Span : 0.0f;
+    const float PadX = (1.0f - SpanX * Scale) * 0.5f;
+    const float PadY = (1.0f - SpanY * Scale) * 0.5f;
+
+    // EVENLY SPACED, INCLUDING THE LAST POINT. Taking every Nth sample drops the
+    // end of the track whenever the count does not divide, which on a circuit
+    // leaves a visible gap exactly where the layout closes -- the one feature of
+    // the picture somebody is looking for.
+    const std::size_t Want = (MaxPoints < 2 ? 2 : MaxPoints);
+    const std::size_t Take = N < Want ? N : Want;
+    Out.reserve(Take * 2);
+    for (std::size_t i = 0; i < Take; ++i)
+    {
+        const std::size_t Src = Take == 1 ? 0
+            : static_cast<std::size_t>((static_cast<double>(i) * (N - 1)) / (Take - 1) + 0.5);
+        Out.push_back(PadX + (XY[Src * 2] - MinX) * Scale);
+        Out.push_back(PadY + (XY[Src * 2 + 1] - MinY) * Scale);
+    }
+    return Out;
+}
 
 class FTrackBrowser
 {
@@ -214,7 +276,18 @@ private:
     std::size_t MaxRecent = 10;
 };
 
-// ponytail: no thumbnails and no folder tree. A thumbnail wants a render on save,
-// which is a real feature with a real cost and belongs on its own card; a folder
-// tree is what the OS file dialog is for, and the browser's job is the handful of
-// tracks somebody actually works on.
+// ponytail: no folder tree — that is what the OS file dialog is for, and the
+// browser's job is the handful of tracks somebody actually works on.
+//
+// THUMBNAILS LANDED, AND THE DEFERRAL THAT STOOD HERE HAD THE WRONG PREMISE. It
+// said a thumbnail "wants a render on save", which is what makes it expensive:
+// a picture taken at one moment, stored beside the file, wrong the moment the
+// track changes, missing for every track written by a build that did not take
+// one, and a second thing to delete when a track is deleted.
+//
+// A track already carries its own picture. `PlanThumb` is the plan view, taken
+// from the walk the browser ALREADY does to read length and height, so it costs
+// nothing extra, cannot go stale, needs no file, and exists for a track that
+// has never been opened. What it cannot show is theming or scenery — the day
+// this project has either, a rendered thumbnail is worth its cost and this is
+// what it replaces.

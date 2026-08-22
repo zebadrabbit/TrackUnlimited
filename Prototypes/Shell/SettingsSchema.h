@@ -259,7 +259,11 @@ inline std::vector<FSettingEntry> SettingsSchema()
             // NOT Ctrl+S. The editor owns that chord and its bindings are live in
             // PIE, so the familiar one would save the level as well as the track.
             // Every letter that spells save is taken, [S] most of all — it moves.
-            {"key.save",        "Save the track",       "K"},
+            // Shift+K is save-as and is NOT a second row: the checker looks each
+            // row's key up in the input component, and nothing is bound to a
+            // chord — the shift is read inside the handler. A row promising a key
+            // nothing answers to is exactly what that check exists to catch.
+            {"key.save",        "Save the track (Shift: save as)", "K"},
             // Either side of save, for the same reason it is not Ctrl+S: the
             // editor's undo is live in PIE and would step back through the LEVEL.
             {"key.undo",        "Undo",                 "J"},
