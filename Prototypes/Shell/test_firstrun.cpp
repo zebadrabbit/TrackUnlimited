@@ -168,7 +168,12 @@ void TestNEWTrackIsNeverAnEmptyList()
     assert(TemplateAt(0).Preset == ETemplatePreset::Reference);
     assert(TemplateAt(1).Preset == ETemplatePreset::TwoTrainCircuit);
     assert(TemplateAt(2).Preset == ETemplatePreset::OutAndBack);
-    assert(TemplateAt(3).Preset == ETemplatePreset::Blank);
+    assert(TemplateAt(3).Preset == ETemplatePreset::Showcase);
+    // BLANK IS LAST, and that is the assertion rather than "blank is at 4" — the
+    // showcase was inserted ahead of it and this line went on naming index 3,
+    // which is how a positional check drifts. Somebody who wants an empty track
+    // knows where to look; somebody who does not should not meet it first.
+    assert(TemplateAt(NumTemplates() - 1).Preset == ETemplatePreset::Blank);
 
     // Exactly one blank option, and it is NOT the default.
     assert(Blank == 1);

@@ -85,8 +85,13 @@ inline const char* FieldName(EEditField F)
     case EEditField::ZoneAccel:       return "Accel";
     case EEditField::ZoneDecel:       return "Decel";
     case EEditField::ZoneBrakeDecel:  return "Brake pad";
-    default:                          return "Starts a new device";
+    case EEditField::StartsNewDevice: return "Starts a new device";
+    case EEditField::Count:           break;
     }
+    // Exhaustive rather than defaulted, for the reason written out in FirstRun.h:
+    // a default handed three device fields the tick box's name and help, and did
+    // it silently because that is what a default is for.
+    return "";
 }
 
 // UNITS ARE ALWAYS SHOWN WHERE THERE IS ONE — `UI_CONVENTIONS.md`.
@@ -113,8 +118,14 @@ inline const char* FieldUnit(EEditField F)
     case EEditField::ZoneAccel:
     case EEditField::ZoneDecel:
     case EEditField::ZoneBrakeDecel: return "m/s2";
-    default:                         return "";
+    // DIMENSIONLESS, EACH FOR ITS OWN REASON, and listed rather than defaulted so
+    // that a new field with a dimension cannot inherit "no unit" by silence.
+    case EEditField::Turns:            // a count
+    case EEditField::ZoneKind:         // a choice
+    case EEditField::StartsNewDevice:  // a tick box
+    case EEditField::Count:          return "";
     }
+    return "";
 }
 
 // ===================== WHICH FIELDS A KIND USES =====================

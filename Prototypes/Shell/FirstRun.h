@@ -84,12 +84,47 @@ inline FFieldHelp HelpFor(EEditField F)
         return {"What this device is trying to make the train do. A brake's number is the "
                 "speed it RELEASES at, not the speed it stops at — brakes rest closed.",
                 1.5, 40.0, true};
-    default:
+    case EEditField::ZoneAccel:
+        return {"How hard this device can PUSH, in metres per second squared. It is the "
+                "hardware somebody specified rather than one global figure: a chain "
+                "hauling at 0.6 is nothing like a real chain, and a launch is ten times "
+                "that. A device with no tractive authority — a brake, a trim — ignores "
+                "it whatever you type here.",
+                1.0, 12.0, true};
+    case EEditField::ZoneDecel:
+        return {"How hard this device can PULL BACK, in metres per second squared. The "
+                "same idea as the push and specified separately, because the two are "
+                "rarely the same machine. A launch has no braking authority however "
+                "large you make this.",
+                1.0, 12.0, true};
+    case EEditField::ZoneBrakeDecel:
+        return {"The FRICTION PAD, which is a second and separate machine from the drive "
+                "tyres above — either can fail without the other. Zero means this device "
+                "has none. A pad can only ever remove energy, so it is a ceiling and "
+                "never a setpoint: below the commanded speed it does nothing at all, "
+                "which is what makes it a brake rather than a motor.",
+                2.0, 10.0, true};
+    case EEditField::StartsNewDevice:
         return {"Tick this when a run of identical devices should count as a NEW one. "
                 "Three loading positions in a row are the same kind at the same speed, so "
                 "nothing else can tell them apart.",
                 0.0, 0.0, false};
+    case EEditField::Count:
+        break;
     }
+    // ===================== NO `default:`, AND THIS IS WHY =====================
+    //
+    // There was one, and it handed the three device rates above the TICK BOX's
+    // tooltip — a beginner hovering "Accel" was told to tick it when a run of
+    // identical devices should count as a new one. Silently, for as long as they
+    // have existed, because a default case is a switch that never admits it is
+    // missing anything.
+    //
+    // The header at the top of this file claims adding a field without help fails
+    // the build. The default is what made that untrue: it satisfied the compiler
+    // and the suite caught it only because the suite walks the enum. Exhaustive
+    // now, so the NEXT field added warns where it is added rather than here.
+    return {"", 0.0, 0.0, false};
 }
 
 // ===================== EMPTY STATES =====================
@@ -229,9 +264,10 @@ inline FTemplate TemplateAt(std::size_t i)
                 "a trim, a mid-course block brake with a real friction pad, kicker tyres "
                 "out of it, and a full helix finale round the last turn. Every device "
                 "specified as itself, and the fleet measured against the interlocking.",
-                "Open the [P] panel and watch the mid-course brake. The pad stops the "
-                "train and the tyres truck it to the mark afterwards — two machines, "
-                "one commanded speed.",
+                "Change the mid-course brake's friction pad rate to 0. The pad and the "
+                "drive tyres are two separate machines on one stretch of track, so with "
+                "the pad gone the tyres alone have to stop the train — and the [V] "
+                "panel says whether the block is long enough for that.",
                 ETemplatePreset::Showcase};
     case 4:
     default:
