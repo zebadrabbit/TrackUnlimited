@@ -119,6 +119,10 @@ void TestEveryHardwareKindIsWatertightAndOutward()
         // all steel: a dog rail has no rubber on it.
         if (Kinds[k] != DeviceCatch) { assert(SignedVolume(M.Rubber) > 0.0); }
         else { assert(M.Rubber.NumTriangles() == 0); }
+        // EXACT for the sweep, because "positive" let inward caps through: a
+        // 30 m trough of 0.18 x 0.12 is 0.648 m3, and the first version's caps
+        // both faced inward and it came to a third of that.
+        if (Kinds[k] == DeviceChain) { assert(std::fabs(SignedVolume(M.Hardware) - 30.0 * 0.18 * 0.12) < 1e-9); }
         std::printf("  %-8s %6zu triangles, steel %.4f m3, rubber %.4f m3\n", Names[k],
                     M.NumTriangles(), SignedVolume(M.Hardware), SignedVolume(M.Rubber));
     }

@@ -2,7 +2,7 @@
 #
 # Build and run every assert suite under Prototypes/.
 #
-# There are thirty-eight of them now, in seven directories, and the per-suite
+# There are thirty-nine of them now, in seven directories, and the per-suite
 # command in PROTOTYPES.md is still the right way to iterate on ONE of them.
 # This is for the other question — "is all of it still green" — which is the one
 # nobody asks often enough by hand, and the one CI asks every time.

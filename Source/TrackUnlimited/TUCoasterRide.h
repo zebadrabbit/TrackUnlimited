@@ -39,6 +39,7 @@
 #include "Shell/TrackBrowser.h"
 #include "TrackMesh/TrackCatwalk.h"
 #include "TrackMesh/TrackDevices.h"
+#include "TrackMesh/TrackStation.h"
 #include "TrackMesh/TrackSupports.h"
 #include "TrackMesh/TrainMesh.h"
 #include "BlockSignal/ShowBus.h"
@@ -680,6 +681,22 @@ private:
 	int32 DeviceTriangles = 0;
 
 	/**
+	 * THE STATION AS AN OBJECT: slab, stripe, one airgate a car, a cabinet at
+	 * the dispatch end -- beside the track on every station-kind zone, on the
+	 * side the preset puts its walkways (the platform is where people are).
+	 * See TrackMesh/TrackStation.h. Three sections, three materials.
+	 */
+	UPROPERTY(VisibleAnywhere, Category = "TrackUnlimited|Mesh")
+	TObjectPtr<class UProceduralMeshComponent> StationConcreteMesh;
+	UPROPERTY(VisibleAnywhere, Category = "TrackUnlimited|Mesh")
+	TObjectPtr<class UProceduralMeshComponent> StationSteelMesh;
+	UPROPERTY(VisibleAnywhere, Category = "TrackUnlimited|Mesh")
+	TObjectPtr<class UProceduralMeshComponent> StationStripeMesh;
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Mesh")
+	bool bBuildStations = true;
+	int32 StationTriangles = 0;
+
+	/**
 	 * WHICH SIDE A PRESET PUTS ITS CATWALKS ON. It was hardcoded to Both, and the
 	 * argument for that read well and did not survive being looked at: every
 	 * powered run on every shipped ride got a deck and a handrail down both
@@ -892,6 +909,9 @@ private:
 	TObjectPtr<class UMaterialInstanceDynamic> CatwalkRailMaterial;
 	UPROPERTY(Transient) TObjectPtr<class UMaterialInstanceDynamic> DeviceSteelMaterial;
 	UPROPERTY(Transient) TObjectPtr<class UMaterialInstanceDynamic> DeviceRubberMaterial;
+	UPROPERTY(Transient) TObjectPtr<class UMaterialInstanceDynamic> StationConcreteMaterial;
+	UPROPERTY(Transient) TObjectPtr<class UMaterialInstanceDynamic> StationSteelMaterial;
+	UPROPERTY(Transient) TObjectPtr<class UMaterialInstanceDynamic> StationStripeMaterial;
 	UPROPERTY(Transient)
 	TObjectPtr<class UMaterialInstanceDynamic> TrainBodyMaterial;
 	UPROPERTY(Transient)

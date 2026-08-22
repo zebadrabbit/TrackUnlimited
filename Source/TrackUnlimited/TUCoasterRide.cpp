@@ -128,6 +128,9 @@ ATUCoasterRide::ATUCoasterRide()
 	CatwalkRailMesh = MakeTrackMesh(TEXT("CatwalkRailMesh"));
 	DeviceSteelMesh = MakeTrackMesh(TEXT("DeviceSteelMesh"));
 	DeviceRubberMesh = MakeTrackMesh(TEXT("DeviceRubberMesh"));
+	StationConcreteMesh = MakeTrackMesh(TEXT("StationConcreteMesh"));
+	StationSteelMesh = MakeTrackMesh(TEXT("StationSteelMesh"));
+	StationStripeMesh = MakeTrackMesh(TEXT("StationStripeMesh"));
 
 	// AND THE TRAIN. Four more, for the same reason and on the same terms: four
 	// materials, no collision. These are the only ones that move every frame,
@@ -5409,6 +5412,16 @@ bool ATUCoasterRide::RunDocumentSmokeTest()
 			UE_LOG(LogTUEvents, Log, TEXT("smoke: %d zones and %d anti-rollback spans wear their hardware, %d triangles"),
 				ZoneSpans.Num(), CatchSpanList.Num(), DeviceTriangles);
 		}
+		if (StationTriangles <= 0)
+		{
+			UE_LOG(LogTUEvents, Error, TEXT("smoke: the station has no platform"));
+			Failures.Add(TEXT("station platform"));
+		}
+		else
+		{
+			UE_LOG(LogTUEvents, Log, TEXT("smoke: the station has its platform, stripe, gates and cabinet, %d triangles"),
+				StationTriangles);
+		}
 
 		// ===================== AND NONE AUTHORS NOTHING =====================
 		//
@@ -8727,6 +8740,9 @@ void ATUCoasterRide::ApplyTrackStyle()
 	Paint(CatwalkRailMaterial, CatwalkRailMesh, FLinearColor(0.85f, 0.62f, 0.08f));
 	Paint(DeviceSteelMaterial, DeviceSteelMesh, S.SupportColour);
 	Paint(DeviceRubberMaterial, DeviceRubberMesh, FLinearColor(0.06f, 0.06f, 0.06f));
+	Paint(StationConcreteMaterial, StationConcreteMesh, FLinearColor(0.52f, 0.51f, 0.49f));
+	Paint(StationSteelMaterial, StationSteelMesh, FLinearColor(0.62f, 0.64f, 0.68f));
+	Paint(StationStripeMaterial, StationStripeMesh, FLinearColor(0.95f, 0.80f, 0.05f));
 	Paint(TrainBodyMaterial, TrainBodyMesh, S.TrainColour);
 	Paint(TrainChassisMaterial, TrainChassisMesh, FLinearColor(0.10f, 0.11f, 0.12f));
 	Paint(TrainWheelMaterial, TrainWheelMesh, FLinearColor(0.05f, 0.05f, 0.05f));
@@ -8920,6 +8936,9 @@ void ATUCoasterRide::RebuildTrackMesh()
 		if (CatwalkRailMesh) { CatwalkRailMesh->ClearAllMeshSections(); }
 		if (DeviceSteelMesh) { DeviceSteelMesh->ClearAllMeshSections(); }
 		if (DeviceRubberMesh) { DeviceRubberMesh->ClearAllMeshSections(); }
+		if (StationConcreteMesh) { StationConcreteMesh->ClearAllMeshSections(); }
+		if (StationSteelMesh) { StationSteelMesh->ClearAllMeshSections(); }
+		if (StationStripeMesh) { StationStripeMesh->ClearAllMeshSections(); }
 		return;
 	}
 
@@ -8992,8 +9011,32 @@ void ATUCoasterRide::RebuildTrackMesh()
 	// would visibly cut the corners the rails do not.
 	if (bBuildCatwalks && !WalkwaySpans.empty())
 	{
+		// A PLATFORM IS THE WALKWAY ON A STATION SPAN. The authored route keeps
+		// the station -- the evacuation model is right that a stopped train
+		// there can be reached -- but the DRAWN deck and handrail stop at the
+		// platform's ends, or the rail posts stand between the gates and the
+		// train. Each span is cut around every station zone.
+		std::vector<FWalkwaySpan> Drawn;
+		for (const FWalkwaySpan& W : WalkwaySpans)
+		{
+			std::vector<FWalkwaySpan> Pieces{W};
+			for (const FTUZoneSpan& Z : ZoneSpans)
+			{
+				if (Z.Kind != ETUSegmentZone::Station && Z.Kind != ETUSegmentZone::StationLoad
+					&& Z.Kind != ETUSegmentZone::StationUnload) { continue; }
+				std::vector<FWalkwaySpan> Next;
+				for (const FWalkwaySpan& P : Pieces)
+				{
+					if (Z.EndS <= P.StartS || Z.StartS >= P.EndS) { Next.push_back(P); continue; }
+					if (Z.StartS > P.StartS) { FWalkwaySpan L = P; L.EndS = Z.StartS; Next.push_back(L); }
+					if (Z.EndS < P.EndS) { FWalkwaySpan R = P; R.StartS = Z.EndS; Next.push_back(R); }
+				}
+				Pieces.swap(Next);
+			}
+			for (const FWalkwaySpan& P : Pieces) { if (P.EndS - P.StartS > 0.5) { Drawn.push_back(P); } }
+		}
 		const FCatwalkMesh Walk = BuildCatwalks(WalkTrack(Track, Settings.SampleSpacing),
-			WalkwaySpans, Profile);
+			bBuildStations ? Drawn : WalkwaySpans, Profile);
 		PushMeshSection(CatwalkDeckMesh, Walk.Deck);
 		PushMeshSection(CatwalkRailMesh, Walk.Rail);
 
@@ -9052,6 +9095,45 @@ void ATUCoasterRide::RebuildTrackMesh()
 	{
 		if (DeviceSteelMesh) { DeviceSteelMesh->ClearAllMeshSections(); }
 		if (DeviceRubberMesh) { DeviceRubberMesh->ClearAllMeshSections(); }
+	}
+
+	// ===================== AND THE PLATFORM BESIDE THE STATION =====================
+	//
+	// On the side the preset puts its walkways, because that is where the
+	// people are; Both means the rider's left. One gate per CAR, read off the
+	// same CarLengthM the train mesh uses, so a six-car train gets six gates.
+	StationTriangles = 0;
+	if (bBuildStations)
+	{
+		std::vector<FStationSpan> StSpans;
+		for (const FTUZoneSpan& Z : ZoneSpans)
+		{
+			if (Z.Kind != ETUSegmentZone::Station && Z.Kind != ETUSegmentZone::StationLoad
+				&& Z.Kind != ETUSegmentZone::StationUnload) { continue; }
+			FStationSpan P;
+			P.StartS = Z.StartS;
+			P.EndS = Z.EndS;
+			P.bLeft = PresetWalkwaySide != ETUWalkway::Right;
+			StSpans.push_back(P);
+		}
+		if (!StSpans.empty())
+		{
+			FStationSettings St;
+			if (CarLengthM > 0.5f) { St.GatePitchM = CarLengthM; }
+			const FStationMesh Stn = BuildStations(WalkTrack(Track, Settings.SampleSpacing), StSpans, St);
+			PushMeshSection(StationConcreteMesh, Stn.Concrete);
+			PushMeshSection(StationSteelMesh, Stn.Steel);
+			PushMeshSection(StationStripeMesh, Stn.Stripe);
+			StationTriangles = static_cast<int32>(Stn.NumTriangles());
+			UE_LOG(LogTemp, Log, TEXT("TrackUnlimited: station %d triangles over %d platform(s)"),
+				StationTriangles, static_cast<int32>(StSpans.size()));
+		}
+	}
+	if (StationTriangles == 0)
+	{
+		if (StationConcreteMesh) { StationConcreteMesh->ClearAllMeshSections(); }
+		if (StationSteelMesh) { StationSteelMesh->ClearAllMeshSections(); }
+		if (StationStripeMesh) { StationStripeMesh->ClearAllMeshSections(); }
 	}
 
 	// AFTER the sections exist, because SetMaterial on a component with no

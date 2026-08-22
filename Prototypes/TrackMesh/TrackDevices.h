@@ -220,16 +220,21 @@ inline void SweepRect(FMeshBuffer& Out, const std::vector<FRectRing>& R, double 
     {
         const std::size_t i = end == 0 ? 0 : R.size() - 1;
         const std::uint32_t Base = static_cast<std::uint32_t>(Out.Position.size());
-        const FVec3 Along = Normalised(Cross(R[i].Lat, R[i].Up));   // lat x up = -tangent? see below
-        const FVec3 N = end == 0 ? Along : Along * -1.0;
+        const FVec3 Along = Normalised(Cross(R[i].Lat, R[i].Up));   // lat x up = along, as tangent x lateral = up
+        const FVec3 N = end == 0 ? Along * -1.0 : Along;
         for (int k = 0; k < 4; ++k)
         {
             Out.Position.push_back(Corner(i, k));
             Out.Normal.push_back(N);
             Out.UV.push_back({static_cast<double>(k & 1), static_cast<double>(k >> 1)});
         }
-        if (end == 0) { Out.Index.insert(Out.Index.end(), {Base, Base + 1, Base + 2, Base, Base + 2, Base + 3}); }
-        else          { Out.Index.insert(Out.Index.end(), {Base, Base + 2, Base + 1, Base, Base + 3, Base + 2}); }
+        // The corner order runs +lat-up, +lat+up, -lat+up, -lat-up, which seen
+        // from -along is CLOCKWISE -- so the start cap takes the reversed order
+        // and the end cap the plain one. The first version had them the other
+        // way and every sweep enclosed a third of its volume, with the
+        // watertight check unable to tell: a cap is watertight either way.
+        if (end == 0) { Out.Index.insert(Out.Index.end(), {Base, Base + 2, Base + 1, Base, Base + 3, Base + 2}); }
+        else          { Out.Index.insert(Out.Index.end(), {Base, Base + 1, Base + 2, Base, Base + 2, Base + 3}); }
     }
 }
 
