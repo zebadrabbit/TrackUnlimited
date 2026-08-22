@@ -73,17 +73,27 @@ struct FCatwalkSettings
     double RailDiameterM = 0.04;
     int RailSides = 6;
 
-    // ===================== THE ONE THAT IS A JUDGEMENT =====================
+    // ===================== THE DECK IS LEVEL, AND IT USED TO BANK =====================
     //
-    // A catwalk follows the track's own frame, so on banked track it banks with
-    // it — which is correct, and is exactly why real rides put catwalks on lift
-    // hills and brake runs and not through banked turns.
+    // The first version followed the track's own frame, so the deck rolled and
+    // twisted with the rails. The argument for it was that a catwalk is part of
+    // the structure and the structure banks — which is true of the BENTS and not
+    // of the walking surface. Seen in the engine it is what settled it: a
+    // walkway that corkscrews is not somewhere anybody stands.
     //
-    // Past some angle it stops being walkable, and that is REPORTED rather than
-    // refused: the author asked for a catwalk there and may have a reason, and a
-    // mesher that silently dropped it would leave a gap in an evacuation route
-    // with nothing saying why. 25 degrees is a steep ramp somebody can still get
-    // along; beyond it they are climbing.
+    // A REAL CATWALK IS LEVEL ACROSS AND SLOPED ALONG. It climbs a lift hill,
+    // because it has to go where the track goes; it does not tilt sideways,
+    // because the deck is a floor and floors are flat. That is one line of
+    // geometry: the outward direction is horizontal and the deck's up is the
+    // world's, so roll simply never enters.
+    //
+    // WHAT THE ANGLE BELOW NOW MEANS. It used to be "the deck is tilted this far
+    // and you cannot stand on it", which a level deck cannot be. It is still the
+    // angle worth reporting, for a different and more useful reason: past it the
+    // track is rolling away from a deck that is not following, so the two stop
+    // sitting sensibly beside each other and the low rail comes down toward the
+    // walking surface. Reported rather than refused, as everything here is —
+    // the author asked for a catwalk and may have a reason.
     double MaxWalkableBankDeg = 25.0;
 };
 
@@ -118,18 +128,50 @@ inline bool Wanted(const std::vector<FWalkwaySpan>& Spans, double S, bool bLeft)
     return false;
 }
 
+// World up, and it is the deck's up everywhere. Named rather than written out
+// four times, because the whole of "the deck is level" is that this is used
+// where the frame's own Up would have been.
+inline FVec3 DeckUp() { return FVec3{0.0, 0.0, 1.0}; }
+
+// THE DECK'S OUTWARD DIRECTION, AND IT IS HORIZONTAL.
+//
+// Perpendicular to the direction of TRAVEL rather than to the track's banked
+// plane, so roll never reaches it. `WorldUp x Tangent` is the rider's left on
+// level track, which is exactly what the frame's +Lateral is — so the flat deck
+// and the frame agree where they should and part company only where the track
+// banks, which is the entire intended difference.
+//
+// +LATERAL IS THE RIDER'S LEFT, the convention the whole project uses and the
+// one thing here that silently mirrors an entire ride if it is wrong.
+inline FVec3 FlatOutward(const FTrackFrame& F, bool bLeft)
+{
+    FVec3 Out = Cross(DeckUp(), F.Tangent);
+    if (Length(Out) < 1e-6)
+    {
+        // VERTICAL TRACK HAS NO HORIZONTAL PERPENDICULAR. Nothing walks up a
+        // vertical spike and the finding at the foot of the build says so, but
+        // it must not produce NaN on the way to saying it — one degenerate frame
+        // would take out the whole run's geometry, including the parts that are
+        // fine. The frame's own lateral is horizontal exactly here, because a
+        // vertical tangent forces it to be.
+        Out = F.Lateral;
+        if (Length(Out) < 1e-6) { return F.Lateral; }
+    }
+    Out = Normalised(Out);
+    return bLeft ? Out : Out * -1.0;
+}
+
 // The deck's inboard and outboard edge points for one frame and one side.
 //
-// +LATERAL IS THE RIDER'S LEFT, which is the convention the whole project uses
-// and the one thing here that silently mirrors an entire ride if it is wrong.
+// MEASURED HORIZONTALLY FROM THE TRACK'S CENTRELINE, and dropped along world
+// down. The gauge clearance is still the gauge clearance — on banked track the
+// rails swing out of that plane, which is the case the finding reports.
 inline void DeckEdges(const FTrackFrame& F, const FTrackProfile& Profile,
                       const FCatwalkSettings& S, bool bLeft, FVec3& Inner, FVec3& Outer)
 {
-    const double Sign = bLeft ? 1.0 : -1.0;
-    const FVec3 Out = F.Lateral * Sign;
-    const FVec3 RailCentre = F.Position;
+    const FVec3 Out = FlatOutward(F, bLeft);
     const double Start = Profile.Gauge * 0.5 + S.InboardGapM;
-    const FVec3 Base = RailCentre - F.Up * S.DeckDropM;
+    const FVec3 Base = F.Position - DeckUp() * S.DeckDropM;
     Inner = Base + Out * Start;
     Outer = Base + Out * (Start + S.DeckWidthM);
 }
@@ -197,9 +239,11 @@ inline FCatwalkMesh BuildCatwalks(const std::vector<FTrackFrame>& Frames,
                 // available: it is what found the track mesh inside out on the
                 // first try.
                 //
-                // THE DECK'S OWN UP is the frame's, so it banks with the track —
-                // right, and why the walkability check below exists.
-                const FVec3 N = Frames[k].Up;
+                // THE DECK'S UP IS THE WORLD'S, not the frame's, which is the
+                // whole of "the walkway does not twist" — and it means the top
+                // face's normal is the same vector for every ring, so a lift
+                // hill's deck lights as one surface instead of shimmering.
+                const FVec3 N = DeckUp();
                 const FVec3 Down = N * Settings.DeckThicknessM;
                 const double V = S[k] / 4.0;
                 Out.Deck.Position.push_back(Inner);
@@ -267,7 +311,10 @@ inline FCatwalkMesh BuildCatwalks(const std::vector<FTrackFrame>& Frames,
             {
                 FVec3 Inner, Outer;
                 DeckEdges(Frames[k], Profile, Settings, bLeft, Inner, Outer);
-                const FVec3 Up = Frames[k].Up;
+                // POSTS STAND UP, which on a level deck is the only thing they
+                // can do — a handrail leaning with the track over a floor that
+                // does not is worse than either version on its own.
+                const FVec3 Up = DeckUp();
                 TopPts.push_back(Outer + Up * Settings.RailHeightM);
                 MidPts.push_back(Outer + Up * (Settings.RailHeightM * 0.5));
 
@@ -293,8 +340,13 @@ inline FCatwalkMesh BuildCatwalks(const std::vector<FTrackFrame>& Frames,
                 Rings.reserve(Pts.size());
                 for (std::size_t k = 0; k < Pts.size(); ++k)
                 {
+                    // THE RAIL'S SECTION USES THE DECK'S BASIS, not the frame's.
+                    // A six-sided tube whose cross-section rotates about its own
+                    // axis while the tube itself does not is a shimmer nobody can
+                    // name — and here the frame is rolling while the handrail is
+                    // deliberately not, so the two are guaranteed to disagree.
                     const FTrackFrame& F = Frames[Begin + k];
-                    Rings.push_back({Pts[k], F.Lateral, F.Up, S[Begin + k]});
+                    Rings.push_back({Pts[k], FlatOutward(F, bLeft), DeckUp(), S[Begin + k]});
                 }
                 SweepTube(Out.Rail, Rings, Settings.RailDiameterM * 0.5,
                           Settings.RailSides, 1.0, true, true);
@@ -320,10 +372,17 @@ inline FCatwalkMesh BuildCatwalks(const std::vector<FTrackFrame>& Frames,
                                    * 180.0 / 3.14159265358979323846;
                 FMeshFinding F;
                 F.S = WorstS;
-                char Buf[128];
+                char Buf[192];
+                // ponytail: the trigger is the track's bank, not a measured
+                // clearance between the deck and the low rail. The two agree
+                // about WHEN — a deck that stays level beside track rolling past
+                // 25 degrees is where they start to interfere — and disagree
+                // about BY HOW MUCH. Measure the gap properly if somebody wants
+                // a number to lengthen or lower by.
                 std::snprintf(Buf, sizeof(Buf),
-                    "catwalk is banked %.0f degrees here: too steep to walk on, "
-                    "and it is an evacuation route", Deg);
+                    "track is banked %.0f degrees here and the deck stays level: "
+                    "the low rail comes down toward the walking surface, so check "
+                    "it clears — and this is an evacuation route", Deg);
                 F.What = Buf;
                 Out.Finding.push_back(F);
             }

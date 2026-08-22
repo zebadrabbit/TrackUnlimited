@@ -239,6 +239,67 @@ void TestUnwalkableBankIsREPORTEDNotDropped()
     std::printf("  and level track is silent\n");
 }
 
+// ===================== THE DECK IS LEVEL, WHATEVER THE TRACK DOES =====================
+//
+// The version before this one built the deck from the frame's own Lateral and
+// Up, so it rolled and twisted with the rails. It looked defensible in the
+// header and indefensible in the engine: a walkway that corkscrews is not
+// somewhere anybody stands. A floor is flat; only the track banks.
+//
+// ASSERTED ON THE GEOMETRY RATHER THAN ON THE SETTING, because "flat" is a
+// property of the vertices and a flag can be true while the deck twists anyway.
+void TestTheDeckStaysLEVELThroughABankedTurn()
+{
+    std::printf("The deck is level even where the track is not\n");
+
+    // 50 degrees of bank: far past anything walkable, which is the point — if
+    // the deck followed the track at all, it would show here more than anywhere.
+    const std::vector<FTrackFrame> Steep = WalkTrack(Banked(50.0), 0.5);
+    const FCatwalkMesh M = BuildCatwalks(Steep, OneSpan(5.0, 30.0, EWalkway::Left),
+                                         FTrackProfile());
+    assert(!M.Deck.Position.empty());
+
+    // Every ring is inner-top, outer-top, outer-bottom, inner-bottom — so the
+    // first two of each four are the walking surface, and they must be at the
+    // same height as each other however hard the track is rolling.
+    double WorstCross = 0.0;
+    for (std::size_t k = 0; k + 1 < M.Deck.Position.size(); k += 4)
+    {
+        const double D = std::fabs(M.Deck.Position[k].Z - M.Deck.Position[k + 1].Z);
+        WorstCross = D > WorstCross ? D : WorstCross;
+    }
+    std::printf("  worst cross-fall over a %.2f m deck: %.9f m\n",
+                FCatwalkSettings().DeckWidthM, WorstCross);
+    assert(WorstCross < 1e-9 && "the walking surface is level across, exactly");
+
+    // AND THE TRACK REALLY IS BANKED THERE. Without this the assertion above
+    // passes just as well on straight level track, which is the way a check like
+    // this quietly stops meaning anything.
+    double WorstUpZ = 1.0;
+    for (const FTrackFrame& F : Steep)
+    {
+        WorstUpZ = F.Up.Z < WorstUpZ ? F.Up.Z : WorstUpZ;
+    }
+    assert(WorstUpZ < 0.7 && "the fixture must actually bank, or this proves nothing");
+
+    // THE HANDRAIL STANDS UP TOO. A level floor under a leaning rail is worse
+    // than either mistake alone, and the rail is a separate buffer built in a
+    // separate loop — so it is a separate thing to get wrong.
+    double MinZ = M.Rail.Position[0].Z, MaxZ = M.Rail.Position[0].Z;
+    for (const FVec3& P : M.Rail.Position)
+    {
+        MinZ = P.Z < MinZ ? P.Z : MinZ;
+        MaxZ = P.Z > MaxZ ? P.Z : MaxZ;
+    }
+    // Deck top to top rail, plus the tube's own radius either end. A rail leaning
+    // with 50 degrees of bank would span far more than its own height.
+    const FCatwalkSettings S;
+    const double Span = MaxZ - MinZ;
+    std::printf("  handrail spans %.3f m of height for a %.2f m rail\n", Span, S.RailHeightM);
+    assert(Span < S.RailHeightM + S.RailDiameterM + 1e-6);
+    std::printf("  and the posts are vertical\n");
+}
+
 // Nothing asked for is nothing built — not an empty run, not a degenerate quad.
 void TestNoWalkwayIsNoGeometry()
 {
@@ -262,6 +323,7 @@ int main()
     TestTheDeckIsCLOSEDAndENCLOSESVolume();
     TestASpanBoundaryENDSTheDeck();
     TestUnwalkableBankIsREPORTEDNotDropped();
+    TestTheDeckStaysLEVELThroughABankedTurn();
     TestNoWalkwayIsNoGeometry();
 
     std::printf("\ntest_trackcatwalk: all assertions passed.\n");
