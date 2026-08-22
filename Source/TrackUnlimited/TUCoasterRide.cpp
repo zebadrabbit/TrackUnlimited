@@ -205,6 +205,16 @@ namespace
 		C->DrawItem(Item);
 	}
 
+	// The large size, for the three things on a console that are read from
+	// across a room. Everything else stays at the body size.
+	void PanelLabelBig(UCanvas* C, float X, float Y, const FString& S, const FLinearColor& Col)
+	{
+		FCanvasTextItem Item(FVector2D(X, Y), FText::FromString(S), PanelFont(), Col);
+		Item.Scale = FVector2D(1.6f, 1.6f);   // the engine's "large" font is barely larger
+		Item.EnableShadow(FLinearColor::Black);
+		C->DrawItem(Item);
+	}
+
 	// The third primitive, and it arrived with the browser's plan-view thumbnails.
 	// A tile per sample was the alternative -- it needs no new primitive and it
 	// draws a dotted line, which on a 30-pixel thumbnail is the difference between
@@ -2598,16 +2608,26 @@ void ATUCoasterRide::DrawSegmentEditor(UCanvas* Canvas)
 
 	if (Segments.Num() == 0)
 	{
-			// THE COUNT IS IN THE HEADING, because once the rows show an intersection the
-	// panel no longer looks any different for eight segments than for one — and
-	// somebody about to type a number needs to know how many it lands on.
-	PanelLabel(Canvas, Ox, Y, IsMultiSelect()
-		? FString::Printf(TEXT("SEGMENTS   %d selected  ·  [I] insert [R] remove  ·  [B] hide"),
-			Selection.Num())
-		: FString(TEXT("SEGMENTS   shift-click to select more  ·  [I] insert [R] remove  ·  [B] hide")),
-		PanelDim);
-		PanelLabel(Canvas, Ox, Y + 20.f,
-			UTF8_TO_TCHAR(EmptyStateFor(EPanelKind::SegmentList)), PanelDim);
+		// Nothing to select yet, so the heading offers the one thing that
+		// applies. The full heading ran off the panel's right edge here.
+		PanelLabel(Canvas, Ox, Y, TEXT("SEGMENTS   [I] insert  ·  [B] hide"), PanelDim);
+		// THE EMPTY STATE, WRAPPED TO THE PANEL: one line of it was drawn and
+		// the rest left the panel with the sentence cut mid-word.
+		FString Rest = UTF8_TO_TCHAR(EmptyStateFor(EPanelKind::SegmentList));
+		float Ly = Y + 20.f;
+		while (!Rest.IsEmpty())
+		{
+			int32 Cut = Rest.Len();
+			while (Cut > 0 && PanelTextWidth(Canvas, Rest.Left(Cut)) > W)
+			{
+				int32 Space = INDEX_NONE;
+				Rest.Left(Cut - 1).FindLastChar(TEXT(' '), Space);
+				Cut = Space > 0 ? Space : Cut - 1;
+			}
+			PanelLabel(Canvas, Ox, Ly, Rest.Left(Cut).TrimEnd(), PanelDim);
+			Rest = Rest.Mid(Cut).TrimStart();
+			Ly += 16.f;
+		}
 		return;
 	}
 
@@ -6835,11 +6855,11 @@ void ATUCoasterRide::DrawConsole(UCanvas* Canvas)
 	// bar and the CiA 402 statusword per row, and at 470 the statusword ran
 	// past the panel's edge.
 	const float W = bMaint ? 560.f : 470.f;
-	const float StripH = bMaint ? 46.f + Row : 46.f;   // schematic, + the counts row
+	const float StripH = bMaint ? 58.f + Row : 58.f;   // schematic, + the counts row
 	const int32 Rows = 2                           // title, status
 		+ 1 + NumDrives                            // DRIVES heading + VFD modules
 		+ (bMaint ? 3 : 0)                         // scan line, CONTROLLER, DETECTION
-		+ (Platforms.Num() > 0 ? 1 + Platforms.Num() + 2 : 0)    // + CONSOLE heading, lamps
+		+ (Platforms.Num() > 0 ? 1 + Platforms.Num() + 3 : 0)    // + CONSOLE heading, lamps, tall buttons
 		+ (EventLog.Num() > 0 ? 1 + FMath::Min(EventLog.Num(), 4) : 0);
 	// The console row sat on the bottom edge, half off it: the section gaps are
 	// worth about a row and a half between them and were not being counted.
@@ -6985,7 +7005,11 @@ void ATUCoasterRide::DrawConsole(UCanvas* Canvas)
 		const float StripX = Lx;
 		const float StripW = W - Pad * 2.f - 4.f;
 		const float BoxY = Ty + 10.f;
-		const float BoxH = 16.f;
+		// TALL ENOUGH TO CARRY ITS NUMBER AND ITS TRAIN. The strip is the
+		// instrument -- an operator at the console cannot see the mid-course
+		// brake and reads it off this -- so it is the one thing here that gets
+		// bigger rather than smaller.
+		const float BoxH = 28.f;
 
 		// EVERY BLOCK GETS A FLOOR. Strictly proportional widths made the four 10 m
 		// platform positions three pixels each on a 1288 m circuit — the single most
@@ -7035,17 +7059,31 @@ void ATUCoasterRide::DrawConsole(UCanvas* Canvas)
 			}
 
 			// Filled when it holds something, outlined when clear: an occupied
-			// block should read from across a room.
+			// block should read from across a room. The fill is dimmed so the
+			// train drawn over it still reads as the train.
 			if (bOcc || bBuf)
 			{
-				PanelTile(Canvas, X0, BoxY, BW, BoxH, Lamp);
+				PanelTile(Canvas, X0, BoxY, BW, BoxH, Lamp * FLinearColor(0.45f, 0.45f, 0.45f, 1.f));
 			}
-			else
+			PanelTile(Canvas, X0, BoxY, BW, 1.f, Lamp);
+			PanelTile(Canvas, X0, BoxY + BoxH - 1.f, BW, 1.f, Lamp);
+			PanelTile(Canvas, X0, BoxY, 1.f, BoxH, Lamp);
+			PanelTile(Canvas, X0 + BW - 1.f, BoxY, 1.f, BoxH, Lamp);
+
+			// THE BLOCK NUMBER ON THE BLOCK, where a block schematic puts it, so
+			// the event log's "block 12" is a place on the strip and not a count
+			// from the left. Only where it fits; a 9 px platform position
+			// cannot carry two digits and is read from its neighbours.
+			if (BW >= 16.f)
 			{
-				PanelTile(Canvas, X0, BoxY, BW, 1.f, Lamp);
-				PanelTile(Canvas, X0, BoxY + BoxH - 1.f, BW, 1.f, Lamp);
-				PanelTile(Canvas, X0, BoxY, 1.f, BoxH, Lamp);
-				PanelTile(Canvas, X0 + BW - 1.f, BoxY, 1.f, BoxH, Lamp);
+				PanelLabel(Canvas, X0 + 3.f, BoxY + 1.f, FString::Printf(TEXT("%d"), b), PanelDim);
+			}
+			// THE BUFFER TIMER, which is the one number on the strip that is a
+			// countdown: the block is empty and will report clear in this long.
+			if (bBuf && BW >= 30.f)
+			{
+				PanelLabel(Canvas, X0 + 3.f, BoxY + BoxH - 14.f,
+					FString::Printf(TEXT("%.1f s"), Signals->GetBufferRemaining(B)), PanelCyan);
 			}
 
 			// The device under the block, in the SAME colours the rails use, so the
@@ -7077,11 +7115,20 @@ void ATUCoasterRide::DrawConsole(UCanvas* Canvas)
 			return X0 + static_cast<float>(F) * (X1 - X0);
 		};
 
+		// A TRAIN IS A SHAPE WITH A LENGTH, not a tick: its rear to its nose
+		// through the same mapping, so a train straddling a boundary is drawn
+		// straddling it -- which is exactly the case the counter's falling-edge
+		// rule exists for, and a tick at the centre could never show. Floored at
+		// a few pixels so a 6 m train in a 700 m block does not vanish.
 		for (int32 t = 0; t < Trains.Num(); ++t)
 		{
-			const float Px = SToX(Trains[t]->GetDistance());
-			PanelTile(Canvas, Px - 1.f, BoxY - 5.f, 3.f, BoxH + 10.f, PanelText);
-			PanelLabel(Canvas, Px - 3.f, BoxY - 18.f, FString::Printf(TEXT("%d"), t), PanelText);
+			float Xr = SToX(Trains[t]->GetRearS());
+			float Xf = SToX(Trains[t]->GetFrontS());
+			if (Xf < Xr) { Xf = Xr; }   // a train across the circuit seam: draw from its rear
+			const float TW = FMath::Max(6.f, Xf - Xr);
+			PanelTile(Canvas, Xr, BoxY + 11.f, TW, BoxH - 16.f, PanelText);
+			PanelLabel(Canvas, Xr + TW * 0.5f - 3.f, BoxY - 16.f, FString::Printf(TEXT("%d"), t), PanelText);
+			PanelTile(Canvas, Xr + TW * 0.5f - 0.5f, BoxY - 4.f, 1.f, 14.f, PanelText);
 		}
 
 		// Scale, so the strip is a drawing rather than a picture.
@@ -7488,34 +7535,41 @@ void ATUCoasterRide::DrawConsole(UCanvas* Canvas)
 		// pointing at what it says.
 		Ty += 2.f;
 
+		// TWO ROWS TALL, and DISPATCH and E-STOP in the large face: they are the
+		// two controls an operator's hand goes to, and on a real console they are
+		// the two that are physically bigger than everything else. AUTO/MANUAL
+		// and RESET keep the body size inside the same height.
+		float Bh = Row * 2.f - 2.f;   // the rows below put it back to one row
 		auto Button = [&](float Bx, float Bw, const TCHAR* Label, int32 Action,
-			const FLinearColor& Col, bool bEnabled)
+			const FLinearColor& Col, bool bEnabled, bool bBig = false)
 		{
-			ConsoleRects.Add(FVector4(Lx + Bx, Ty, Lx + Bx + Bw, Ty + Row - 2.f));
+			ConsoleRects.Add(FVector4(Lx + Bx, Ty, Lx + Bx + Bw, Ty + Bh));
 			ConsoleAction.Add(Action);
 			// HELD SHOWS AS HELD. A button that looks identical pressed and
 			// released is one nobody can tell they are still holding, which for an
 			// anti-tie-down control is the whole point of it.
 			const bool bHeld = HeldConsoleButton == Action;
-			PanelTile(Canvas, Lx + Bx, Ty, Bw, Row - 2.f,
+			PanelTile(Canvas, Lx + Bx, Ty, Bw, Bh,
 				bHeld ? Col : FLinearColor(0.10f, 0.12f, 0.14f, 1.f));
-			PanelLabel(Canvas, Lx + Bx + 8.f, Ty + 1.f, Label,
-				bHeld ? PanelGround : (bEnabled ? Col : PanelDim));
+			const FLinearColor Ink = bHeld ? PanelGround : (bEnabled ? Col : PanelDim);
+			if (bBig) { PanelLabelBig(Canvas, Lx + Bx + 8.f, Ty + 4.f, Label, Ink); }
+			else      { PanelLabel(Canvas, Lx + Bx + 8.f, Ty + (Bh - 13.f) * 0.5f, Label, Ink); }
 		};
 
 		Button(0.f, 104.f, TEXT("DISPATCH"), 0, PanelGreen,
-			Console != nullptr && Console->Process.IsReadyToDispatch());
+			Console != nullptr && Console->Process.IsReadyToDispatch(), true);
 		// AUTO/MANUAL is the one that changes what the ride DOES rather than
 		// commanding a single action, so it reads as a mode and says which it is
 		// in — never as a button labelled with the mode you would be switching to,
 		// which is the ambiguity every toggle-labelled control has.
 		Button(116.f, 104.f, bManualDispatch ? TEXT("MANUAL") : TEXT("AUTO"), 3,
-			PanelCyan, true);
-		Button(232.f, 104.f, TEXT("E-STOP"), 1, PanelRed, !bStop);
+			PanelCyan, true, false);
+		Button(232.f, 104.f, TEXT("E-STOP"), 1, PanelRed, !bStop, true);
 		Button(348.f, 104.f,
 			bStop && Drives->AnyUnacknowledged() ? TEXT("ACKNOWLEDGE") : TEXT("RESET"), 2,
-			bStop && Drives->AnyUnacknowledged() ? PanelAmber : PanelCyan, bStop);
-		Ty += Row;
+			bStop && Drives->AnyUnacknowledged() ? PanelAmber : PanelCyan, bStop, false);
+		Ty += Bh + 2.f;
+		Bh = Row - 2.f;
 
 		// ---- THE OPERATOR'S OWN ROW, when there is an operator -------------
 		//
