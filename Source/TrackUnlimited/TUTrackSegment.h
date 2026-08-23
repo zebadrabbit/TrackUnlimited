@@ -253,6 +253,27 @@ struct FTUTrackStyle
 	UPROPERTY(EditAnywhere, Category = "Style")
 	FLinearColor TrainColour = FLinearColor(0.55f, 0.06f, 0.05f);
 
+	// ---- EVERY SECTION IS A KNOB. A textured section (concrete, rubber, painted
+	// steel) takes its colour as a TINT multiplied over the texture, so the same
+	// field repaints a flat surface and a textured one alike; white is "as
+	// photographed". These are the colours the developer will want per ride,
+	// and they are here rather than hardcoded in the paint so they save with
+	// the style and show in the panel.
+	UPROPERTY(EditAnywhere, Category = "Style")
+	FLinearColor CatwalkDeckColour = FLinearColor(0.16f, 0.17f, 0.18f);
+	UPROPERTY(EditAnywhere, Category = "Style")
+	FLinearColor CatwalkRailColour = FLinearColor(0.85f, 0.62f, 0.08f);
+	/** Chain trough, brake fins, stators, tyre motors, airgates, cabinet. */
+	UPROPERTY(EditAnywhere, Category = "Style")
+	FLinearColor HardwareSteelColour = FLinearColor(1.0f, 1.0f, 1.0f);
+	/** Pads, tread, chain, magnet faces. */
+	UPROPERTY(EditAnywhere, Category = "Style")
+	FLinearColor HardwareRubberColour = FLinearColor(0.35f, 0.35f, 0.35f);
+	UPROPERTY(EditAnywhere, Category = "Style")
+	FLinearColor PlatformColour = FLinearColor(1.0f, 1.0f, 1.0f);
+	UPROPERTY(EditAnywhere, Category = "Style")
+	FLinearColor StripeColour = FLinearColor(0.95f, 0.80f, 0.05f);
+
 	// ---- Section. The same knobs FTrackProfile carries, surfaced so a style is
 	// one thing to pick rather than a colour plus six numbers somewhere else.
 	UPROPERTY(EditAnywhere, Category = "Style", meta = (ClampMin = "0.4", ClampMax = "2.0"))

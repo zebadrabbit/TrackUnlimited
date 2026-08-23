@@ -8736,8 +8736,8 @@ void ATUCoasterRide::ApplyTrackStyle()
 	// ponytail: colour only on one engine material; roughness/metal per section
 	// wants a material asset, which is an editor job.
 	Paint(SupportMaterial, SupportMesh, S.SupportColour);
-	Paint(CatwalkDeckMaterial, CatwalkDeckMesh, FLinearColor(0.16f, 0.17f, 0.18f));
-	Paint(CatwalkRailMaterial, CatwalkRailMesh, FLinearColor(0.85f, 0.62f, 0.08f));
+	Paint(CatwalkDeckMaterial, CatwalkDeckMesh, S.CatwalkDeckColour);
+	Paint(CatwalkRailMaterial, CatwalkRailMesh, S.CatwalkRailColour);
 	// ===================== TEXTURED WHERE A TEXTURE EARNS IT =====================
 	//
 	// Concrete, rubber and painted steel are the three surfaces a flat colour
@@ -8753,16 +8753,25 @@ void ATUCoasterRide::ApplyTrackStyle()
 		if (!Mesh) { return; }
 		if (UMaterialInterface* M = LoadObject<UMaterialInterface>(nullptr, Path))
 		{
-			Mesh->SetMaterial(0, M);
-			return;
+			// A DYNAMIC INSTANCE OF THE TEXTURED ONE, so the style's colour is
+			// the Tint over the texture: the same field that paints a flat
+			// section repaints a textured one. Recreated when the parent
+			// changes, which is a style swap and not a frame.
+			if (!Mid || Mid->Parent != M) { Mid = UMaterialInstanceDynamic::Create(M, this); }
+			if (Mid)
+			{
+				Mid->SetVectorParameterValue(TEXT("Tint"), Fallback);
+				Mesh->SetMaterial(0, Mid);
+				return;
+			}
 		}
 		Paint(Mid, Mesh, Fallback);
 	};
-	Textured(DeviceSteelMaterial, DeviceSteelMesh, TEXT("/Game/Env/Materials/MI_WhiteSteel.MI_WhiteSteel"), S.SupportColour);
-	Textured(DeviceRubberMaterial, DeviceRubberMesh, TEXT("/Game/Env/Materials/MI_Rubber.MI_Rubber"), FLinearColor(0.06f, 0.06f, 0.06f));
-	Textured(StationConcreteMaterial, StationConcreteMesh, TEXT("/Game/Env/Materials/MI_Concrete.MI_Concrete"), FLinearColor(0.52f, 0.51f, 0.49f));
-	Textured(StationSteelMaterial, StationSteelMesh, TEXT("/Game/Env/Materials/MI_WhiteSteel.MI_WhiteSteel"), FLinearColor(0.62f, 0.64f, 0.68f));
-	Paint(StationStripeMaterial, StationStripeMesh, FLinearColor(0.95f, 0.80f, 0.05f));
+	Textured(DeviceSteelMaterial, DeviceSteelMesh, TEXT("/Game/Env/Materials/MI_WhiteSteel.MI_WhiteSteel"), S.HardwareSteelColour);
+	Textured(DeviceRubberMaterial, DeviceRubberMesh, TEXT("/Game/Env/Materials/MI_Rubber.MI_Rubber"), S.HardwareRubberColour);
+	Textured(StationConcreteMaterial, StationConcreteMesh, TEXT("/Game/Env/Materials/MI_Concrete.MI_Concrete"), S.PlatformColour);
+	Textured(StationSteelMaterial, StationSteelMesh, TEXT("/Game/Env/Materials/MI_WhiteSteel.MI_WhiteSteel"), S.HardwareSteelColour);
+	Paint(StationStripeMaterial, StationStripeMesh, S.StripeColour);
 	Paint(TrainBodyMaterial, TrainBodyMesh, S.TrainColour);
 	Paint(TrainChassisMaterial, TrainChassisMesh, FLinearColor(0.10f, 0.11f, 0.12f));
 	Paint(TrainWheelMaterial, TrainWheelMesh, FLinearColor(0.05f, 0.05f, 0.05f));
