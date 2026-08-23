@@ -80,10 +80,8 @@ maps rather than roughness; where used, roughness is derived as one minus spec.
 
 | File | Title | Author | Source | Licence | Modified |
 |---|---|---|---|---|---|
-| `Content/Env/Textures/ConcreteFloorWorn001/` | Concrete Floor Worn 001 | Poly Haven | [polyhaven.com/a/concrete_floor_worn_001](https://polyhaven.com/a/concrete_floor_worn_001) | CC0 | no |
 | `Content/Env/Textures/PlasteredWall04/` | Plastered Wall 04 | Poly Haven | [polyhaven.com/a/plastered_wall_04](https://polyhaven.com/a/plastered_wall_04) | CC0 | no |
 | `Content/Env/Textures/PaintedPlasterWall/` | Painted Plaster Wall | Poly Haven | [polyhaven.com/a/painted_plaster_wall](https://polyhaven.com/a/painted_plaster_wall) | CC0 | no |
-| `Content/Env/Textures/WhiteStucco/` | White Stucco | Poly Haven | [polyhaven.com/a/white_stucco](https://polyhaven.com/a/white_stucco) | CC0 | no |
 | `Content/Env/Textures/RubberTiles/` | Rubber Tiles | Poly Haven | [polyhaven.com/a/rubber_tiles](https://polyhaven.com/a/rubber_tiles) | CC0 | no |
 | `Content/Env/Textures/WhitePaintedSteel/` | White painted steel | generated for this project by the developer | — | MIT (original) | — |
 

@@ -280,7 +280,7 @@ struct FTUTrackStyle
 	// rather than a load failure. The Tint above multiplies whatever is here.
 	UPROPERTY(EditAnywhere, Category = "Style")
 	TSoftObjectPtr<UMaterialInterface> PlatformMaterial =
-		TSoftObjectPtr<UMaterialInterface>(FSoftObjectPath(TEXT("/Game/Env/Materials/MI_Concrete.MI_Concrete")));
+		TSoftObjectPtr<UMaterialInterface>(FSoftObjectPath(TEXT("/Game/Env/Materials/MI_PlasteredWall04.MI_PlasteredWall04")));
 	UPROPERTY(EditAnywhere, Category = "Style")
 	TSoftObjectPtr<UMaterialInterface> HardwareSteelMaterial =
 		TSoftObjectPtr<UMaterialInterface>(FSoftObjectPath(TEXT("/Game/Env/Materials/MI_WhiteSteel.MI_WhiteSteel")));
