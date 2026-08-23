@@ -231,6 +231,7 @@ enum class ETemplatePreset
     TwoTrainCircuit,
     SmallBatch,
     Showcase,
+    Sidewinder,
     Blank,
 };
 
@@ -242,7 +243,7 @@ struct FTemplate
     ETemplatePreset Preset = ETemplatePreset::Blank;
 };
 
-inline std::size_t NumTemplates() { return 5; }
+inline std::size_t NumTemplates() { return 6; }
 
 inline FTemplate TemplateAt(std::size_t i)
 {
@@ -282,6 +283,17 @@ inline FTemplate TemplateAt(std::size_t i)
                 "panel says whether the block is long enough for that.",
                 ETemplatePreset::Showcase};
     case 4:
+        return {"Sidewinder — a ride built to a brief",
+                "Chain lift, 40 degree drop, a banked 180, a snake banked both ways, two "
+                "airtime hills, a helix, and a station three metres above the ground. "
+                "Seven cars, three trains on four holding places. The first layout here "
+                "designed as a ride rather than to prove a device.",
+                "Change the mid-course block brake's release speed from 25 to 19 and "
+                "ride it: the return leg runs out of energy on the final rise. The "
+                "brake is a BLOCK more than a brake on this ride, and the profile "
+                "graph shows why.",
+                ETemplatePreset::Sidewinder};
+    case 5:
     default:
         return {"Blank",
                 "Nothing at all. For somebody who already knows what they are doing.",

@@ -357,6 +357,7 @@ TArray<FTUTrackSegment> ATUCoasterRide::PresetLayout(ETUPresetLayout Which)
 	case ETUPresetLayout::TwoTrainCircuit: return TwoTrainCircuitLayout();
 	case ETUPresetLayout::SmallBatch:      return SmallBatchLayout();
 	case ETUPresetLayout::Showcase:        return ShowcaseLayout();
+	case ETUPresetLayout::Sidewinder:      return SidewinderLayout();
 	default:                               return ReferenceLayout();
 	}
 }
@@ -464,6 +465,14 @@ void ATUCoasterRide::ApplyPresetTrainSetup(ETUPresetLayout Which)
 	case ETUPresetLayout::TwoTrainCircuit:
 		CarCount = 5; CarLengthM = 3.f;   // 15 m, exactly as before
 		TrainCount = 2;
+		break;
+	case ETUPresetLayout::Sidewinder:
+		// SEVEN CARS, 21 m, which is the brief, and every holding device on the
+		// ride is 26-30 m for it. Four holding places -- station, lift, the
+		// mid-course block and the final block -- run three trains: two
+		// moving, one staging.
+		CarCount = 7; CarLengthM = 3.f;
+		TrainCount = 3;
 		break;
 	default:
 		CarCount = 5; CarLengthM = 3.f;   // 15 m, exactly as before
@@ -1004,6 +1013,126 @@ TArray<FTUTrackSegment> ATUCoasterRide::ShowcaseLayout()
 		Out.Insert(Trim, i);
 		break;
 	}
+	return Out;
+}
+
+TArray<FTUTrackSegment> ATUCoasterRide::SidewinderLayout()
+{
+	// ===================== THE SIDEWINDER =====================
+	//
+	// Built to a brief (2026-08-23): about 45 s after the lift, a train of
+	// seven, a chain lift and a drop, banking left AND right, a helix, small
+	// hills back to the station, block brakes for two trains moving and one
+	// staging, the station a little above the ground.
+	//
+	// EVERY NUMBER HERE WAS SOLVED OR MEASURED in design_sidewinder.cpp, which
+	// is the design and not a copy of it: run it before changing one. The two
+	// closure lengths are its output. The things that were learned building
+	// it are on the Trello card and in that file's UX: comments -- a helix's
+	// Turns must be reduced by its easements, a 25 degree bend at R 35 with
+	// 25 m easements has a NEGATIVE arc and is silently dropped, the plan
+	// lever has to sit on the run whose direction it extends, and a 3 m rise
+	// before a 150 m turn is a stall.
+	//
+	// Measured: 54 segments, 1206.6 m, closes to 52 um, completes in 85 s of
+	// which 9 are the station crawl and 8 the final brake, top 110.5 km/h at
+	// 258 m, -0.40..+3.28 g vertical, 0.58 g lateral, roll rate 52 deg/s,
+	// crest 46.5 m, lowest point 3.1 m below the station.
+	const double DropLen = 19.5994663;   // the height lever
+	const double FillLen = 69.4148273;   // the plan lever, on the OUTBOUND leg
+	const double HelixR = 18.0;
+	// ONE FULL TURN INCLUDING THE EASEMENTS: each 20 m clothoid to 1/18 turns
+	// L*k/2 radians, and a helix's Turns does not subtract them for you.
+	const double HelixTurns = 1.0 - (2.0 * (20.0 / HelixR) * 0.5) / (2.0 * Pi);
+
+	TArray<FTUTrackSegment> Out;
+	auto Device = [&Out](double Length, ETUSegmentZone Zone, float Speed, float Accel, float Decel, float Pad)
+	{
+		AddStraight(Out, Length, Zone, Speed);
+		Out.Last().ZoneAccel = Accel;
+		Out.Last().ZoneDecel = Decel;
+		Out.Last().ZoneBrakeDecel = Pad;
+	};
+	auto LiftPitch = [&Out](double DeltaRad, double K)
+	{
+		AddEasedPitch(Out, DeltaRad, K, ETUSegmentZone::Lift, 8.f);
+		Out[Out.Num() - 2].ZoneAccel = Out[Out.Num() - 2].ZoneDecel = 8.f;
+		Out[Out.Num() - 1].ZoneAccel = Out[Out.Num() - 1].ZoneDecel = 8.f;
+	};
+	auto Hill = [&Out](double AngleDeg, double K)
+	{
+		AddEasedPitch(Out, Deg(AngleDeg), K);
+		AddEasedPitch(Out, -2.0 * Deg(AngleDeg), K);
+		AddEasedPitch(Out, Deg(AngleDeg), K);
+	};
+
+	// ---- STATION and the LIFT: chain at 8 m/s and 8 m/s^2 of grip (a 35
+	// degree chain needs 5.6 just to hold), 35 degrees, crest 46.5 m.
+	Device(26.0, ETUSegmentZone::Station, 3.f, 1.5f, 1.5f, 0.f);
+	Device(6.0, ETUSegmentZone::Lift, 8.f, 8.f, 8.f, 0.f);
+	LiftPitch(Deg(35.0), 0.05);
+	Device(56.0, ETUSegmentZone::Lift, 8.f, 8.f, 8.f, 0.f);
+	LiftPitch(-Deg(35.0), 0.05);
+	Device(4.0, ETUSegmentZone::Lift, 8.f, 8.f, 8.f, 0.f);
+	for (int32 i = 1; i < Out.Num(); ++i) { Out[i].bAntiRollback = true; }
+
+	// ---- THE DROP, 40 degrees, and the fill at the bottom where the train
+	// is fastest and a straight costs least.
+	AddEasedPitch(Out, -Deg(40.0), 0.025);
+	AddStraight(Out, DropLen);
+	AddEasedPitch(Out, Deg(40.0), 0.025);
+	AddStraight(Out, FillLen);
+
+	// ---- TURN 1: 180 left at 27 m/s.
+	AddBankedTurn(Out, 35.0, Pi * 35.0 - 40.0, 40.0, BankDegreesFor(27.0, 35.0));
+
+	// ---- MID-COURSE BLOCK BRAKE: a BLOCK more than a brake at 25 m/s out,
+	// because the return leg loses about 0.4 m/s^2 to drag over 700 m and then
+	// climbs 3 m, and that is all of its energy.
+	Device(30.0, ETUSegmentZone::BlockBrake, 25.f, 6.f, 6.f, 4.f);
+
+	// ---- THE SNAKE: right, left, left, right at R 45, 45 degree bends with
+	// 25 m easements, banked for 24 m/s. Plan-neutral by symmetry.
+	const double Sb = BankDegreesFor(24.0, 45.0);
+	const double SnakeArc = Deg(45.0) * 45.0 - 25.0;
+	AddBankedTurn(Out, -45.0, SnakeArc, 25.0, -Sb);
+	AddBankedTurn(Out, 45.0, SnakeArc, 25.0, Sb);
+	AddBankedTurn(Out, 45.0, SnakeArc, 25.0, Sb);
+	AddBankedTurn(Out, -45.0, SnakeArc, 25.0, -Sb);
+
+	// ---- TWO AIRTIME HILLS.
+	Hill(16.0, 0.035);
+	Hill(12.0, 0.04);
+
+	// ---- THE HELIX: one full turn left, LEVEL, banked for 15 m/s.
+	const double Hb = BankDegreesFor(15.0, HelixR);
+	{
+		FTUTrackSegment In;
+		In.Kind = ETUSegmentKind::Clothoid; In.Length = 20.f;
+		In.CurvatureStart = 0.f; In.CurvatureEnd = static_cast<float>(1.0 / HelixR);
+		In.RollEndDegrees = static_cast<float>(Hb);
+		Out.Add(In);
+		FTUTrackSegment H;
+		H.Kind = ETUSegmentKind::Helix; H.Radius = static_cast<float>(HelixR);
+		H.ClimbAngleDegrees = 0.f; H.Turns = static_cast<float>(HelixTurns);
+		H.RollStartDegrees = H.RollEndDegrees = static_cast<float>(Hb);
+		Out.Add(H);
+		FTUTrackSegment Ex;
+		Ex.Kind = ETUSegmentKind::Clothoid; Ex.Length = 20.f;
+		Ex.CurvatureStart = static_cast<float>(1.0 / HelixR); Ex.CurvatureEnd = 0.f;
+		Ex.RollStartDegrees = static_cast<float>(Hb);
+		Out.Add(Ex);
+	}
+
+	// ---- TURN 2, identical to turn 1 (radius AND easement) or the return
+	// line lands 2 x dR off the station line; taken at the low level.
+	AddBankedTurn(Out, 35.0, Pi * 35.0 - 40.0, 40.0, BankDegreesFor(12.0, 35.0));
+
+	// ---- THE RISE to the station, 3 m at 12 degrees, then the final block.
+	AddEasedPitch(Out, Deg(12.0), 0.03);
+	AddStraight(Out, 1.0);
+	AddEasedPitch(Out, -Deg(12.0), 0.03);
+	Device(26.0, ETUSegmentZone::BlockBrake, 3.f, 3.f, 3.f, 3.f);
 	return Out;
 }
 
@@ -3349,6 +3478,7 @@ bool ATUCoasterRide::PresetForTemplate(ETemplatePreset T, ETUPresetLayout& Out)
 	case ETemplatePreset::TwoTrainCircuit: Out = ETUPresetLayout::TwoTrainCircuit; return true;
 	case ETemplatePreset::SmallBatch:      Out = ETUPresetLayout::SmallBatch; return true;
 	case ETemplatePreset::Showcase:        Out = ETUPresetLayout::Showcase; return true;
+	case ETemplatePreset::Sidewinder:      Out = ETUPresetLayout::Sidewinder; return true;
 	case ETemplatePreset::Blank:           return false;
 	default:                               Out = ETUPresetLayout::Reference; return true;
 	}
@@ -5749,6 +5879,49 @@ bool ATUCoasterRide::RunDocumentSmokeTest()
 				Segments.Num(), Track.TotalLength(), Profile_.TopSpeed * 3.6,
 				Profile_.Duration, Profile_.MinVerticalG, Profile_.MaxVerticalG,
 				Profile_.MaxAbsLateralG, Pads, Trims, CarCount, CarLengthM);
+		}
+	}
+
+	// ===================== AND THE SIDEWINDER IS A RIDE =====================
+	//
+	// The first layout built to a brief. What the brief asked for is asserted
+	// rather than admired: a circuit that closes, a ride that completes, seven
+	// cars, three trains on four holding places, a station above the lowest
+	// point, banking both ways, a helix. The figures are the design program's
+	// (design_sidewinder.cpp); the engine re-derives them through the authored
+	// path and they must agree.
+	{
+		StartFromTemplate(4);
+		int32 Holding = 0, Helices = 0;
+		bool bLeft = false, bRight = false;
+		for (const FTUTrackSegment& S : Segments)
+		{
+			if (S.Kind == ETUSegmentKind::Helix) { ++Helices; }
+			if (S.Kind == ETUSegmentKind::Arc && S.Radius > 0.f) { bLeft = true; }
+			if (S.Kind == ETUSegmentKind::Arc && S.Radius < 0.f) { bRight = true; }
+		}
+		Holding = HoldingPlaces;
+		const double StationAboveGround = -Profile_.LowestHeight;
+		if (!bTrackIsCircuit || !Profile_.bCompleted || Holding != 4 || Trains.Num() != 3
+			|| CarCount != 7 || Helices != 1 || !bLeft || !bRight
+			|| StationAboveGround < 2.5 || StationAboveGround > 4.0
+			|| Profile_.TopSpeed * 3.6 < 100.0 || Profile_.MaxVerticalG > 3.6)
+		{
+			UE_LOG(LogTUEvents, Error,
+				TEXT("smoke: the sidewinder is not the ride it was designed to be (circuit %d, completed %d, ")
+				TEXT("holding %d, trains %d, cars %d, helices %d, left %d, right %d, station %.1f m up, top %.1f km/h, %.2f g)"),
+				bTrackIsCircuit, Profile_.bCompleted, Holding, Trains.Num(), CarCount, Helices, bLeft, bRight,
+				StationAboveGround, Profile_.TopSpeed * 3.6, Profile_.MaxVerticalG);
+			Failures.Add(TEXT("sidewinder"));
+		}
+		else
+		{
+			UE_LOG(LogTUEvents, Log,
+				TEXT("smoke: the sidewinder closes and runs -- %d segments, %.1f m, top %.1f km/h, %.0f s, ")
+				TEXT("%.2f..%+.2f g vertical, %.2f lateral, station %.1f m above the ground, %d trains of %d on %d holding places"),
+				Segments.Num(), Track.TotalLength(), Profile_.TopSpeed * 3.6, Profile_.Duration,
+				Profile_.MinVerticalG, Profile_.MaxVerticalG, Profile_.MaxAbsLateralG,
+				StationAboveGround, Trains.Num(), CarCount, Holding);
 		}
 	}
 

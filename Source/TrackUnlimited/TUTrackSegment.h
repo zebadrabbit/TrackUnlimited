@@ -173,6 +173,13 @@ enum class ETUPresetLayout : uint8
 	// Same geometry as the circuit it derives from, deliberately -- closure is the
 	// expensive property and it is bought by the leg lengths.
 	Showcase UMETA(DisplayName = "Showcase (every device, small-batch platform)"),
+
+	// THE FIRST RIDE BUILT TO A BRIEF rather than to prove a feature (2026-08-23):
+	// chain lift, 40 degree drop, a banked 180, a snake banked both ways, two
+	// airtime hills, a helix, a station 3 m above the ground, four holding
+	// places for three trains of seven cars. Designed and SOLVED in
+	// Prototypes/TrackSpline/design_sidewinder.cpp; every number here is from it.
+	Sidewinder UMETA(DisplayName = "Sidewinder (lift, drop, snake, helix)"),
 };
 
 // Which side of the track an evacuation catwalk runs down.
