@@ -697,6 +697,14 @@ private:
 	int32 StationTriangles = 0;
 
 	/**
+	 * WHERE THE GROUND IS, for the support placer: the level's Landscape,
+	 * sampled at each candidate footing, falling back to the flat datum when
+	 * there is none. The placer has taken a function since it was written so
+	 * that this would be a swap (TrackSupports.h), and it is.
+	 */
+	FGroundHeight GroundFunction() const;
+
+	/**
 	 * WHICH SIDE A PRESET PUTS ITS CATWALKS ON. It was hardcoded to Both, and the
 	 * argument for that read well and did not survive being looked at: every
 	 * powered run on every shipped ride got a deck and a handrail down both

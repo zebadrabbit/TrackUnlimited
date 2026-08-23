@@ -82,6 +82,7 @@ maps rather than roughness; where used, roughness is derived as one minus spec.
 |---|---|---|---|---|---|
 | `Content/Env/Textures/PlasteredWall04/` | Plastered Wall 04 | Poly Haven | [polyhaven.com/a/plastered_wall_04](https://polyhaven.com/a/plastered_wall_04) | CC0 | no |
 | `Content/Env/Textures/PaintedPlasterWall/` | Painted Plaster Wall | Poly Haven | [polyhaven.com/a/painted_plaster_wall](https://polyhaven.com/a/painted_plaster_wall) | CC0 | no |
+| `Content/Env/Textures/Ground062S/` | Ground 062S | ambientCG | [ambientcg.com/view?id=Ground062S](https://ambientcg.com/view?id=Ground062S) | CC0 | no |
 | `Content/Env/Textures/RubberTiles/` | Rubber Tiles | Poly Haven | [polyhaven.com/a/rubber_tiles](https://polyhaven.com/a/rubber_tiles) | CC0 | no |
 | `Content/Env/Textures/WhitePaintedSteel/` | White painted steel | generated for this project by the developer | — | MIT (original) | — |
 

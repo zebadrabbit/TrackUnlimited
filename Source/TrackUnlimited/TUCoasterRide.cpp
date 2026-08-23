@@ -7,6 +7,8 @@
 #include "UI/TUMenuWidget.h"
 #include "UI/TUSegmentEditorWidget.h"
 #include "UI/TUPaintedPanelWidget.h"
+#include "LandscapeProxy.h"
+#include "EngineUtils.h"
 #include "Framework/Application/SlateApplication.h"
 #include "Fonts/FontMeasure.h"
 #include "UI/TUStyle.h"
@@ -3824,6 +3826,34 @@ void ATUCoasterRide::RecordPaintedPanels(TArray<FTUPanelCmd>& Out, float SizeY, 
 	GPanelRecord = nullptr;
 }
 
+FGroundHeight ATUCoasterRide::GroundFunction() const
+{
+	// THE LANDSCAPE IS THE GROUND. The level carries one (the mountains are
+	// sculpted into it) and it is flat at the datum where the track is, so on
+	// today's layouts this and the flat default agree to the millimetre -- the
+	// difference appears the day somebody runs track up a hill, and then a
+	// column reaches the dirt rather than a plane 30 m below it.
+	ALandscapeProxy* Land = nullptr;
+	if (UWorld* World = GetWorld())
+	{
+		for (TActorIterator<ALandscapeProxy> It(World); It; ++It) { Land = *It; break; }
+	}
+	if (!Land) { return FlatGround(-GroundOffsetM); }
+	const double Datum = -GroundOffsetM;
+	const FTransform Xf = GetActorTransform();
+	const double Offset = GroundOffsetM;
+	return [Land, Datum, Xf, Offset](double X, double Y)
+	{
+		// Track space to world: mirror Y, lift by the ground offset, metres to
+		// centimetres -- ToWorld's rule, repeated here because a lambda cannot
+		// call a member through a const this it was not given.
+		const FVector W = Xf.TransformPosition(FVector(X, -Y, Offset) * MetresToUU);
+		TOptional<float> H = Land->GetHeightAtLocation(W);
+		if (!H.IsSet()) { return Datum; }
+		return static_cast<double>(H.GetValue()) / MetresToUU - Offset;
+	};
+}
+
 void ATUCoasterRide::ShowPaintedWidget(bool bShow)
 {
 	if (!bShow)
@@ -6325,7 +6355,7 @@ void ATUCoasterRide::BuildDiagnostics()
 		std::vector<FMeshFinding> Ignored;
 		const FSupportPlan Plan = PlanSupports(WalkTrack(Track, 1.0),
 			Track.GetHeartlineHeight(), Profile, FSupportSettings(),
-			FlatGround(-GroundOffsetM));
+			GroundFunction());
 		for (const FSupportFinding& F : Plan.Finding)
 		{
 			FDiagTarget T;
@@ -9046,7 +9076,7 @@ void ATUCoasterRide::RebuildTrackMesh()
 			// The TRACK profile (the cross-section), not the RIDE profile. Two
 			// different things one letter apart, and the compiler caught it.
 			Track.GetHeartlineHeight(), Profile, FSupportSettings(),
-			FlatGround(-GroundOffsetM));
+			GroundFunction());
 		PushMeshSection(SupportMesh, BuildSupportMesh(Plan));
 		// THE FOOTINGS ARE COUNTED SEPARATELY because they do not correspond one to
 		// one: at-grade track gets a pad and no column, which is the station.
