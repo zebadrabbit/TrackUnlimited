@@ -8708,25 +8708,39 @@ void ATUCoasterRide::ApplyTrackStyle()
 	}
 
 	const FTUTrackStyle S = ActiveStyle();
-	auto Paint = [this](TObjectPtr<UMaterialInstanceDynamic>& Mid,
-		UProceduralMeshComponent* Mesh, const FLinearColor& C)
+	// ===================== A FLAT SECTION HAS A SHEEN AS WELL AS A COLOUR =====================
+	//
+	// M_Flat (Content/Env/Materials, built headlessly) carries Tint, Roughness
+	// and Metallic, which is what separates a polished rail from a painted
+	// spine from a rubber tyre -- the per-section roughness/metal the style card
+	// left open because it needed a material asset. The engine base, with its
+	// colour and nothing else, is still the fallback when the asset is missing.
+	// ponytail: roughness and metal are per-section constants at the call
+	// sites; the COLOURS are the knobs. Promote a pair to FTUTrackStyle when
+	// somebody wants to edit one.
+	UMaterialInterface* Flat = LoadObject<UMaterialInterface>(nullptr, TEXT("/Game/Env/Materials/M_Flat.M_Flat"));
+	auto Paint = [this, Flat](TObjectPtr<UMaterialInstanceDynamic>& Mid,
+		UProceduralMeshComponent* Mesh, const FLinearColor& C, float Roughness = 0.5f, float Metallic = 0.f)
 	{
 		if (!Mesh) { return; }
-		if (!Mid) { Mid = UMaterialInstanceDynamic::Create(BaseMaterial, this); }
+		UMaterialInterface* Parent = Flat ? Flat : BaseMaterial.Get();
+		if (!Mid || Mid->Parent != Parent) { Mid = UMaterialInstanceDynamic::Create(Parent, this); }
 		if (!Mid) { return; }
-		// The engine base exposes a "Color" parameter. Setting one that does not
-		// exist is a no-op rather than an error, so this degrades to plain grey
-		// rather than failing if the asset ever changes.
+		// Setting a parameter that does not exist is a no-op rather than an
+		// error, so this degrades to the engine base's plain colour.
 		Mid->SetVectorParameterValue(TEXT("Color"), C);
+		Mid->SetVectorParameterValue(TEXT("Tint"), C);
+		Mid->SetScalarParameterValue(TEXT("Roughness"), Roughness);
+		Mid->SetScalarParameterValue(TEXT("Metallic"), Metallic);
 		Mesh->SetMaterial(0, Mid);
 	};
 
 	// THREE MATERIALS FOR THREE BUFFERS, which is why the mesher emits three:
 	// running rail is polished where the wheels touch it, spine is painted
 	// structure, ties are usually neither.
-	Paint(RailMaterial, RailMesh, S.RailColour);
-	Paint(SpineMaterial, SpineMesh, S.SpineColour);
-	Paint(TieMaterial, TieMesh, S.TieColour);
+	Paint(RailMaterial, RailMesh, S.RailColour, 0.30f, 0.85f);     // polished where the wheels run
+	Paint(SpineMaterial, SpineMesh, S.SpineColour, 0.45f, 0.10f);  // painted structure
+	Paint(TieMaterial, TieMesh, S.TieColour, 0.55f, 0.30f);
 
 	// AND THE OTHER SEVEN, which were all the engine's grey. The sections exist
 	// BECAUSE they are different materials, and every one drew as the same one.
@@ -8735,9 +8749,9 @@ void ATUCoasterRide::ApplyTrackStyle()
 	// dark steel, a wheel is polyurethane over a hub, a coupler is steel.
 	// ponytail: colour only on one engine material; roughness/metal per section
 	// wants a material asset, which is an editor job.
-	Paint(SupportMaterial, SupportMesh, S.SupportColour);
-	Paint(CatwalkDeckMaterial, CatwalkDeckMesh, S.CatwalkDeckColour);
-	Paint(CatwalkRailMaterial, CatwalkRailMesh, S.CatwalkRailColour);
+	Paint(SupportMaterial, SupportMesh, S.SupportColour, 0.50f, 0.25f);         // galvanised
+	Paint(CatwalkDeckMaterial, CatwalkDeckMesh, S.CatwalkDeckColour, 0.85f, 0.30f);  // grating
+	Paint(CatwalkRailMaterial, CatwalkRailMesh, S.CatwalkRailColour, 0.40f, 0.10f);
 	// ===================== TEXTURED WHERE A TEXTURE EARNS IT =====================
 	//
 	// Concrete, rubber and painted steel are the three surfaces a flat colour
@@ -8771,11 +8785,11 @@ void ATUCoasterRide::ApplyTrackStyle()
 	Textured(DeviceRubberMaterial, DeviceRubberMesh, TEXT("/Game/Env/Materials/MI_Rubber.MI_Rubber"), S.HardwareRubberColour);
 	Textured(StationConcreteMaterial, StationConcreteMesh, TEXT("/Game/Env/Materials/MI_Concrete.MI_Concrete"), S.PlatformColour);
 	Textured(StationSteelMaterial, StationSteelMesh, TEXT("/Game/Env/Materials/MI_WhiteSteel.MI_WhiteSteel"), S.HardwareSteelColour);
-	Paint(StationStripeMaterial, StationStripeMesh, S.StripeColour);
-	Paint(TrainBodyMaterial, TrainBodyMesh, S.TrainColour);
-	Paint(TrainChassisMaterial, TrainChassisMesh, FLinearColor(0.10f, 0.11f, 0.12f));
-	Paint(TrainWheelMaterial, TrainWheelMesh, FLinearColor(0.05f, 0.05f, 0.05f));
-	Paint(TrainCouplerMaterial, TrainCouplerMesh, FLinearColor(0.28f, 0.29f, 0.30f));
+	Paint(StationStripeMaterial, StationStripeMesh, S.StripeColour, 0.60f, 0.f);
+	Paint(TrainBodyMaterial, TrainBodyMesh, S.TrainColour, 0.25f, 0.f);        // gelcoat fibreglass
+	Paint(TrainChassisMaterial, TrainChassisMesh, FLinearColor(0.10f, 0.11f, 0.12f), 0.60f, 0.60f);
+	Paint(TrainWheelMaterial, TrainWheelMesh, FLinearColor(0.05f, 0.05f, 0.05f), 0.75f, 0.f);  // polyurethane
+	Paint(TrainCouplerMaterial, TrainCouplerMesh, FLinearColor(0.28f, 0.29f, 0.30f), 0.45f, 0.80f);
 }
 
 void ATUCoasterRide::LoadBrakeSounds()
