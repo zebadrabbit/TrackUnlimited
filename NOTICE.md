@@ -38,6 +38,14 @@ time somebody adds an exception.
    `id__username__title` convention does — a file that gets copied elsewhere then
    still names its author.
 
+7. **Models are for SCENERY, never for the ride.** Track, train, supports,
+   catwalks, devices and the station are generated (see `CLAUDE.md` § the train
+   was designed first, and `Docs/TRAIN_DESIGN.md`): a contributor can read a diff
+   of them and nothing about the simulation depends on a binary. A tree, a
+   rock or a bush is set dressing the physics never reads, and the audio rows
+   above are the precedent for committing it. This rule is what stops the
+   precedent being read as permission to import a coaster.
+
 ## Audio
 
 | File | Title | Author | Source | Licence |
@@ -54,10 +62,29 @@ to is not one anybody should want to contribute to.
 
 ## Meshes, textures and materials
 
-*Nothing yet.* Landscape and foliage are planned; when they land they go here,
-with the columns below filled in per file.
+One row per DOWNLOAD rather than per file where a pack is one archive from one
+page under one licence: the path is the folder every file from that archive
+was imported into, and the original filenames are kept inside it. ONLY WHAT
+IS WIRED IS IMPORTED: a texture in the repository that nothing uses is 15 MB
+on every clone for nobody, so a pack goes in when a material reads it. A
+further sixteen CC0 packs (Poly Haven, ambientCG, OpenGameArt) were selected
+and licence-checked on 2026-08-22 for the landscape pass and are held
+outside the repository until then.
+
+**Import notes that are the same for all of them.** Only colour, normal,
+roughness/ARM and AO maps are imported; displacement, `.blend`, `.usdc`, `.mtlx`,
+`.tres` and preview images are not. Poly Haven normals are OpenGL (flip green
+on import), ambientCG ships both and the DX one is used. Poly Haven's `arm`
+texture is AO / roughness / metallic in R / G / B. Nobiax packs carry specular
+maps rather than roughness; where used, roughness is derived as one minus spec.
 
 | File | Title | Author | Source | Licence | Modified |
+|---|---|---|---|---|---|
+| `Content/Env/Textures/ConcreteFloorWorn001/` | Concrete Floor Worn 001 | Poly Haven | [polyhaven.com/a/concrete_floor_worn_001](https://polyhaven.com/a/concrete_floor_worn_001) | CC0 | no |
+| `Content/Env/Textures/RubberTiles/` | Rubber Tiles | Poly Haven | [polyhaven.com/a/rubber_tiles](https://polyhaven.com/a/rubber_tiles) | CC0 | no |
+| `Content/Env/Textures/WhitePaintedSteel/` | White painted steel | generated for this project by the developer | — | MIT (original) | — |
+
+
 |---|---|---|---|---|---|
 | — | — | — | — | — | — |
 
