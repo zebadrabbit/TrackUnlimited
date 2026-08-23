@@ -8738,10 +8738,30 @@ void ATUCoasterRide::ApplyTrackStyle()
 	Paint(SupportMaterial, SupportMesh, S.SupportColour);
 	Paint(CatwalkDeckMaterial, CatwalkDeckMesh, FLinearColor(0.16f, 0.17f, 0.18f));
 	Paint(CatwalkRailMaterial, CatwalkRailMesh, FLinearColor(0.85f, 0.62f, 0.08f));
-	Paint(DeviceSteelMaterial, DeviceSteelMesh, S.SupportColour);
-	Paint(DeviceRubberMaterial, DeviceRubberMesh, FLinearColor(0.06f, 0.06f, 0.06f));
-	Paint(StationConcreteMaterial, StationConcreteMesh, FLinearColor(0.52f, 0.51f, 0.49f));
-	Paint(StationSteelMaterial, StationSteelMesh, FLinearColor(0.62f, 0.64f, 0.68f));
+	// ===================== TEXTURED WHERE A TEXTURE EARNS IT =====================
+	//
+	// Concrete, rubber and painted steel are the three surfaces a flat colour
+	// cannot fake -- a slab reads as plastic without its grain -- and the three
+	// CC0 packs in Content/Env are exactly those (NOTICE.md). Loaded by path
+	// and FALLING BACK to the flat paint when the asset is missing, because a
+	// build without its content still has to show a platform.
+	// ponytail: loaded on every style apply rather than cached; it is three
+	// asset lookups on a rebuild.
+	auto Textured = [this, &Paint](TObjectPtr<UMaterialInstanceDynamic>& Mid,
+		UProceduralMeshComponent* Mesh, const TCHAR* Path, const FLinearColor& Fallback)
+	{
+		if (!Mesh) { return; }
+		if (UMaterialInterface* M = LoadObject<UMaterialInterface>(nullptr, Path))
+		{
+			Mesh->SetMaterial(0, M);
+			return;
+		}
+		Paint(Mid, Mesh, Fallback);
+	};
+	Textured(DeviceSteelMaterial, DeviceSteelMesh, TEXT("/Game/Env/Materials/MI_WhiteSteel.MI_WhiteSteel"), S.SupportColour);
+	Textured(DeviceRubberMaterial, DeviceRubberMesh, TEXT("/Game/Env/Materials/MI_Rubber.MI_Rubber"), FLinearColor(0.06f, 0.06f, 0.06f));
+	Textured(StationConcreteMaterial, StationConcreteMesh, TEXT("/Game/Env/Materials/MI_Concrete.MI_Concrete"), FLinearColor(0.52f, 0.51f, 0.49f));
+	Textured(StationSteelMaterial, StationSteelMesh, TEXT("/Game/Env/Materials/MI_WhiteSteel.MI_WhiteSteel"), FLinearColor(0.62f, 0.64f, 0.68f));
 	Paint(StationStripeMaterial, StationStripeMesh, FLinearColor(0.95f, 0.80f, 0.05f));
 	Paint(TrainBodyMaterial, TrainBodyMesh, S.TrainColour);
 	Paint(TrainChassisMaterial, TrainChassisMesh, FLinearColor(0.10f, 0.11f, 0.12f));
