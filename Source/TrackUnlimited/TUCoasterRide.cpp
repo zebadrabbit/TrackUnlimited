@@ -2175,6 +2175,16 @@ void ATUCoasterRide::RebuildFromSegments()
 #if WITH_EDITOR
 void ATUCoasterRide::PostEditChangeProperty(FPropertyChangedEvent& Event)
 {
+	// EDITING THE CUSTOM STYLE MEANS YOU WANT IT. The preset was silently
+	// winning over a CustomStyle somebody had just typed into, because the
+	// tick-box next to it was still off -- the developer changed the platform
+	// material and saw nothing. Touching any CustomStyle field turns it on.
+	if (Event.MemberProperty
+		&& Event.MemberProperty->GetFName() == GET_MEMBER_NAME_CHECKED(ATUCoasterRide, CustomStyle))
+	{
+		bUseCustomStyle = true;
+	}
+
 	// Before Super, deliberately: Super reruns the construction script, and
 	// OnConstruction is what rebuilds and redraws. Resetting afterwards would
 	// leave the preview showing the layout that was just replaced.
