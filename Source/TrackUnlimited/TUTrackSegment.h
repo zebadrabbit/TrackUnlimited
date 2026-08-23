@@ -20,6 +20,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Materials/MaterialInterface.h"
 
 #include "TrackSpline/TrackIO.h"
 
@@ -273,6 +274,19 @@ struct FTUTrackStyle
 	FLinearColor PlatformColour = FLinearColor(1.0f, 1.0f, 1.0f);
 	UPROPERTY(EditAnywhere, Category = "Style")
 	FLinearColor StripeColour = FLinearColor(0.95f, 0.80f, 0.05f);
+
+	// ---- WHICH TEXTURE, for the three textured sections. Soft references, so
+	// a style is data and a missing asset is a fallback to the flat colour
+	// rather than a load failure. The Tint above multiplies whatever is here.
+	UPROPERTY(EditAnywhere, Category = "Style")
+	TSoftObjectPtr<UMaterialInterface> PlatformMaterial =
+		TSoftObjectPtr<UMaterialInterface>(FSoftObjectPath(TEXT("/Game/Env/Materials/MI_Concrete.MI_Concrete")));
+	UPROPERTY(EditAnywhere, Category = "Style")
+	TSoftObjectPtr<UMaterialInterface> HardwareSteelMaterial =
+		TSoftObjectPtr<UMaterialInterface>(FSoftObjectPath(TEXT("/Game/Env/Materials/MI_WhiteSteel.MI_WhiteSteel")));
+	UPROPERTY(EditAnywhere, Category = "Style")
+	TSoftObjectPtr<UMaterialInterface> HardwareRubberMaterial =
+		TSoftObjectPtr<UMaterialInterface>(FSoftObjectPath(TEXT("/Game/Env/Materials/MI_Rubber.MI_Rubber")));
 
 	// ---- Section. The same knobs FTrackProfile carries, surfaced so a style is
 	// one thing to pick rather than a colour plus six numbers somewhere else.

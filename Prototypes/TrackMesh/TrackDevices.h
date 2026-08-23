@@ -197,6 +197,13 @@ inline void SweepRect(FMeshBuffer& Out, const std::vector<FRectRing>& R, double 
         const double Su = (k == 1 || k == 2) ? 1.0 : -1.0;
         return R[i].C + R[i].Lat * (Sl * Hw) + R[i].Up * (Su * Hh);
     };
+    // UVs IN METRES ALONG THE RUN, not 0..1 per interval: per-interval UVs
+    // restart the texture every sample, so a 2K plaster read as half-metre
+    // tiles and no grain ever showed. U is arc length, V is the distance
+    // around the section, and a material's Tiling scales both.
+    std::vector<double> Along(R.size(), 0.0);
+    for (std::size_t i = 1; i < R.size(); ++i) { Along[i] = Along[i - 1] + Length(R[i].C - R[i - 1].C); }
+    const double Around[5] = {0.0, 2.0 * Hh, 2.0 * Hh + 2.0 * Hw, 4.0 * Hh + 2.0 * Hw, 4.0 * Hh + 4.0 * Hw};
     // Walls: each of the four edges k..k+1 is a strip along the run.
     for (int k = 0; k < 4; ++k)
     {
@@ -206,11 +213,13 @@ inline void SweepRect(FMeshBuffer& Out, const std::vector<FRectRing>& R, double 
             const std::uint32_t Base = static_cast<std::uint32_t>(Out.Position.size());
             const FVec3 P[4] = {Corner(i, k), Corner(i, k1), Corner(i + 1, k1), Corner(i + 1, k)};
             FVec3 N = Normalised(Cross(P[1] - P[0], P[3] - P[0]));
+            const double U[4] = {Along[i], Along[i], Along[i + 1], Along[i + 1]};
+            const double V[4] = {Around[k], Around[k + 1], Around[k + 1], Around[k]};
             for (int c = 0; c < 4; ++c)
             {
                 Out.Position.push_back(P[c]);
                 Out.Normal.push_back(N);
-                Out.UV.push_back({static_cast<double>(c / 2), static_cast<double>((c == 1 || c == 2) ? 1 : 0)});
+                Out.UV.push_back({U[c], V[c]});
             }
             Out.Index.insert(Out.Index.end(), {Base, Base + 1, Base + 2, Base, Base + 2, Base + 3});
         }
@@ -220,8 +229,8 @@ inline void SweepRect(FMeshBuffer& Out, const std::vector<FRectRing>& R, double 
     {
         const std::size_t i = end == 0 ? 0 : R.size() - 1;
         const std::uint32_t Base = static_cast<std::uint32_t>(Out.Position.size());
-        const FVec3 Along = Normalised(Cross(R[i].Lat, R[i].Up));   // lat x up = along, as tangent x lateral = up
-        const FVec3 N = end == 0 ? Along * -1.0 : Along;
+        const FVec3 Axis = Normalised(Cross(R[i].Lat, R[i].Up));   // lat x up = along, as tangent x lateral = up
+        const FVec3 N = end == 0 ? Axis * -1.0 : Axis;
         for (int k = 0; k < 4; ++k)
         {
             Out.Position.push_back(Corner(i, k));

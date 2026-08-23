@@ -8762,10 +8762,10 @@ void ATUCoasterRide::ApplyTrackStyle()
 	// ponytail: loaded on every style apply rather than cached; it is three
 	// asset lookups on a rebuild.
 	auto Textured = [this, &Paint](TObjectPtr<UMaterialInstanceDynamic>& Mid,
-		UProceduralMeshComponent* Mesh, const TCHAR* Path, const FLinearColor& Fallback)
+		UProceduralMeshComponent* Mesh, const TSoftObjectPtr<UMaterialInterface>& Which, const FLinearColor& Fallback)
 	{
 		if (!Mesh) { return; }
-		if (UMaterialInterface* M = LoadObject<UMaterialInterface>(nullptr, Path))
+		if (UMaterialInterface* M = Which.LoadSynchronous())
 		{
 			// A DYNAMIC INSTANCE OF THE TEXTURED ONE, so the style's colour is
 			// the Tint over the texture: the same field that paints a flat
@@ -8781,10 +8781,19 @@ void ATUCoasterRide::ApplyTrackStyle()
 		}
 		Paint(Mid, Mesh, Fallback);
 	};
-	Textured(DeviceSteelMaterial, DeviceSteelMesh, TEXT("/Game/Env/Materials/MI_WhiteSteel.MI_WhiteSteel"), S.HardwareSteelColour);
-	Textured(DeviceRubberMaterial, DeviceRubberMesh, TEXT("/Game/Env/Materials/MI_Rubber.MI_Rubber"), S.HardwareRubberColour);
-	Textured(StationConcreteMaterial, StationConcreteMesh, TEXT("/Game/Env/Materials/MI_Concrete.MI_Concrete"), S.PlatformColour);
-	Textured(StationSteelMaterial, StationSteelMesh, TEXT("/Game/Env/Materials/MI_WhiteSteel.MI_WhiteSteel"), S.HardwareSteelColour);
+	Textured(DeviceSteelMaterial, DeviceSteelMesh, S.HardwareSteelMaterial, S.HardwareSteelColour);
+	Textured(DeviceRubberMaterial, DeviceRubberMesh, S.HardwareRubberMaterial, S.HardwareRubberColour);
+	// -TUPlatformMat=/Game/Env/Materials/MI_X.MI_X tries a candidate on the real
+	// platform from a standalone launch, which is how the three plasters were
+	// compared; a style field is the answer, this is how you audition one.
+	TSoftObjectPtr<UMaterialInterface> PlatformMat = S.PlatformMaterial;
+	FString TryMat;
+	if (FParse::Value(FCommandLine::Get(), TEXT("TUPlatformMat="), TryMat))
+	{
+		PlatformMat = TSoftObjectPtr<UMaterialInterface>(FSoftObjectPath(TryMat));
+	}
+	Textured(StationConcreteMaterial, StationConcreteMesh, PlatformMat, S.PlatformColour);
+	Textured(StationSteelMaterial, StationSteelMesh, S.HardwareSteelMaterial, S.HardwareSteelColour);
 	Paint(StationStripeMaterial, StationStripeMesh, S.StripeColour, 0.60f, 0.f);
 	Paint(TrainBodyMaterial, TrainBodyMesh, S.TrainColour, 0.25f, 0.f);        // gelcoat fibreglass
 	Paint(TrainChassisMaterial, TrainChassisMesh, FLinearColor(0.10f, 0.11f, 0.12f), 0.60f, 0.60f);
