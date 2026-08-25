@@ -1034,16 +1034,39 @@ TArray<FTUTrackSegment> ATUCoasterRide::SidewinderLayout()
 	// lever has to sit on the run whose direction it extends, and a 3 m rise
 	// before a 150 m turn is a stall.
 	//
-	// Measured: 54 segments, 1206.6 m, closes to 52 um, completes in 85 s of
-	// which 9 are the station crawl and 8 the final brake, top 110.5 km/h at
-	// 258 m, -0.40..+3.28 g vertical, 0.58 g lateral, roll rate 52 deg/s,
-	// crest 46.5 m, lowest point 3.1 m below the station.
-	const double DropLen = 19.5994663;   // the height lever
-	const double FillLen = 69.4148273;   // the plan lever, on the OUTBOUND leg
-	const double HelixR = 18.0;
-	// ONE FULL TURN INCLUDING THE EASEMENTS: each 20 m clothoid to 1/18 turns
-	// L*k/2 radians, and a helix's Turns does not subtract them for you.
-	const double HelixTurns = 1.0 - (2.0 * (20.0 / HelixR) * 0.5) / (2.0 * Pi);
+	// Measured (2026-08-24): 65 segments, 1230.4 m, closes to 1 mm, completes
+	// in 95 s, top 105.0 km/h at 251 m, -0.48..+3.03 g vertical, station
+	// 3.4 m above the lowest point, and the helix clears its own crossing by
+	// 5.1 m against the 3.0 m collision corridor.
+	//
+	// THE 2026-08-23 VERSION KILLED PEOPLE, in the only way a simulator can:
+	// its LEVEL full-turn helix crossed itself at 0.109 m -- one full plan
+	// turn has winding, so the exit easement must pass through the entry, and
+	// nothing measured it -- and its mid-course brake could neither stop what
+	// arrived (26.6 m/s, twice the device) nor release a train that completes
+	// (13 m/s out, the course needed 25). A train STAGED there at boot
+	// valleyed on hill 3 every time, and the next dispatch rear-ended it.
+	// The redesign, all of it measured in design_sidewinder.cpp: the helix
+	// DESCENDS 3 degrees (the vertical separation at its own crossing); a
+	// descending helix twists the frame by parallel-transport holonomy, so
+	// the stretch after it is authored FOR the twisted frame (Twisted below)
+	// and the twist is PAID BACK by turn 2 becoming a RISING helix of
+	// opposite holonomy; the old brake is the trim its pass-through always
+	// was; and the HOLD sits on the level home stretch, where a stopped
+	// train rolls to the final brake on the tyres' own push.
+	const double DropLen = 11.6965061;   // the height lever
+	const double FillLen = 7.5810656;    // the plan lever, on the OUTBOUND leg
+	const double HelixTurns = 0.7887994; // the heading lever, solved
+	const double SnakeArc2 = 10.5496972; // the across lever, the snake's second bend
+	const double McbrLen = 40.0;         // the return's along lever (at its floor)
+	const double HomeDropM = 7.2111290;  // the home descent, from the height feedback
+	const double SeamTrimRad = 0.0741838587;   // the payback chain's measured pitch residual
+
+	const double HelixR = 20.0;
+	const double HClimb = Deg(3.0);      // the descent through the turn
+	const double HKyaw = FMath::Cos(HClimb) * FMath::Cos(HClimb) / HelixR;
+	const double Phi = 2.0 * Pi * HelixTurns * FMath::Sin(HClimb);   // the holonomy, exactly
+	const double Hb = BankDegreesFor(19.0, HelixR);
 
 	TArray<FTUTrackSegment> Out;
 	auto Device = [&Out](double Length, ETUSegmentZone Zone, float Speed, float Accel, float Decel, float Pad)
@@ -1064,6 +1087,51 @@ TArray<FTUTrackSegment> ATUCoasterRide::SidewinderLayout()
 		AddEasedPitch(Out, Deg(AngleDeg), K);
 		AddEasedPitch(Out, -2.0 * Deg(AngleDeg), K);
 		AddEasedPitch(Out, Deg(AngleDeg), K);
+	};
+	// Authored components for a desired WORLD curvature pair in a path frame
+	// the helix's holonomy has twisted by Rot: authored = R(-Rot) x desired.
+	// Exact for linear ramps. The design program's helper, ported verbatim.
+	auto Twisted = [](double YawW, double PitchW, double Rot, float& AyOut, float& ApOut)
+	{
+		AyOut = static_cast<float>(YawW * FMath::Cos(Rot) + PitchW * FMath::Sin(Rot));
+		ApOut = static_cast<float>(-YawW * FMath::Sin(Rot) + PitchW * FMath::Cos(Rot));
+	};
+	// Pitch eased in and out WITHOUT leaving the turn: yaw curvature held
+	// while pitch rises and falls, authored for a frame twisted by Rot.
+	auto TurningPitch = [&Out, &Twisted](double DeltaRad, double K, double YawStart,
+		double YawEnd, double Bank, double Rot)
+	{
+		const double Kk = DeltaRad >= 0 ? K : -K;
+		const double L = FMath::Abs(DeltaRad) / K;
+		const double YawMid = 0.5 * (YawStart + YawEnd);
+		FTUTrackSegment In;
+		In.Kind = ETUSegmentKind::Raw; In.Length = static_cast<float>(L);
+		Twisted(YawStart, 0.0, Rot, In.YawCurvatureStart, In.PitchCurvatureStart);
+		Twisted(YawMid, Kk, Rot, In.YawCurvatureEnd, In.PitchCurvatureEnd);
+		In.RollStartDegrees = In.RollEndDegrees = static_cast<float>(Bank);
+		In.RollMode = ETURollMode::WorldBank;
+		Out.Add(In);
+		FTUTrackSegment Tail;
+		Tail.Kind = ETUSegmentKind::Raw; Tail.Length = static_cast<float>(L);
+		Twisted(YawMid, Kk, Rot, Tail.YawCurvatureStart, Tail.PitchCurvatureStart);
+		Twisted(YawEnd, 0.0, Rot, Tail.YawCurvatureEnd, Tail.PitchCurvatureEnd);
+		Tail.RollStartDegrees = Tail.RollEndDegrees = static_cast<float>(Bank);
+		Tail.RollMode = ETURollMode::WorldBank;
+		Out.Add(Tail);
+	};
+	// A clothoid authored for a twisted frame: Raw, because Clothoid has no
+	// pitch field to carry the rotated component.
+	auto TwistedClothoid = [&Out, &Twisted](double L, double K0, double K1,
+		double Roll0, double Roll1, double Rot)
+	{
+		FTUTrackSegment A;
+		A.Kind = ETUSegmentKind::Raw; A.Length = static_cast<float>(L);
+		Twisted(K0, 0.0, Rot, A.YawCurvatureStart, A.PitchCurvatureStart);
+		Twisted(K1, 0.0, Rot, A.YawCurvatureEnd, A.PitchCurvatureEnd);
+		A.RollStartDegrees = static_cast<float>(Roll0);
+		A.RollEndDegrees = static_cast<float>(Roll1);
+		A.RollMode = ETURollMode::WorldBank;
+		Out.Add(A);
 	};
 
 	// ---- STATION and the LIFT: chain at 8 m/s and 8 m/s^2 of grip (a 35
@@ -1086,17 +1154,28 @@ TArray<FTUTrackSegment> ATUCoasterRide::SidewinderLayout()
 	// ---- TURN 1: 180 left at 27 m/s.
 	AddBankedTurn(Out, 35.0, Pi * 35.0 - 40.0, 40.0, BankDegreesFor(27.0, 35.0));
 
-	// ---- MID-COURSE BLOCK BRAKE: a BLOCK more than a brake at 25 m/s out,
-	// because the return leg loses about 0.4 m/s^2 to drag over 700 m and then
-	// climbs 3 m, and that is all of its energy.
-	Device(30.0, ETUSegmentZone::BlockBrake, 25.f, 6.f, 6.f, 4.f);
+	// ---- MID-COURSE TRIM at 26 m/s. It was a BLOCK brake, and that was wrong
+	// twice over -- see the header comment. A trim is what its pass-through
+	// always was; the hold moved to the home stretch.
+	{
+		FTUTrackSegment Trim;
+		Trim.Kind = ETUSegmentKind::Straight;
+		Trim.Length = 30.f;
+		Trim.Zone = ETUSegmentZone::Brake;
+		Trim.ZoneSpeed = 26.f;
+		Trim.ZoneBrakeDecel = 4.f;
+		Out.Add(Trim);
+	}
 
 	// ---- THE SNAKE: right, left, left, right at R 45, 45 degree bends with
-	// 25 m easements, banked for 24 m/s. Plan-neutral by symmetry.
+	// 25 m easements, banked for 24 m/s. Plan-neutral by symmetry -- except
+	// the SECOND bend's arc, which is the closure's across lever and carries
+	// its solved length.
 	const double Sb = BankDegreesFor(24.0, 45.0);
 	const double SnakeArc = Deg(45.0) * 45.0 - 25.0;
 	AddBankedTurn(Out, -45.0, SnakeArc, 25.0, -Sb);
 	AddBankedTurn(Out, 45.0, SnakeArc, 25.0, Sb);
+	Out[Out.Num() - 2].Length = static_cast<float>(SnakeArc2);
 	AddBankedTurn(Out, 45.0, SnakeArc, 25.0, Sb);
 	AddBankedTurn(Out, -45.0, SnakeArc, 25.0, -Sb);
 
@@ -1104,35 +1183,89 @@ TArray<FTUTrackSegment> ATUCoasterRide::SidewinderLayout()
 	Hill(16.0, 0.035);
 	Hill(12.0, 0.04);
 
-	// ---- THE HELIX: one full turn left, LEVEL, banked for 15 m/s.
-	const double Hb = BankDegreesFor(15.0, HelixR);
+	// ---- THE HELIX: one full turn left, DESCENDING 3 degrees, R 20. The
+	// descent is the vertical separation at the crossing a full plan turn
+	// must have; the frame twist it costs is Phi, paid back at turn 2.
 	{
 		FTUTrackSegment In;
 		In.Kind = ETUSegmentKind::Clothoid; In.Length = 20.f;
 		In.CurvatureStart = 0.f; In.CurvatureEnd = static_cast<float>(1.0 / HelixR);
 		In.RollEndDegrees = static_cast<float>(Hb);
+		In.RollMode = ETURollMode::WorldBank;
 		Out.Add(In);
+	}
+	TurningPitch(-HClimb, 0.035, 1.0 / HelixR, HKyaw, Hb, 0.0);   // pitch down, still turning
+	{
 		FTUTrackSegment H;
 		H.Kind = ETUSegmentKind::Helix; H.Radius = static_cast<float>(HelixR);
-		H.ClimbAngleDegrees = 0.f; H.Turns = static_cast<float>(HelixTurns);
+		H.ClimbAngleDegrees = -3.f; H.Turns = static_cast<float>(HelixTurns);
 		H.RollStartDegrees = H.RollEndDegrees = static_cast<float>(Hb);
+		H.RollMode = ETURollMode::WorldBank;
 		Out.Add(H);
-		FTUTrackSegment Ex;
-		Ex.Kind = ETUSegmentKind::Clothoid; Ex.Length = 20.f;
-		Ex.CurvatureStart = static_cast<float>(1.0 / HelixR); Ex.CurvatureEnd = 0.f;
-		Ex.RollStartDegrees = static_cast<float>(Hb);
-		Out.Add(Ex);
+	}
+	TurningPitch(HClimb, 0.035, HKyaw, 1.0 / HelixR, Hb, Phi);    // level out -- twisted frame
+	TwistedClothoid(20.0, 1.0 / HelixR, 0.0, Hb, 0.0, Phi);       // and unbank, likewise
+
+	// ---- TURN 2, THE PAYBACK: the 180 CLIMBS, as a helix of opposite
+	// holonomy -- its climb is solved from the helix's turn count so the two
+	// twists cancel, and everything after it is plain authoring again. The
+	// climb replaces the old rise; a helix on a 35 m cylinder is the same
+	// 35 m plan circle as turn 1, which keeps the across balance.
+	const double T2R = 35.0;
+	const double SinT2 = 2.0 * HelixTurns * FMath::Sin(HClimb);
+	const double T2Climb = FMath::Asin(SinT2);
+	const double T2C = FMath::Cos(T2Climb);
+	const double T2K = T2C * T2C / T2R;
+	const double T2Bank = BankDegreesFor(17.0, T2R);
+	const double T2PairYaw = (T2Climb / 0.03) * (T2K + 1.0 / T2R);
+	const double T2L2 = (Pi - 40.0 * T2K - T2PairYaw) / (T2K * T2C);
+	TurningPitch(T2Climb, 0.03, 0.0, 0.0, 0.0, Phi);              // pitch up, twisted frame
+	TwistedClothoid(40.0, 0.0, T2K, 0.0, T2Bank, Phi);            // ease in, climbing
+	{
+		// Constant components authored for the frame as it stands, plus the
+		// helix's own torsion, which rotates them at exactly the rate the
+		// frame untwists: a true climbing helix, and Phi decays to zero.
+		FTUTrackSegment H2;
+		H2.Kind = ETUSegmentKind::Raw; H2.Length = static_cast<float>(T2L2);
+		Twisted(T2K, 0.0, Phi, H2.YawCurvatureStart, H2.PitchCurvatureStart);
+		H2.YawCurvatureEnd = H2.YawCurvatureStart;
+		H2.PitchCurvatureEnd = H2.PitchCurvatureStart;
+		H2.Torsion = static_cast<float>(Phi / T2L2);
+		H2.RollStartDegrees = H2.RollEndDegrees = static_cast<float>(T2Bank);
+		H2.RollMode = ETURollMode::WorldBank;
+		Out.Add(H2);
+	}
+	TurningPitch(-T2Climb, 0.03, T2K, 1.0 / T2R, T2Bank, 0.0);    // level out -- frame straight now
+	{
+		FTUTrackSegment C2;
+		C2.Kind = ETUSegmentKind::Clothoid; C2.Length = 40.f;
+		C2.CurvatureStart = static_cast<float>(1.0 / T2R); C2.CurvatureEnd = 0.f;
+		C2.RollStartDegrees = static_cast<float>(T2Bank);
+		C2.RollMode = ETURollMode::WorldBank;
+		Out.Add(C2);
 	}
 
-	// ---- TURN 2, identical to turn 1 (radius AND easement) or the return
-	// line lands 2 x dR off the station line; taken at the low level.
-	AddBankedTurn(Out, 35.0, Pi * 35.0 - 40.0, 40.0, BankDegreesFor(12.0, 35.0));
+	// ---- THE SEAM TRIM, where the residual is born: the payback chain's
+	// measured pitch leftovers, cancelled so everything after runs level.
+	AddEasedPitch(Out, -SeamTrimRad, SeamTrimRad / 4.0);
 
-	// ---- THE RISE to the station, 3 m at 12 degrees, then the final block.
-	AddEasedPitch(Out, Deg(12.0), 0.03);
-	AddStraight(Out, 1.0);
-	AddEasedPitch(Out, -Deg(12.0), 0.03);
-	Device(26.0, ETUSegmentZone::BlockBrake, 3.f, 3.f, 3.f, 3.f);
+	// ---- THE HOME DESCENT: turn 2 tops out above the station and descends
+	// into the brakes, which is what keeps the low stretch at ground level.
+	const double HomeAngle = Deg(12.0);
+	const double PairDrop = 2.0 * (HomeAngle / 0.03) * FMath::Sin(HomeAngle * 0.5);
+	AddEasedPitch(Out, -HomeAngle, 0.03);
+	AddStraight(Out, FMath::Max(5.0, (HomeDropM - PairDrop) / FMath::Sin(HomeAngle)));
+	AddEasedPitch(Out, HomeAngle, 0.03);
+
+	// ---- THE MID-COURSE BLOCK BRAKE, on the LEVEL HOME STRETCH. A hold is
+	// only a hold where a stopped train can still finish; released from rest
+	// here it rolls into the final brake on the tyres' own push. Measured:
+	// commanded to stop, the nose rests 17.4 m inside the device.
+	Device(McbrLen, ETUSegmentZone::BlockBrake, 12.f, 6.f, 6.f, 6.f);
+
+	// ---- THE FINAL BLOCK BRAKE, and home. Pad at 6, measured: at 3 it could
+	// not stop what arrives and overran toward a station with a train in it.
+	Device(26.0, ETUSegmentZone::BlockBrake, 3.f, 3.f, 3.f, 6.f);
 	return Out;
 }
 
@@ -1947,8 +2080,135 @@ void ATUCoasterRide::RebuildFromSegments()
 		TrainConfig.TrainLength = TrainLengthM;
 		TrainConfig.bAllowRollback = bAllowRollback;
 
+		// THE PROFILE FIRST, ON A PROBE TRAIN. It used to run on fleet train 0
+		// after placement, which is why staging could only ever use the holds:
+		// the speeds the ride actually has along its course did not exist yet
+		// at the moment trains were placed. A probe is the same physics with
+		// no fleet duties, and the fleet can then load IN SERVICE. Run with
+		// every holding device still open, deliberately — the profile answers
+		// "what does this layout do to a rider", not "what does the
+		// signalling do to a timetable".
+		{
+			FTrain Probe(Track, TrainConfig);
+			for (const FTrackZone& Z : Zones) { Probe.AddZone(Z); }
+			for (const TPair<double, double>& C : CatchSpans)
+			{
+				Probe.AddAntiRollback(C.Key, C.Value);
+			}
+			Profile_ = RunRideProfile(Probe, Track, 1.0);
+		}
+
+		// IN SERVICE AT LOAD, NOT PARKED ACROSS THE COURSE (2026-08-24).
+		// Staging one train per holding place was the dispatcher's parking
+		// rule applied at boot — and it silently required every hold to be a
+		// place a standing train can FINISH from, which an author's first
+		// mid-course brake usually is not: the brake appears, a train appears
+		// ON it, and it valleys. So the ride loads mid-OPERATION instead:
+		// train 0 parked in the station (never at 0.0 — the seam straddle that
+		// tripped the counter cross-check on frame one), the rest spaced along
+		// the completed lap at the speed the ride actually has there, which is
+		// a state a legally running ride reaches on its own. Falls back to
+		// hold staging when there is no completed lap to distribute along, or
+		// when the spacing would put two trains into one block.
+		TArray<double> StageS, StageV;
+		{
+			StageS.Add(HoldMidS.Num() > 0 ? HoldMidS[0] : 0.0);
+			StageV.Add(0.0);
+			// ONE TRAIN PER HOLD-TO-HOLD STRETCH, which is the commitment the
+			// interlocking actually polices: a train past a holding device is
+			// committed to the NEXT one — a trim cannot catch it — so two
+			// trains between the same pair of holds violate the moment the
+			// follower closes up. The first version spaced trains evenly in
+			// TIME, and on the Sidewinder that put both movers inside the
+			// lift-to-brake stretch that dominates the lap: signalling
+			// violation and a Cat 0 stop on the ride's first in-service boot,
+			// screenshot and all. Train t therefore takes stretch t — the one
+			// the interlocking would have dispatched it into — at the
+			// profile's time-midpoint of that stretch, at the profile's own
+			// speed there. The stretch past the last hold stays empty, which
+			// is the free place the capacity rule already demands.
+			bool bInService = bTrackIsCircuit && Profile_.bCompleted
+				&& !Profile_.Samples.empty() && Running > 1
+				&& Running <= HoldZoneIndices.Num();
+			for (int32 t = 1; bInService && t < Running; ++t)
+			{
+				const double From = Zones[HoldZoneIndices[t]].StartS;
+				const double To = (t + 1 < HoldZoneIndices.Num())
+					? Zones[HoldZoneIndices[t + 1]].StartS
+					: Track.TotalLength();
+				double T0 = -1.0, T1 = -1.0;
+				for (const FRideSample& Sm : Profile_.Samples)
+				{
+					if (Sm.S < From || Sm.S >= To) { continue; }
+					if (T0 < 0.0) { T0 = Sm.Time; }
+					T1 = Sm.Time;
+				}
+				if (T0 < 0.0) { bInService = false; break; }
+				const double MidT = 0.5 * (T0 + T1);
+				double S = -1.0, V = 0.0;
+				for (const FRideSample& Sm : Profile_.Samples)
+				{
+					if (Sm.S < From || Sm.S >= To) { continue; }
+					S = Sm.S; V = Sm.Speed;
+					if (Sm.Time >= MidT) { break; }
+				}
+				if (S < 0.0) { bInService = false; break; }
+				StageS.Add(S);
+				StageV.Add(V);
+			}
+			// Distinct blocks for every pair, nose and tail both — judged
+			// against the interlocking's own boundary list, because a second
+			// derivation of what a block is would be a second authority.
+			if (bInService && Signals)
+			{
+				const std::vector<double>& B = Signals->Boundaries();
+				const double Total = Track.TotalLength();
+				auto BlockOf = [&B](double S) -> int32
+				{
+					int32 Blk = static_cast<int32>(B.size()) - 1;
+					for (std::size_t i = 0; i < B.size(); ++i)
+					{
+						if (S < B[i]) { Blk = static_cast<int32>(i) - 1; break; }
+					}
+					return Blk < 0 ? static_cast<int32>(B.size()) - 1 : Blk;
+				};
+				auto Wrap = [Total](double S) -> double
+				{
+					return FMath::Fmod(FMath::Fmod(S, Total) + Total, Total);
+				};
+				TSet<int32> Used;
+				const double Half = TrainLengthM * 0.5;
+				for (int32 t = 0; bInService && t < StageS.Num(); ++t)
+				{
+					const int32 BR = BlockOf(Wrap(StageS[t] - Half));
+					const int32 BF = BlockOf(Wrap(StageS[t] + Half));
+					if (Used.Contains(BR) || Used.Contains(BF)) { bInService = false; break; }
+					Used.Add(BR);
+					Used.Add(BF);
+				}
+			}
+			if (!bInService)
+			{
+				StageS.Reset();
+				StageV.Reset();
+				for (int32 t = 0; t < Running; ++t)
+				{
+					StageS.Add(HoldMidS[t]);
+					StageV.Add(0.0);
+				}
+				if (Running > 1)
+				{
+					UE_LOG(LogTemp, Log, TEXT("TrackUnlimited: trains staged at the holds — "
+						"no completed lap to distribute them along."));
+				}
+			}
+		}
+
 		Trains.Reset();
 		StoppedForS.Init(0.f, Running);
+		// A rebuild is the re-rail: wrecks do not survive it, because the
+		// track (and everything on it) has just been re-placed from scratch.
+		TrainWrecked.Init(false, Running);
 		for (int32 t = 0; t < Running; ++t)
 		{
 			TUniquePtr<FTrain> New = MakeUnique<FTrain>(Track, TrainConfig);
@@ -1960,10 +2220,7 @@ void ATUCoasterRide::RebuildFromSegments()
 			{
 				New->AddAntiRollback(C.Key, C.Value);
 			}
-			// Mid-device, every one of them including the station — the same place
-			// the dispatcher parks a held train, and the only placement that puts
-			// a whole train inside a single block.
-			New->Place(HoldMidS[t], 0.0);
+			New->Place(StageS[t], StageV[t]);
 			Trains.Add(MoveTemp(New));
 		}
 
@@ -2093,7 +2350,7 @@ void ATUCoasterRide::RebuildFromSegments()
 	// built around. There is nothing new to teach them.
 	if (Trains.IsEmpty() || !Trains[0].IsValid())
 	{
-		Profile_ = FRideProfile();
+		Profile_ = FRideProfile();   // the probe never ran: no train, no ride
 		LastDeviceFindings.clear();
 		BuildDiagnostics();
 		// Same as above: the track is still drawn, the trains that are not there
@@ -2103,7 +2360,9 @@ void ATUCoasterRide::RebuildFromSegments()
 		if (Cars) { Cars->ClearInstances(); }
 		return;
 	}
-	Profile_ = RunRideProfile(*Trains[0], Track, 1.0);
+	// Profile_ was measured on the probe train BEFORE the fleet was placed —
+	// see the staging block above — so the fleet is already standing (or
+	// running) exactly where it should be and nothing here has to move it.
 
 	// ===================== WHAT THE DEVICES WILL ACTUALLY DO =====================
 	//
@@ -2177,39 +2436,86 @@ void ATUCoasterRide::RebuildFromSegments()
 			}
 			return Best;
 		});
+
+		// AND CAN A TRAIN HELD AT EACH DEVICE ACTUALLY FINISH? The 2026-08-24
+		// crash chain started exactly here: a hold whose standing start could
+		// not clear the course valleyed its train, and the next arrival hit
+		// it. Simulated rather than derived, because v^2 arithmetic cannot
+		// see a hump two hills downstream — each hold gets a probe train
+		// released from rest at its middle, which must reach the next hold.
+		// Only against a completed profile: a course the through-train cannot
+		// finish is already reported, louder, and every hold would fail it.
+		if (Profile_.bCompleted)
+		{
+			const double Total = Track.TotalLength();
+			for (int32 h = 0; h < HoldZoneIndices.Num(); ++h)
+			{
+				const FTrackZone& HZ = Zones[HoldZoneIndices[h]];
+				const double From = 0.5 * (HZ.StartS + HZ.EndS);
+				const double Goal = (h + 1 < HoldZoneIndices.Num())
+					? Zones[HoldZoneIndices[h + 1]].StartS
+					: (bTrackIsCircuit ? Zones[HoldZoneIndices[0]].StartS : Total);
+				double Remaining = Goal - From;
+				if (Remaining <= 0.0)
+				{
+					if (!bTrackIsCircuit) { continue; }
+					Remaining += Total;
+				}
+
+				FTrainConfig ProbeCfg;
+				ProbeCfg.TrainLength = TrainLengthM;
+				ProbeCfg.bAllowRollback = bAllowRollback;
+				FTrain Probe(Track, ProbeCfg);
+				for (const FTrackZone& Z : Zones) { Probe.AddZone(Z); }
+				// The catch spans off fleet train 0 — the local list they were
+				// built from is out of scope here, and a second derivation of
+				// where the catches are would be a second authority. Train 0
+				// exists: the trainless case returned before the audit.
+				for (const std::pair<double, double>& C : Trains[0]->GetCatches())
+				{
+					Probe.AddAntiRollback(C.first, C.second);
+				}
+				Probe.SetCircuit(bTrackIsCircuit);
+				Probe.Place(From, 0.0);
+
+				const double Dt = 1.0 / 240.0;
+				double Travelled = 0.0, ValleyAt = 0.0;
+				int Still = 0;
+				bool bMade = false;
+				for (int i = 0; i < 240 * 300; ++i)
+				{
+					Probe.Step(Dt);
+					Travelled += Probe.GetSpeed() * Dt;
+					if (Travelled >= Remaining) { bMade = true; break; }
+					if (Probe.GetSpeed() < 0.02)
+					{
+						if (++Still > 480) { ValleyAt = Probe.GetDistance(); break; }
+					}
+					else { Still = 0; }
+				}
+				if (!bMade)
+				{
+					FDeviceFinding F;
+					F.S = HZ.StartS;
+					F.Problem = EDeviceProblem::CannotFinishFromRest;
+					F.bIsError = true;
+					F.What = TCHAR_TO_UTF8(*FString::Printf(
+						TEXT("a train released from REST at the hold at %.0f m valleys at %.0f m ")
+						TEXT("and never reaches the next hold at %.0f m. Holding is what this device ")
+						TEXT("is for, and a train held here is stranded — move the hold somewhere a ")
+						TEXT("stopped train can still finish, or give the course the energy back."),
+						From, ValleyAt, Goal));
+					LastDeviceFindings.push_back(F);
+				}
+			}
+		}
 	}
 
-	// BACK TO ITS HOLDING POSITION, not to zero. The profile run leaves train 0
-	// wherever the ride ended, so it has to be put back — but putting it at 0.0
-	// puts it ON THE SEAM, where a train straddles the boundary and legitimately
-	// holds the first block and the last. That was harmless while nothing checked,
-	// and the moment the counter cross-check arrived it tripped the ride on frame
-	// one: the interlocking held blocks 0 and 10, the counter had been seeded for
-	// block 0 only, and the two disagreed exactly as they are supposed to when one
-	// of them is wrong.
-	//
-	// Which is the cross-check doing its job on its first run, against a line that
-	// had been quietly wrong since before any of this existed.
-	// NO TRAINS IS NOW REACHABLE WITH HOLDING PLACES PRESENT, which it never was.
-	// The old floor of 1 meant a track with somewhere to park always had something
-	// parked, so this block could index Trains[0] safely; SHED in the maintenance
-	// panel takes the last one off and leaves the places behind. Same shape as the
-	// blank-template crash -- a guard that was true by accident rather than by
-	// construction.
-	if (!Trains.IsEmpty() && Trains[0].IsValid())
-	{
-		// Mid of the first holding device, which is where it was placed to begin
-		// with. Recomputed from HoldZoneIndices rather than reaching for the local
-		// the placement loop used, which is long out of scope by here.
-		double Home = 0.0;
-		if (HoldZoneIndices.Num() > 0)
-		{
-			const FTrackZone Z =
-				Trains[0]->GetZone(static_cast<std::size_t>(HoldZoneIndices[0]));
-			Home = 0.5 * (Z.StartS + Z.EndS);
-		}
-		Trains[0]->Place(Home, 0.0);
-	}
+	// (The old "put train 0 back after the profile" block lived here. The
+	// profile runs on a probe now, so no fleet train ever leaves its staging —
+	// and the lesson it carried, that a train placed at 0.0 straddles the seam
+	// and trips the counter cross-check on frame one, lives on in the staging
+	// block: train 0 parks at the station's MIDDLE, never at zero.)
 
 	// NOW shut them, once the profile has been taken. Brakes-on is the resting
 	// state of real ride control, and the alternative — open until a dispatcher
@@ -2262,7 +2568,16 @@ void ATUCoasterRide::RebuildFromSegments()
 	}
 
 	const FClosureGap Gap = MeasureClosure(Track, HeightTarget(Track));
-	const FClearanceReport Clear = AnalyseSelfClearance(Track, Profile, 1.0, 12.0);
+	// THE SHORT WAY ROUND on a circuit — measured linearly, the seam reports
+	// itself as a 0.00 m self-intersection and every closed preset's log line
+	// cried wolf, which is exactly how a REAL 0.109 m crossing went unread.
+	// Kept on the actor for the diagnostics panel's corridor row.
+	LastClearance = AnalyseSelfClearance(Track, Profile, 1.0, 12.0, bTrackIsCircuit);
+	const FClearanceReport& Clear = LastClearance;
+	// The foul's two world positions, cached here because EvaluateAt is
+	// O(track length) and the marker draws at frame rate.
+	ClearanceFoulAtW = ToWorld(Track.EvaluateAt(LastClearance.AtS).Position);
+	ClearanceFoulAndW = ToWorld(Track.EvaluateAt(LastClearance.AndS).Position);
 	UE_LOG(LogTemp, Log,
 		TEXT("TrackUnlimited: %d segments, %.1f m, C2=%s | ends %+.2f m vs station | ")
 		TEXT("closest approach %.2f m%s | sits %.2f m above the heartline origin"),
@@ -5902,16 +6217,22 @@ bool ATUCoasterRide::RunDocumentSmokeTest()
 		}
 		Holding = HoldingPlaces;
 		const double StationAboveGround = -Profile_.LowestHeight;
+		// The corridor is asserted here because this is the ride that shipped
+		// INSIDE it: the level helix crossed itself at 0.109 m. A regression
+		// fails the smoke test now, not somebody's evening.
 		if (!bTrackIsCircuit || !Profile_.bCompleted || Holding != 4 || Trains.Num() != 3
 			|| CarCount != 7 || Helices != 1 || !bLeft || !bRight
 			|| StationAboveGround < 2.5 || StationAboveGround > 4.0
-			|| Profile_.TopSpeed * 3.6 < 100.0 || Profile_.MaxVerticalG > 3.6)
+			|| Profile_.TopSpeed * 3.6 < 100.0 || Profile_.MaxVerticalG > 3.6
+			|| LastClearance.ClosestApproach < CollisionCorridorM)
 		{
 			UE_LOG(LogTUEvents, Error,
 				TEXT("smoke: the sidewinder is not the ride it was designed to be (circuit %d, completed %d, ")
-				TEXT("holding %d, trains %d, cars %d, helices %d, left %d, right %d, station %.1f m up, top %.1f km/h, %.2f g)"),
+				TEXT("holding %d, trains %d, cars %d, helices %d, left %d, right %d, station %.1f m up, ")
+				TEXT("top %.1f km/h, %.2f g, clearance %.2f m)"),
 				bTrackIsCircuit, Profile_.bCompleted, Holding, Trains.Num(), CarCount, Helices, bLeft, bRight,
-				StationAboveGround, Profile_.TopSpeed * 3.6, Profile_.MaxVerticalG);
+				StationAboveGround, Profile_.TopSpeed * 3.6, Profile_.MaxVerticalG,
+				LastClearance.ClosestApproach);
 			Failures.Add(TEXT("sidewinder"));
 		}
 		else
@@ -5922,6 +6243,33 @@ bool ATUCoasterRide::RunDocumentSmokeTest()
 				Segments.Num(), Track.TotalLength(), Profile_.TopSpeed * 3.6, Profile_.Duration,
 				Profile_.MinVerticalG, Profile_.MaxVerticalG, Profile_.MaxAbsLateralG,
 				StationAboveGround, Trains.Num(), CarCount, Holding);
+		}
+
+		// ---- AND IT RUNS FOR HALF A MINUTE WITHOUT TRIPPING ----
+		//
+		// The rebuild checks are all taken at scan zero, and the first
+		// in-service staging bug was invisible to every one of them: legal at
+		// placement, a signalling violation eleven simulated seconds later
+		// when the second mover caught the first inside one hold-to-hold
+		// stretch. Somebody's boot found it before the smoke test could. So
+		// the smoke test now BOOTS the ride and lets it run — thirty seconds
+		// of real scans, and any E-stop in them is a staging or interlocking
+		// regression.
+		{
+			for (int32 i = 0; i < 240 * 30; ++i)
+			{
+				SimStep(1.0 / 240.0);
+			}
+			if ((Drives && Drives->IsEmergencyStopped()) || bEmergencyStop
+				|| TrainWrecked.Contains(true))
+			{
+				UE_LOG(LogTUEvents, Error,
+					TEXT("smoke: the sidewinder tripped within 30 s of boot — %s"),
+					Drives ? UTF8_TO_TCHAR(Drives->EmergencyStopReason()) : TEXT("unknown"));
+				Failures.Add(TEXT("sidewinder-run"));
+			}
+			// Put the ride back at its staging for whatever runs after.
+			RebuildFromSegments();
 		}
 	}
 
@@ -6465,6 +6813,26 @@ void ATUCoasterRide::BuildDiagnostics()
 		T.Segment = static_cast<int>(D.SegmentIndex);
 		Diagnostics.Add(D.bIsError ? EDiagSeverity::Error : EDiagSeverity::Warning,
 			"Geometry", D.Message, T);
+	}
+
+	// THE COLLISION CORRIDOR. Two pieces of track closer than the trains and
+	// riders on both need — the Sidewinder's level helix shipped crossing
+	// itself at 0.109 m and nothing surfaced it; the log line that knew was
+	// crying wolf on every circuit's seam. One row, the worst approach;
+	// report, never repair, and never block a save.
+	// ponytail: the single closest pair — per-region merging when a layout
+	// fouls in two places at once, which a rebuild after the first fix finds.
+	if (LastClearance.ClosestApproach > 0.0
+		&& LastClearance.ClosestApproach < CollisionCorridorM)
+	{
+		FDiagTarget T;
+		T.S = LastClearance.AtS;
+		Diagnostics.Add(EDiagSeverity::Error, "Geometry",
+			TCHAR_TO_UTF8(*FString::Printf(
+				TEXT("two parts of the track pass %.2f m apart, at %.0f m and %.0f m — the ")
+				TEXT("collision corridor needs %.1f m for the trains and raised hands on both"),
+				LastClearance.ClosestApproach, LastClearance.AtS, LastClearance.AndS,
+				CollisionCorridorM)), T);
 	}
 
 	// Closure, with HEIGHT on its own row. The vertical slice shipped 8.5 m low
@@ -8072,6 +8440,46 @@ void ATUCoasterRide::DrawRestraints() const
 	}
 }
 
+void ATUCoasterRide::DrawCollisionBoxes() const
+{
+	// THE COLLISION MODEL, drawn as what it is: a SPAN and a CORRIDOR, not a
+	// mesh. Each train's box is its nose-to-tail span at the corridor's full
+	// width — the volume the overlap check actually compares — so two boxes
+	// touching on screen is exactly the condition the detector fires on. A
+	// WRECK draws red regardless of the toggle: a crash that has to be
+	// hunted for in a log is a crash the operator missed.
+	const float HalfW = static_cast<float>(CollisionCorridorM * 0.5 * 100.0);
+	for (int32 t = 0; t < Trains.Num(); ++t)
+	{
+		const bool bWrecked = TrainWrecked.IsValidIndex(t) && TrainWrecked[t];
+		if (!bShowCollisionBoxes && !bWrecked)
+		{
+			continue;
+		}
+		const FTrackFrame& F = Trains[t]->GetFrame();
+		const float HalfL = static_cast<float>(FMath::Max(1.0f, TrainLengthM) * 0.5 * 100.0);
+		DrawDebugBox(GetWorld(), ToWorld(F.Position),
+			FVector(HalfL, HalfW, HalfW), ToWorldRotation(F),
+			bWrecked ? FColor(215, 60, 50) : FColor(80, 170, 200),
+			false, -1.f, 0, bWrecked ? 6.f : 1.5f);
+	}
+
+	// And the CORRIDOR FOUL, if the last rebuild found one: the diagnostics
+	// row names two metres; this joins them, so "at 803 m and 929 m" is a
+	// place to look at rather than a pair of numbers.
+	if (bShowCollisionBoxes && LastClearance.ClosestApproach > 0.0
+		&& LastClearance.ClosestApproach < CollisionCorridorM)
+	{
+		const FColor Red(215, 60, 50);
+		DrawDebugBox(GetWorld(), ClearanceFoulAtW, FVector(60.f, HalfW, HalfW),
+			FQuat::Identity, Red, false, -1.f, 0, 3.f);
+		DrawDebugBox(GetWorld(), ClearanceFoulAndW, FVector(60.f, HalfW, HalfW),
+			FQuat::Identity, Red, false, -1.f, 0, 3.f);
+		DrawDebugLine(GetWorld(), ClearanceFoulAtW, ClearanceFoulAndW, Red,
+			false, -1.f, 0, 3.f);
+	}
+}
+
 void ATUCoasterRide::PublishShowEvents()
 {
 	// TIER 3'S ONE INTERFACE. Events out, fixture commands out the other side, and
@@ -8396,6 +8804,19 @@ void ATUCoasterRide::ResetEmergencyStop()
 	ReportedDriveFault.Reset();
 	UE_LOG(LogTemp, Warning, TEXT("TrackUnlimited: emergency stop reset."));
 	LogEvent(TEXT("emergency stop RESET"), false);
+
+	// THE RE-RAIL. A wreck does not clear because a latch did — but RESET is
+	// the operator saying "dealt with", and on a real ride dealing with a
+	// collision means maintenance re-railing the trains. So a reset with
+	// wrecks present re-stages the whole ride, by the same path as a rebuild
+	// because it IS one: track, trains, signalling and counters re-placed
+	// from scratch, which is the only honest state after two trains have
+	// occupied one piece of track.
+	if (TrainWrecked.Contains(true))
+	{
+		LogEvent(TEXT("maintenance re-rail — wrecked trains recovered, ride re-staged"), false);
+		RebuildFromSegments();
+	}
 }
 
 void ATUCoasterRide::ServeStations(float DeltaSeconds)
@@ -9912,7 +10333,13 @@ void ATUCoasterRide::SimStep(double DeltaSeconds)
 
 	for (int32 t = 0; t < Trains.Num(); ++t)
 	{
-		Trains[t]->Step(DeltaSeconds);
+		// A WRECKED train does not integrate — see TrainWrecked. Everything
+		// else in this loop still runs for it: its span keeps its block
+		// occupied and the signalling keeps being told where it is.
+		if (!(TrainWrecked.IsValidIndex(t) && TrainWrecked[t]))
+		{
+			Trains[t]->Step(DeltaSeconds);
+		}
 
 		// The return is the only record a signalling violation leaves besides the
 		// counter, so it is read rather than discarded. With two trains it is also
@@ -9934,6 +10361,40 @@ void ATUCoasterRide::SimStep(double DeltaSeconds)
 			if (Drives && Drives->TripEmergencyStop("signalling violation"))
 			{
 				bEmergencyStop = true;
+			}
+		}
+	}
+	// THE PHYSICAL OVERLAP CHECK — the second, independent means of detection
+	// the 2026-08-24 crash was missing. The interlocking exists to make this
+	// unreachable, and a valleyed train plus a brake that could not stop what
+	// arrived defeated it: two trains drove through each other and the ride
+	// carried on. Now they collide. Both trains halt where they touch, are
+	// wrecked until a rebuild, and the E-stop latches. At 240 Hz the deepest
+	// interpenetration a scan can leave is one step's travel — centimetres —
+	// so no clamp-apart is attempted; "in contact" is the honest state.
+	for (int32 a = 0; a < Trains.Num(); ++a)
+	{
+		for (int32 b = a + 1; b < Trains.Num(); ++b)
+		{
+			if (TrainWrecked.IsValidIndex(a) && TrainWrecked.IsValidIndex(b)
+				&& !(TrainWrecked[a] && TrainWrecked[b])
+				&& TrainSpansOverlap(Trains[a]->GetRearS(), Trains[a]->GetFrontS(),
+					Trains[b]->GetRearS(), Trains[b]->GetFrontS(),
+					bTrackIsCircuit, Track.TotalLength()))
+			{
+				TrainWrecked[a] = TrainWrecked[b] = true;
+				Trains[a]->Place(Trains[a]->GetDistance(), 0.0);
+				Trains[b]->Place(Trains[b]->GetDistance(), 0.0);
+				UE_LOG(LogTemp, Error,
+					TEXT("TrackUnlimited: COLLISION — trains %d and %d are in contact at ")
+					TEXT("%.0f m. Both are wrecked until the track is rebuilt."),
+					a, b, Trains[b]->GetDistance());
+				LogEvent(FString::Printf(TEXT("COLLISION — trains %d and %d at %.0f m"),
+					a, b, Trains[b]->GetDistance()));
+				if (Drives && Drives->TripEmergencyStop("train collision"))
+				{
+					bEmergencyStop = true;
+				}
 			}
 		}
 	}
@@ -10404,6 +10865,9 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 			DrawRestraints();
 		}
 		DrawBlockMarkers();
+		// Not camera-suppressed: a wreck box around the train you are riding
+		// is information, not obstruction — you crashed.
+		DrawCollisionBoxes();
 	}
 
 	// WHERE THE RIDER IS SITTING IS A SEAT, not a fraction of a train. The

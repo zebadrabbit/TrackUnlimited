@@ -972,6 +972,24 @@ private:
 	// on screen reports it.
 	TArray<TUniquePtr<FTrain>> Trains;
 
+	// Parallel to Trains. A train involved in a collision is WRECKED: its physics
+	// stops being stepped, because the simulation has no crash model and
+	// integrating a train through the one it hit would be pretending it does.
+	// Everything else about it stays live — its span still occupies its block,
+	// the sensors still see it — which is the state a real wreck leaves an
+	// interlocking in. Cleared only by a rebuild: a crash needs a re-rail, not a
+	// reset, so acknowledging the E-stop does not un-wreck anything.
+	TArray<bool> TrainWrecked;
+
+	// The last self-clearance analysis, kept for the diagnostics panel: the
+	// collision-corridor row names the two metres of track that pass too close.
+	FClearanceReport LastClearance;
+
+	// The foul's two world positions, cached at rebuild because EvaluateAt is
+	// O(track length) and the marker draws at frame rate.
+	FVector ClearanceFoulAtW = FVector::ZeroVector;
+	FVector ClearanceFoulAndW = FVector::ZeroVector;
+
 	// Rebuilt wholesale alongside the trains, for the same reason: block
 	// boundaries come off the segment list, so an edit to the track is an edit to
 	// the blocks. Null only if the track failed to build at all.
@@ -1059,6 +1077,7 @@ private:
 
 	void SampleRestraints();
 	void DrawRestraints() const;
+	void DrawCollisionBoxes() const;
 
 	/** The authored list turned into what the evacuation check reads. Rebuild only. */
 	std::vector<FWalkwaySpan> WalkwaySpans;
@@ -1501,6 +1520,17 @@ private:
 	 */
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Diagnostics")
 	bool bShowSupportFindings = false;
+
+	/**
+	 * Draw the collision model: each train's nose-to-tail span as a box at the
+	 * corridor's full width — the exact volume the overlap check compares — and
+	 * the corridor-foul marker joining the two metres the diagnostics row names.
+	 * Opt-in like the support findings, and for the same reason; a WRECKED
+	 * train's box draws red regardless, because a crash must not need a
+	 * checkbox to be seen.
+	 */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Diagnostics")
+	bool bShowCollisionBoxes = false;
 
 	FDiagnostics Diagnostics;
 	std::vector<FTrackDiagnostic> LastDiagnostics;

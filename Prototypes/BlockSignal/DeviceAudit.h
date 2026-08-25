@@ -59,6 +59,13 @@ enum class EDeviceProblem
 
     // It can start a train but not stop one, so it cannot bound a block either.
     ReleasesButCannotHold,
+
+    // A train released from REST at this hold cannot reach the next one — it
+    // valleys somewhere downstream. Holding is what the device is for, so a
+    // hold that strands what it holds is a crash chain waiting for a dispatch:
+    // measured 2026-08-24, valleyed train, rear-end. Found by simulation, not
+    // arithmetic — v^2 bookkeeping cannot see a hump two hills downstream.
+    CannotFinishFromRest,
 };
 
 struct FDeviceFinding
@@ -116,6 +123,7 @@ inline const char* DeviceProblemName(EDeviceProblem P)
     case EDeviceProblem::ShorterThanTrain:      return "device shorter than its train";
     case EDeviceProblem::CannotStopArrival:     return "device cannot stop what arrives";
     case EDeviceProblem::HoldsButCannotRelease: return "block boundary that cannot release";
+    case EDeviceProblem::CannotFinishFromRest:  return "a train held here cannot finish";
     default:                                    return "block boundary that cannot hold";
     }
 }

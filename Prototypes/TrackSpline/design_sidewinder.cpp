@@ -20,6 +20,7 @@
 
 #include "TrackIO.h"
 #include "TrackClose.h"
+#include "TrackValidate.h"
 #include "../TrainPhysics/RideProfile.h"
 
 #include <cmath>
@@ -36,8 +37,17 @@ inline double BankDeg(double SpeedMs, double R) { return std::atan2(SpeedMs * Sp
 struct FDesign
 {
     FTrackDocument Doc;
-    std::size_t DropIndex = 0;   // the height lever
-    std::size_t FillIndex = 0;   // the plan lever (along)
+    std::size_t DropIndex = 0;     // the height lever
+    std::size_t FillIndex = 0;     // the plan lever (along)
+    std::size_t HelixIndex = 0;    // the heading lever -- see the helix note
+    std::size_t Turn1ArcIndex = 0; // recorded for reference; see the snake for the across lever
+    std::size_t SnakeArcIndex = 0; // the across lever -- see the snake
+    std::size_t HomeRunIndex = 0;  // the height feedback's knob -- see the home descent
+    std::size_t McbrIndex = 0;     // the RETURN's own along lever -- level, so height-neutral
+    double HelixTurns = 0.0;       // the closed-form starting guess for the solver
+    double SinT2Out = 0.0;         // what the payback climb actually used
+    double T2HeadingOut = 0.0;     // the payback arc's plan turn, for the calibration step
+    double HomeDropOut = 0.0;      // what the home descent actually used, for the feedback
 
     void Add(const FAuthoredSegment& A) { Doc.Segments.push_back(A); }
 
@@ -60,6 +70,51 @@ struct FDesign
         In.RawSegment.PitchCurvatureEnd = Kk; In.Zone = Z; In.ZoneSpeed = Speed; In.ZoneAccel = Accel; In.ZoneDecel = Accel; Add(In);
         FAuthoredSegment Out; Out.Kind = ESegmentKind::Raw; Out.RawSegment.Length = L;
         Out.RawSegment.PitchCurvatureStart = Kk; Out.Zone = Z; Out.ZoneSpeed = Speed; Out.ZoneAccel = Accel; Out.ZoneDecel = Accel; Add(Out);
+    }
+    // Author the components for a desired WORLD curvature pair in a path frame
+    // twisted by Rot about the tangent: authored = R(-Rot) x desired. The
+    // integrator applies authored yaw about PathUp and pitch about PathLateral,
+    // and a helix leaves those axes rolled by its holonomy -- this is how a
+    // segment in the twisted region still bends the way its author meant.
+    // Exact, not approximate: a constant rotation of a linear ramp is a linear
+    // ramp, which is the whole of what a Raw segment can carry.
+    static void Twisted(double YawW, double PitchW, double Rot, double& AyOut, double& ApOut)
+    {
+        AyOut = YawW * std::cos(Rot) + PitchW * std::sin(Rot);
+        ApOut = -YawW * std::sin(Rot) + PitchW * std::cos(Rot);
+    }
+    // Pitch eased in and out WITHOUT leaving the turn: a Raw pair that ramps
+    // yaw curvature between its endpoints while pitch curvature rises and
+    // falls. What lets a helix climb or descend and still hand its easements
+    // LEVEL track -- the coupling note at the helix says why that matters.
+    // Bank is held, not ramped: un-banking is the exit clothoid's job, and
+    // doing it here would be the exact coupling this helper exists to avoid.
+    // Rot authors the pair for a frame already twisted by that much.
+    // UX: the runtime editor cannot author this at all -- Raw again, and the
+    // first place the design needs yaw AND pitch curvature on one segment.
+    void TurningPitch(double DeltaRad, double K, double YawStart, double YawEnd, double Bank,
+                      double Rot = 0.0)
+    {
+        const double Kk = DeltaRad >= 0 ? K : -K;
+        const double L = std::fabs(DeltaRad) / K;
+        const double YawMid = 0.5 * (YawStart + YawEnd);
+        FAuthoredSegment In; In.Kind = ESegmentKind::Raw; In.RawSegment.Length = L;
+        Twisted(YawStart, 0.0, Rot, In.RawSegment.YawCurvatureStart, In.RawSegment.PitchCurvatureStart);
+        Twisted(YawMid, Kk, Rot, In.RawSegment.YawCurvatureEnd, In.RawSegment.PitchCurvatureEnd);
+        In.RollStartDegrees = In.RollEndDegrees = Bank; In.RollMode = ERollMode::WorldBank; Add(In);
+        FAuthoredSegment Out; Out.Kind = ESegmentKind::Raw; Out.RawSegment.Length = L;
+        Twisted(YawMid, Kk, Rot, Out.RawSegment.YawCurvatureStart, Out.RawSegment.PitchCurvatureStart);
+        Twisted(YawEnd, 0.0, Rot, Out.RawSegment.YawCurvatureEnd, Out.RawSegment.PitchCurvatureEnd);
+        Out.RollStartDegrees = Out.RollEndDegrees = Bank; Out.RollMode = ERollMode::WorldBank; Add(Out);
+    }
+    // A clothoid, authored for a twisted frame: same linear curvature ramp,
+    // components rotated. Raw because a Clothoid segment has no pitch field.
+    void TwistedClothoid(double L, double K0, double K1, double Roll0, double Roll1, double Rot)
+    {
+        FAuthoredSegment A; A.Kind = ESegmentKind::Raw; A.RawSegment.Length = L;
+        Twisted(K0, 0.0, Rot, A.RawSegment.YawCurvatureStart, A.RawSegment.PitchCurvatureStart);
+        Twisted(K1, 0.0, Rot, A.RawSegment.YawCurvatureEnd, A.RawSegment.PitchCurvatureEnd);
+        A.RollStartDegrees = Roll0; A.RollEndDegrees = Roll1; A.RollMode = ERollMode::WorldBank; Add(A);
     }
     // Clothoid in, arc, clothoid out, roll ramped across the easements.
     // UX: three segments and seven numbers for one banked turn; the radius and
@@ -84,7 +139,14 @@ struct FDesign
     }
 };
 
-FDesign Sidewinder()
+// The overrides warm-start the outer loop in main(): the solver's three levers
+// and the measured rise trim are fed back in, because the untwist segment is
+// authored FROM the helix's turn count and has to be re-authored when the
+// solver moves it. Zero means "use the closed-form starting guess".
+FDesign Sidewinder(double RiseTrimRad = 0.0, double TurnsOverride = 0.0,
+                   double DropOverride = 0.0, double FillOverride = 0.0,
+                   double SnakeOverride = 0.0, double SinT2Override = 0.0,
+                   double HomeDropOverride = 0.0)
 {
     FDesign D;
     // Seven 3 m cars: 21 m. Every holding device is 30 m, which is the train
@@ -110,7 +172,7 @@ FDesign Sidewinder()
     // from a 26 m crest -- the height lever had nowhere to go. UX: the editor
     // shows no height at a segment end, so that is found by riding it.
     D.EasedPitch(-Deg(40.0), 0.025);                                        // 8-9
-    D.DropIndex = D.Straight(15.0);                                         // 10 height lever
+    D.DropIndex = D.Straight(DropOverride > 0.0 ? DropOverride : 15.0);     // 10 height lever
     D.EasedPitch(Deg(40.0), 0.025);                                         // 11-12 pull-out, level (0.025 keeps the bottom near 3.2 g)
 
     // ---- THE FILL, on the OUTBOUND leg at the bottom of the drop: the plan
@@ -119,20 +181,28 @@ FDesign Sidewinder()
     // dead fill on the return leg, which is where the energy runs out.
     // UX: the plan balance of an oval -- outbound extent equals return
     // extent -- is nowhere in the editor; it is found by the seam not closing.
-    D.FillIndex = D.Straight(40.0);
+    D.FillIndex = D.Straight(FillOverride > 0.0 ? FillOverride : 40.0);
 
-    // ---- TURN 1: 180 left at about 22 m/s.
+    // ---- TURN 1: 180 left at about 22 m/s. Its arc is the closure's ACROSS
+    // lever (FreeRadius): turn 2 is a climbing helix now, whose easements do
+    // not project onto the plan quite like a level turn's, and a few
+    // centimetres of across error have to land somewhere an author said they
+    // may. The radius moves by fractions of a metre.
     D.BankedTurn(35.0, 180.0, 40.0, BankDeg(27.0, 35.0));   // 27 m/s is what a 46 m crest delivers here; banked for 22 it read 0.8 g lateral
+    D.Turn1ArcIndex = D.Doc.Segments.size() - 2;
 
-    // ---- MID-COURSE BLOCK BRAKE, level. Bites to 13 m/s, can hold and convey.
-    // 17 m/s out, not 13: at 13 the train stalled on hill 2 (8 m of hill is
-    // 8.6 m of v^2/2g, and a brake run is where that margin goes).
-    // UX: the profile graph shows the energy running out, but only after
-    // riding it; nothing in the editor says "7 m of energy left, 3 m of hill".
-    // 25 m/s out, which on this ride is a BLOCK more than a brake: the return
-    // leg loses about 0.4 m/s^2 to rolling and aerodynamic drag over 700 m and
-    // then climbs 3 m, and that is 600 m2/s2 of v2 -- all of it.
-    D.Straight(30.0, EAuthoredZone::BlockBrake, 25.0, 6.0, 6.0, 4.0);       // 22
+    // ---- MID-COURSE TRIM at 25 m/s. It was a BLOCK brake, and that was wrong
+    // twice over, measured (2026-08-24): a train arrives at 26.6 m/s and
+    // stopping it needs twice the device -- commanded to hold, it overran into
+    // the block and REAR-ENDED the train ahead -- and a train RELEASED here
+    // from a standing start left at 13 m/s where the course ahead needs 25,
+    // so it valleyed on hill 3 every time; the preset STAGED a train here at
+    // boot, which is why the first thing anybody saw was the valley. A device
+    // that can neither stop what arrives nor deliver a train that completes
+    // is a trim wearing a block brake's name. Now it is a trim, which is what
+    // its 25 m/s pass-through always was; the HOLD moved to after the helix,
+    // where a stopped train has only the rise left to pay for.
+    D.Straight(30.0, EAuthoredZone::Brake, 26.0, 6.0, 4.0);       // 22  pad only; Decel is its rate
 
     // ---- THE SNAKE: right, left, left, right at 40 m. Banking both ways, and
     // plan-neutral, so the closure never sees it.
@@ -140,6 +210,12 @@ FDesign Sidewinder()
     // puts the line back where it was. (A straight between the halves of one S
     // was tried as a third, across lever, and was the only thing NOT closing:
     // the helix's easements are symmetric too, so nothing needed moving.)
+    // The SECOND bend's arc is the closure's ACROSS lever (FreeLength): turn 2
+    // is a climbing helix now, whose pitched easement does not project onto
+    // the plan quite like a level one, and the few centimetres of across
+    // error have to land somewhere an author said they may. A 45 degree
+    // bend's length moves the line across as well as along; the solver uses
+    // fractions of a metre of it.
     const double Sb = BankDeg(24.0, 45.0);   // banked for the speed it actually gets; at R 35 for 20 m/s the lateral read 0.84 g
     // 45 degree bends with 25 m easements. They were 25 degree bends, which at
     // R 35 is 15 m of arc -- LESS than the two 25 m easements turn (20.5 deg
@@ -150,6 +226,8 @@ FDesign Sidewinder()
     // UX: a negative arc should be a red row, not a vanished segment.
     D.BankedTurn(-45.0, 45.0, 25.0, -Sb);
     D.BankedTurn(45.0, 45.0, 25.0, Sb);
+    D.SnakeArcIndex = D.Doc.Segments.size() - 2;
+    if (SnakeOverride > 0.0) { D.Doc.Segments[D.SnakeArcIndex].Length = SnakeOverride; }
     D.BankedTurn(45.0, 45.0, 25.0, Sb);
     D.BankedTurn(-45.0, 45.0, 25.0, -Sb);
 
@@ -158,47 +236,182 @@ FDesign Sidewinder()
     D.Hill(16.0, 0.035);
     D.Hill(12.0, 0.04);
 
-    // ---- THE HELIX: one full turn left, LEVEL, R 20. It was descending 4
-    // degrees first, and the clothoid OUT of a pitched, banked helix turned 13
-    // degrees of pitch on its own: un-banking while pitched puts the easement's
-    // yaw curvature partly into pitch. A level helix has no such problem, and
-    // the descent it was carrying moved into the drop, which the solver sizes.
-    // UX: nothing in the editor says a helix should be entered level, or that
-    // MakeHelix wants the track already at its climb angle (TrackSpline.h).
-    const double Hb = BankDeg(15.0, 18.0);
-    { FAuthoredSegment A; A.Kind = ESegmentKind::Clothoid; A.Length = 20.0; A.CurvatureStart = 0; A.CurvatureEnd = 1.0 / 18.0;
-      A.RollEndDegrees = Hb; A.RollMode = ERollMode::WorldBank; D.Add(A); }                 // 49
-    // ONE FULL TURN INCLUDING THE EASEMENTS: each 20 m clothoid to 1/20 turns
-    // L*k/2 = 0.5 rad, so the helix itself is a turn minus a radian. The arc
-    // helper subtracts its easements for you; a helix's Turns does not.
-    // UX: typing 1.0 here gives 417 degrees and a circuit that does not close.
-    const double HelixTurns = 1.0 - (2.0 * (20.0 / 18.0) * 0.5) / (2.0 * Pi);   // L*k/2 each, k = 1/18
-    { FAuthoredSegment H; H.Kind = ESegmentKind::Helix; H.Radius = 18.0; H.ClimbAngleDegrees = 0.0; H.Turns = HelixTurns;
-      H.RollStartDegrees = Hb; H.RollEndDegrees = Hb; H.RollMode = ERollMode::WorldBank; D.Add(H); }  // 50
-    { FAuthoredSegment C; C.Kind = ESegmentKind::Clothoid; C.Length = 20.0; C.CurvatureStart = 1.0 / 18.0; C.CurvatureEnd = 0;
-      C.RollStartDegrees = Hb; C.RollMode = ERollMode::WorldBank; D.Add(C); }               // 51
+    // ---- THE HELIX: one full turn left, DESCENDING 4 degrees, R 18.
+    // A LEVEL full-turn helix CROSSES ITSELF AT GRADE. One full plan turn has
+    // winding: the exit easement must pass through the entry easement, and it
+    // did -- measured at 0.109 m rail centre to rail centre (the rails alone
+    // are 1.22 m wide), and photographed from the ride before it was measured.
+    // So the descent is not styling: it is the vertical separation at the
+    // crossing, about 6 m against the 3 m collision corridor.
+    //
+    // It was level because the clothoid OUT of a pitched, banked helix turned
+    // 13 degrees of pitch on its own -- un-banking while pitched puts the
+    // easement's yaw curvature partly into pitch. The answer is to LEVEL OUT
+    // WHILE STILL TURNING: TurningPitch holds the yaw curvature while pitch
+    // eases away, so both clothoids run exactly as level as they always did.
+    // UX: nothing in the editor says a helix should be entered at its climb
+    // angle (TrackSpline.h), let alone that leaving one wants a segment kind
+    // the runtime editor cannot author.
+    const double HR = 20.0;
+    const double HClimbDeg = 3.0;              // the descent through the turn -- enough for the
+                                               // corridor (~4.5 m at the crossing), cheap on the climb back
+    const double HClimb = Deg(HClimbDeg);
+    const double HC = std::cos(HClimb);
+    const double HKyaw = HC * HC / HR;         // a true helix's curvature at that climb
+    const double HEase = 20.0;
+    const double HPitchK = 0.035;
+    const double HPitchL = HClimb / HPitchK;   // each Raw piece of a TurningPitch pair
+    const double Hb = BankDeg(19.0, HR);       // banked for the speed it measures, not the one it wants
+    // A DESCENDING HELIX TWISTS THE FRAME, AND THE TWIST IS GEOMETRY. Three
+    // constructions were measured before this one:
+    //   - LEVEL (as shipped): crosses itself at 0.109 m, because one full plan
+    //     turn has winding and both easements sit at the same height.
+    //   - Authored level, entered pitched: constant curvature with no torsion
+    //     is a TILTED CIRCLE, not a helix -- it came back up (+1.4 m net).
+    //   - MakeHelix at -4 with a counter-torsion "untwist" after it: torsion
+    //     does not twist the frame, it rotates a segment's own curvature
+    //     vector (CurvatureAt). The twist is PARALLEL-TRANSPORT HOLONOMY,
+    //     2 pi Turns sin(climb) = 0.33 rad, and no authored field removes
+    //     what geometry put in -- the exit easements landed in a frame rolled
+    //     19 degrees, over-pitched by exactly that rotation (fitted to three
+    //     decimals), and the seam ended 13 degrees down. That is also where
+    //     the historical "13 degrees of pitch" came from.
+    // So the twisted stretch is authored FOR the twisted frame -- Twisted(),
+    // exact for linear ramps -- and the twist itself is PAID BACK where the
+    // layout already owes a climb: turn 2 below is a RISING helix whose
+    // opposite holonomy cancels this one.
+    const double TurnClothoids = 2.0 * (HEase / HR) * 0.5;
+    const double TurnPairs = 2.0 * HPitchL * (1.0 / HR + HKyaw);
+    const double HelixTurnsGuess = (2.0 * Pi - TurnClothoids - TurnPairs) / (2.0 * Pi);
+    const double HelixTurns = TurnsOverride > 0.0 ? TurnsOverride : HelixTurnsGuess;
+    D.HelixTurns = HelixTurnsGuess;
+    const double Phi = 2.0 * Pi * HelixTurns * std::sin(HClimb);   // the holonomy, exactly
+    { FAuthoredSegment A; A.Kind = ESegmentKind::Clothoid; A.Length = HEase; A.CurvatureStart = 0; A.CurvatureEnd = 1.0 / HR;
+      A.RollEndDegrees = Hb; A.RollMode = ERollMode::WorldBank; D.Add(A); }
+    D.TurningPitch(-HClimb, HPitchK, 1.0 / HR, HKyaw, Hb);   // pitch down, still turning
+    { FAuthoredSegment H; H.Kind = ESegmentKind::Helix; H.Radius = HR; H.ClimbAngleDegrees = -HClimbDeg; H.Turns = HelixTurns;
+      H.RollStartDegrees = Hb; H.RollEndDegrees = Hb; H.RollMode = ERollMode::WorldBank; D.Add(H);
+      D.HelixIndex = D.Doc.Segments.size() - 1; }
+    D.TurningPitch(HClimb, HPitchK, HKyaw, 1.0 / HR, Hb, Phi);   // level out, still turning -- twisted frame
+    D.TwistedClothoid(HEase, 1.0 / HR, 0.0, Hb, 0.0, Phi);       // and unbank, likewise
 
-    // ---- TURN 2: 180 left, same radius as turn 1 -- or it does not close.
-    // IDENTICAL TO TURN 1 -- radius AND easement -- or the return line lands
-    // 2 x (R1 - R2) off the station line. R 30 was tried for speed: 11 m short.
-    // Taken at the low level, BEFORE the rise: with the rise first the train
-    // entered this 150 m turn at 8 m/s, spent 18 s in it and came out at 3.6.
-    D.BankedTurn(35.0, 180.0, 40.0, BankDeg(12.0, 35.0));
+    // ---- TURN 2, THE PAYBACK: the 180 CLIMBS now, as a helix of opposite
+    // holonomy. Its climb is solved from the helix's own turn count --
+    // 0.5 turns of this against HelixTurns of that -- so the two twists
+    // cancel exactly and the frame leaves the turn straight: everything from
+    // here to the seam is plain authoring again. The climb replaces the old
+    // 3 m rise (the return now owes about 12 m, which the solver takes back
+    // out of the drop), and a helix on a 35 m cylinder projects onto the plan
+    // as the same 35 m circle as turn 1, which is what keeps the across
+    // balance. Still taken at the low level: the climb at the END spends the
+    // train's last energy, and arriving at the brakes slow is what brakes
+    // want.
+    const double T2R = 35.0;
+    const double T2Ease = 40.0;
+    // The guess assumes half a turn of payback; only the torsioned ARC pays,
+    // and how much is not worth deriving when it can be MEASURED -- main()
+    // reads the residual twist off the level home stretch (WorldBankOf on
+    // track whose authored bank is zero) and feeds the climb back in until
+    // the residual is arcseconds. Same idiom as the seam trim.
+    const double SinT2 = SinT2Override > 0.0 ? SinT2Override
+                       : 2.0 * HelixTurns * std::sin(HClimb);
+    const double T2Climb = std::asin(SinT2);
+    const double T2C = std::cos(T2Climb);
+    const double T2K = T2C * T2C / T2R;
+    const double T2Bank = BankDeg(17.0, T2R);
+    D.SinT2Out = SinT2;
+    // The 180 budget, and EVERY resident of the circle pays into it: the two
+    // easements AND the level-out pair, which stays at full curvature while
+    // pitch eases away. Forgetting the pair made turn 2 turn 193.5 degrees,
+    // measured -- the return line ran 13.5 degrees skew and no lever could
+    // reach it.
+    const double T2PairYaw = (T2Climb / 0.03) * (T2K + 1.0 / T2R);
+    const double T2Heading = Pi - T2Ease * T2K - T2PairYaw;
+    const double T2L2 = T2Heading / (T2K * T2C);
+    D.TurningPitch(T2Climb, 0.03, 0.0, 0.0, 0.0, Phi);         // pitch up on the straight, twisted frame
+    D.TwistedClothoid(T2Ease, 0.0, T2K, 0.0, T2Bank, Phi);     // ease into the circle, climbing
+    {
+        // The climbing arc itself: constant components authored for the frame
+        // as it stands, plus the helix's own torsion -- which rotates them at
+        // exactly the rate the frame untwists, so the APPLIED field is a true
+        // helix from end to end while Phi decays to zero.
+        FAuthoredSegment H2; H2.Kind = ESegmentKind::Raw;
+        D.T2HeadingOut = T2Heading;
+        H2.RawSegment.Length = T2L2;
+        FDesign::Twisted(T2K, 0.0, Phi, H2.RawSegment.YawCurvatureStart, H2.RawSegment.PitchCurvatureStart);
+        H2.RawSegment.YawCurvatureEnd = H2.RawSegment.YawCurvatureStart;
+        H2.RawSegment.PitchCurvatureEnd = H2.RawSegment.PitchCurvatureStart;
+        H2.RawSegment.Torsion = Phi / H2.RawSegment.Length;
+        H2.RollStartDegrees = H2.RollEndDegrees = T2Bank; H2.RollMode = ERollMode::WorldBank; D.Add(H2);
+    }
+    D.TurningPitch(-T2Climb, 0.03, T2K, 1.0 / T2R, T2Bank);    // level out, still turning -- frame is straight now
+    { FAuthoredSegment C2; C2.Kind = ESegmentKind::Clothoid; C2.Length = T2Ease; C2.CurvatureStart = 1.0 / T2R; C2.CurvatureEnd = 0;
+      C2.RollStartDegrees = T2Bank; C2.RollMode = ERollMode::WorldBank; D.Add(C2); }
 
-    // ---- THE RISE back to station height: about 3 m at 12 degrees, nearly
-    // all of it in the easements. 4.5 m stalled the train 1 m short.
-    D.EasedPitch(Deg(12.0), 0.03);
-    D.Straight(1.0);
-    D.EasedPitch(-Deg(12.0), 0.03);
+    // ---- THE SEAM TRIM, HERE, where the residual is BORN -- the payback
+    // chain's imperfections leave the track pitched a few degrees. Trimmed at
+    // the very end instead, the whole home stretch rode that slope: the home
+    // descent under-delivered, the brakes sat on a 5 degree gradient, the
+    // seam ended 11 m high and the solver paid for it by sinking the entire
+    // mid-course 19 m. Measured by main()'s outer loop, cancelled here, so
+    // everything after this line is authored on genuinely level track.
+    if (std::fabs(RiseTrimRad) > 1e-9)
+    {
+        D.EasedPitch(-RiseTrimRad, std::max(1e-4, std::fabs(RiseTrimRad) / 4.0));
+    }
 
-    // ---- THE FINAL BLOCK BRAKE, and home.
-    D.Straight(Station, EAuthoredZone::BlockBrake, 3.0, 3.0, 3.0, 3.0);     // 63
+    // ---- THE HOME DESCENT. Turn 2's climb has to end ABOVE the station, or
+    // the ride's whole low stretch sits a climb's depth underground and the
+    // station stops being "a little above the ground" -- measured: without
+    // this the lowest point was 17.9 m down and the train died on the climb.
+    // Sized in closed form: the low stretch sits at (HomeDrop - chain climb),
+    // and the brief's shipped figure for the station above it is 3.2 m. A
+    // FEEDBACK loop was tried here first and fought the closure solver to a
+    // 20 m standstill -- the lowest point is a bang-bang function of this
+    // number, and bang-bang is exactly what a per-pass correction cannot
+    // chase. Closed form is dull and converges.
+    {
+        const double T2PairLen = 2.0 * (T2Climb / 0.03);
+        const double ChainClimb = (T2Ease + T2L2 + T2PairLen) * SinT2;
+        const double HomeDrop = HomeDropOverride > 0.0 ? HomeDropOverride
+                              : std::max(1.0, ChainClimb - 3.2);
+        D.HomeDropOut = HomeDrop;
+        const double HomeAngle = Deg(12.0);
+        const double PairDrop = 2.0 * (HomeAngle / 0.03) * std::sin(HomeAngle * 0.5);
+        const double Run = std::max(5.0, (HomeDrop - PairDrop) / std::sin(HomeAngle));
+        D.EasedPitch(-HomeAngle, 0.03);
+        // NOT a solver lever, deliberately: it was one for a while, and the
+        // solver's plan closure and the height feedback then wrote the same
+        // segment and chased each other -- home drop walked 12 to 30 m while
+        // the lowest point wandered. The return's along lever is the LEVEL
+        // mid-course brake below; this run belongs to the height loop alone.
+        D.HomeRunIndex = D.Straight(Run);
+        D.EasedPitch(HomeAngle, 0.03);
+    }
+
+    // ---- THE MID-COURSE BLOCK BRAKE, on the LEVEL HOME STRETCH (2026-08-24).
+    // Where a block brake goes is never "mid-course": it is WHERE A STOPPED
+    // TRAIN CAN STILL FINISH, and on this ride that is after the helix and
+    // the climb have both been paid for -- a train released from rest here
+    // rolls into the final brake on the tyres' own push. 40 m at least, so
+    // the pad can stop what arrives with the whole train over the device --
+    // and its length is the closure's RETURN lever (FreeLength): dead level,
+    // so the solver can trade plan length here without touching a height,
+    // and a longer brake is only ever safer.
+    D.McbrIndex = D.Straight(40.0, EAuthoredZone::BlockBrake, 12.0, 6.0, 6.0, 6.0);
+
+    // ---- THE FINAL BLOCK BRAKE, and home. Pad at 6, measured: at 3 it could
+    // not stop what arrives and overran toward a station with a train in it.
+    D.Straight(Station, EAuthoredZone::BlockBrake, 3.0, 3.0, 3.0, 6.0);
     return D;
 }
 
 // Zones from contiguous runs of equal kind and speed, as the actor derives them.
-void AddZones(FTrain& Train, const FTrackDocument& Doc)
+struct FZoneSpan { double Start, End; EAuthoredZone Z; double Speed, Accel, Decel, Pad; };
+
+std::vector<FZoneSpan> CollectZones(const FTrackDocument& Doc)
 {
+    std::vector<FZoneSpan> Out;
     double S = 0.0; std::size_t i = 0;
     while (i < Doc.Segments.size())
     {
@@ -207,13 +420,24 @@ void AddZones(FTrain& Train, const FTrackDocument& Doc)
         const double Accel = A.ZoneAccel, Decel = A.ZoneDecel, Pad = A.ZoneBrakeDecel;
         while (i < Doc.Segments.size() && Doc.Segments[i].Zone == Z && Doc.Segments[i].ZoneSpeed == Sp)
         { S += BuildSegment(Doc.Segments[i]).Length; ++i; }
-        if (Z == EAuthoredZone::None) { continue; }
-        std::printf("  zone %-10s %7.1f - %7.1f m  %.1f m/s\n",
-            Z == EAuthoredZone::Station ? "STATION" : Z == EAuthoredZone::Lift ? "LIFT" : Z == EAuthoredZone::BlockBrake ? "BLOCK BRAKE" : "BRAKE",
-            Start, S, Sp);
-        if (Z == EAuthoredZone::Brake) { Train.AddZone(MakeBrake(Start, S, Sp, Decel)); continue; }
-        FTrackZone T{Start, S, Sp, Accel, Decel};
-        if (Pad > 0.0) { T.BrakeLimit = Sp; T.BrakeDecel = Pad; }
+        if (Z != EAuthoredZone::None) { Out.push_back({Start, S, Z, Sp, Accel, Decel, Pad}); }
+    }
+    return Out;
+}
+
+const char* ZoneName(EAuthoredZone Z)
+{
+    return Z == EAuthoredZone::Station ? "STATION" : Z == EAuthoredZone::Lift ? "LIFT"
+         : Z == EAuthoredZone::BlockBrake ? "BLOCK BRAKE" : "BRAKE";
+}
+
+void AddZones(FTrain& Train, const std::vector<FZoneSpan>& Zones)
+{
+    for (const FZoneSpan& Z : Zones)
+    {
+        if (Z.Z == EAuthoredZone::Brake) { Train.AddZone(MakeBrake(Z.Start, Z.End, Z.Speed, Z.Decel)); continue; }
+        FTrackZone T{Z.Start, Z.End, Z.Speed, Z.Accel, Z.Decel};
+        if (Z.Pad > 0.0) { T.BrakeLimit = Z.Speed; T.BrakeDecel = Z.Pad; }
         Train.AddZone(T);
     }
 }
@@ -221,40 +445,126 @@ void AddZones(FTrain& Train, const FTrackDocument& Doc)
 
 int main()
 {
-    FDesign D = Sidewinder();
-    FTrack T0 = BuildTrack(D.Doc);
-    // EVERY AUTHORED SEGMENT MUST BUILD. A negative arc (easements longer than
-    // the turn) is refused by AddSegment without a word, and the zone walk
-    // below would then disagree with the track about where everything is.
-    if (T0.NumSegments() != D.Doc.Segments.size())
+    // ---- AUTHOR, CLOSE, MEASURE THE SEAM PITCH, RE-AUTHOR. An outer loop,
+    // because two authored numbers depend on what the solve itself moves: the
+    // untwist segment is authored FROM the helix's turn count, and the rise
+    // trim FROM the seam's residual pitch. The coupling is weak (dPhi is
+    // dTurns scaled by sin 4 degrees), so this converges in a few passes;
+    // each pass warm-starts the solver with the last pass's solved numbers.
+    FDesign D;
+    FClosureResult R;
+    double Trim = 0.0, Turns = 0.0, SinT2 = 0.0, HomeDrop = 0.0;
+    double Drop = 0.0, Fill = 0.0, Snake = 0.0;
+    for (int Outer = 0; Outer < 14; ++Outer)
     {
-        for (std::size_t i = 0; i < D.Doc.Segments.size(); ++i)
+        // The parameters the AUTHORING depends on warm-start (Turns, the trim,
+        // the payback climb, the home drop); the pure lengths deliberately do
+        // NOT -- Gauss-Newton restarted from a half-solved state after new
+        // segments appeared walked the fill into its lower bound and could
+        // not get out, where a cold start converges every pass.
+        D = Sidewinder(Trim, Turns, 0.0, 0.0, 0.0, SinT2, HomeDrop);
+        FTrack T0 = BuildTrack(D.Doc);
+        // EVERY AUTHORED SEGMENT MUST BUILD. A negative arc (easements longer
+        // than the turn) is refused by AddSegment without a word, and the zone
+        // walk below would then disagree with the track about where things are.
+        if (T0.NumSegments() != D.Doc.Segments.size())
         {
-            const double L = BuildSegment(D.Doc.Segments[i]).Length;
-            if (!(L > 0.0)) { std::printf("segment %zu has length %g and was REFUSED\n", i, L); }
+            for (std::size_t i = 0; i < D.Doc.Segments.size(); ++i)
+            {
+                const double L = BuildSegment(D.Doc.Segments[i]).Length;
+                if (!(L > 0.0)) { std::printf("segment %zu has length %g and was REFUSED\n", i, L); }
+            }
+            return 3;
         }
-        return 3;
-    }
 
-    // ---- CLOSE IT. Position in all three axes and heading; roll closes by
-    // construction because every bank returns to zero.
-    FClosureTarget Target = CircuitTarget(T0);
-    Target.bMatchHeading = true;
-    FClosureOptions Opt; Opt.MaxIterations = 80;
-    const FClosureResult R = SolveClosure(D.Doc, Target,
-        {FreeLength(D.DropIndex, 1.0, 200.0), FreeLength(D.FillIndex, 1.0, 400.0)}, Opt);
-    std::printf("closure: %s after %d iterations -- gap %.6f m -> %.6f m, heading %.6f deg\n",
-        R.bConverged ? "CONVERGED" : "FAILED", R.Iterations, R.Before.ActiveError, R.After.ActiveError,
-        R.After.HeadingError * 180.0 / Pi);
-    std::printf("  drop straight = %.7f m   fill straight = %.7f m\n",
-        D.Doc.Segments[D.DropIndex].Length, D.Doc.Segments[D.FillIndex].Length);
+        // Position in all three axes and heading; roll closes by construction
+        // because every bank returns to zero. THREE levers: the drop for
+        // height, the fill for plan, and the HELIX TURNS for heading -- the
+        // closed-form 2 pi accounting is only the starting guess, because yaw
+        // curvature on pitched, banked track integrates slightly less world
+        // heading than the arithmetic says.
+        FClosureTarget Target = CircuitTarget(T0);
+        Target.bMatchHeading = true;
+        FClosureOptions Opt; Opt.MaxIterations = 120;
+        // TIGHTER THAN THE ACTOR'S 1 mm SEAM BAR, deliberately: the layout
+        // stores these numbers as FLOATS, and a solve that stops at 0.997 mm
+        // arrives in the engine just over 1 mm and the circuit refuses to
+        // wrap. Measured: the first transcription shipped exactly that.
+        Opt.PositionTolerance = 2e-5;
+        Opt.bApplyOnFailure = true;   // keep partial progress: it is the next pass's warm start
+        R = SolveClosure(D.Doc, Target,
+            {FreeLength(D.DropIndex, 1.0, 200.0), FreeLength(D.FillIndex, 1.0, 400.0),
+             FreeField(D.HelixIndex, EClosureField::Turns, 0.5, 1.2),
+             FreeLength(D.SnakeArcIndex, 2.0, 60.0),
+             FreeLength(D.McbrIndex, 40.0, 90.0)}, Opt);
+        Turns = D.Doc.Segments[D.HelixIndex].Turns;
+        Drop = D.Doc.Segments[D.DropIndex].Length;
+        Fill = D.Doc.Segments[D.FillIndex].Length;
+        Snake = D.Doc.Segments[D.SnakeArcIndex].Length;
+
+        const FTrack Tc = BuildTrack(D.Doc);
+        const FTrackFrame E = Tc.EvaluateAt(Tc.TotalLength());
+        const double PitchEnd = std::asin(E.Tangent.Z);
+
+        // The residual twist, read where it has nowhere to hide: the final
+        // brake is authored dead level, so any bank the frame carries there
+        // is holonomy turn 2 failed to pay back.
+        const double TwistRes = WorldBankOf(Tc.EvaluateAt(Tc.TotalLength() - 10.0));
+
+        // The lowest point, for the home drop: the brief wants the station "a
+        // little above the ground", and 3.2 m is what the shipped ride had.
+        double Lowest = 0.0;
+        {
+            FTrackFrame W = Tc.EvaluateAt(0.0);
+            for (double S = 0.0; S < Tc.TotalLength(); )
+            {
+                const double N = std::min(S + 2.0, Tc.TotalLength());
+                W = Tc.AdvanceFrom(W, S, N); S = N;
+                Lowest = std::min(Lowest, W.Position.Z);
+            }
+        }
+
+        std::printf("  pass %2d: %s gap %.6f m, heading %.4f deg, seam pitch %+.5f deg, "
+                    "twist %+.4f deg, lowest %+.2f m (trim %+.4f, sinT2 %.5f, home %.2f)\n",
+            Outer, R.bConverged ? "closed," : "OPEN,", R.After.ActiveError,
+            R.After.HeadingError * 180.0 / Pi, PitchEnd * 180.0 / Pi,
+            TwistRes * 180.0 / Pi, Lowest, Trim * 180.0 / Pi, D.SinT2Out,
+            HomeDrop > 0.0 ? HomeDrop : 12.0);
+        // The trim feeds back, and so -- DAMPED -- does the home drop: its
+        // closed form under-counts the payback chain's real climb (the
+        // twisted-frame pitch drift adds metres the arithmetic cannot see),
+        // and it is the one knob that only moves heights, so a single damped
+        // loop on it is stable where the three-way feedback tried earlier was
+        // not. The payback climb itself stays closed-form: its ~1.3 degree
+        // twist residual is absorbed by the levers and the trim, and feeding
+        // it back is what diverged. (void) keeps that measurement printed.
+        (void)SinT2; (void)TwistRes;
+        if (R.bConverged && std::fabs(PitchEnd) < 2e-6
+            && std::fabs(Lowest + 3.2) < 0.3) { break; }
+        Trim += PitchEnd;
+        // Not on the first pass: with no trim yet the tail rides the full
+        // residual pitch and the measured lowest point is garbage.
+        if (Outer > 0)
+        {
+            HomeDrop = std::max(1.0, D.HomeDropOut + 0.7 * (-3.2 - Lowest));
+        }
+    }
+    std::printf("closure: %s -- gap %.6f m, heading %.6f deg\n",
+        R.bConverged ? "CONVERGED" : "FAILED", R.After.ActiveError, R.After.HeadingError * 180.0 / Pi);
+    std::printf("  drop straight = %.7f m   fill straight = %.7f m   helix turns = %.7f   snake arc = %.7f m\n",
+        Drop, Fill, Turns, Snake);
     if (!R.bConverged) { std::printf("%s\n", R.Message.c_str()); return 1; }
 
     // ---- RIDE IT. Seven cars.
     const FTrack T = BuildTrack(D.Doc);
+    const std::vector<FZoneSpan> Zones = CollectZones(D.Doc);
+    for (const FZoneSpan& Z : Zones)
+    {
+        std::printf("  zone %-11s %7.1f - %7.1f m  %.1f m/s\n", ZoneName(Z.Z), Z.Start, Z.End, Z.Speed);
+    }
     FTrainConfig C; C.TrainLength = 21.0;
     FTrain Train(T, C);
-    AddZones(Train, D.Doc);
+    AddZones(Train, Zones);
     const FRideProfile P = RunRideProfile(Train, T, 0.5);
     std::printf("track: %zu segments, %.1f m\n", D.Doc.Segments.size(), T.TotalLength());
     std::printf("ride:  %s, %.1f s, top %.1f m/s (%.1f km/h) at %.0f m\n",
@@ -267,16 +577,99 @@ int main()
         P.LowestHeight, P.HighestHeight, -P.LowestHeight);
     if (!P.bCompleted) { std::printf("       stalled at %.1f m, %.1f m up\n", P.StalledAtS, P.StalledHeight); }
 
-    // ---- The holding places: station, lift, two block brakes = 4, so 3 trains.
-    int Holding = 0;
-    for (const FAuthoredSegment& A : D.Doc.Segments)
+    int Failures = P.bCompleted ? 0 : 1;
+
+    // ---- THE COLLISION CORRIDOR, measured the short way round. The level
+    // helix shipped crossing itself at 0.109 m because nothing measured this;
+    // now the design cannot print its figures without passing its own corridor.
+    const FTrackProfile Cross;
+    const FClearanceReport Clear = AnalyseSelfClearance(T, Cross, 0.5, 12.0, true);
+    std::printf("clearance: closest approach %.2f m at %.0f m vs %.0f m (corridor %.1f m)%s\n",
+        Clear.ClosestApproach, Clear.AtS, Clear.AndS, CollisionCorridorM,
+        Clear.ClosestApproach < CollisionCorridorM ? "  INSIDE THE CORRIDOR" : "");
+    if (Clear.ClosestApproach < CollisionCorridorM) { ++Failures; }
+
+    // ---- EVERY HOLDING DEVICE, asked the two questions the 2026-08-24 crash
+    // asked. CAN IT STOP WHAT ARRIVES: the zone is commanded to hold and the
+    // ride run at it; the nose must come to rest inside the device, because a
+    // hold that overruns parks a train in the next block, which is the
+    // rear-end. CAN IT RELEASE A TRAIN THAT COMPLETES: from a standing start
+    // at its middle -- where the preset stages trains at boot -- the train
+    // must reach the next holding device. A place that fails either is not a
+    // place a train may be held, whatever its zone calls itself.
+    std::vector<std::size_t> Holds;
+    for (std::size_t z = 0; z < Zones.size(); ++z)
     {
-        if (A.Zone == EAuthoredZone::Station || A.Zone == EAuthoredZone::Lift || A.Zone == EAuthoredZone::BlockBrake) { ++Holding; }
+        if (Zones[z].Z != EAuthoredZone::Brake) { Holds.push_back(z); }
     }
-    std::printf("holding segments: %d (runs merge; expect 4 places: station, lift, mid brake, final brake)\n", Holding);
+    const double Dt = 1.0 / 240.0;
+    for (std::size_t hi = 0; hi < Holds.size(); ++hi)
+    {
+        const std::size_t h = Holds[hi];
+        // Stop what arrives. The station is where the run starts, so it is
+        // asked only the release question.
+        if (Zones[h].Start > 1.0)
+        {
+            FTrain Tr(T, C);
+            AddZones(Tr, Zones);
+            Tr.SetZoneTargetSpeed(h, 0.0);
+            if (Zones[h].Pad > 0.0) { Tr.SetZoneBrakeLimit(h, 0.0); }
+            Tr.Place(0.0, 0.0);
+            int Still = 0;
+            for (int i = 0; i < 240 * 600 && Still <= 480; ++i)
+            {
+                Tr.Step(Dt);
+                Still = Tr.GetSpeed() < 0.02 ? Still + 1 : 0;
+            }
+            const double Overrun = Tr.GetFrontS() - Zones[h].End;
+            std::printf("hold %-11s %6.1f-%6.1f  commanded to stop: nose rests %5.2f m %s the device end%s\n",
+                ZoneName(Zones[h].Z), Zones[h].Start, Zones[h].End, std::fabs(Overrun),
+                Overrun > 0.0 ? "PAST" : "inside",
+                Overrun > 0.0 ? "  CANNOT STOP WHAT ARRIVES" : "");
+            if (Overrun > 0.0) { ++Failures; }
+        }
+        // Release a train that completes, to the NEXT holding device (for the
+        // last one, home across the seam).
+        {
+            FTrain Tr(T, C);
+            AddZones(Tr, Zones);
+            Tr.Place(0.5 * (Zones[h].Start + Zones[h].End), 0.0);
+            const double Goal = hi + 1 < Holds.size() ? Zones[Holds[hi + 1]].Start
+                                                      : T.TotalLength() - 0.5;
+            int Still = 0; bool bMade = false; double ValleyAt = 0.0;
+            for (int i = 0; i < 240 * 600; ++i)
+            {
+                Tr.Step(Dt);
+                if (Tr.GetDistance() >= Goal) { bMade = true; break; }
+                if (Tr.GetSpeed() < 0.02) { if (++Still > 480) { ValleyAt = Tr.GetDistance(); break; } }
+                else { Still = 0; }
+            }
+            if (bMade)
+            {
+                std::printf("hold %-11s %6.1f-%6.1f  released from rest: completes to the next device\n",
+                    ZoneName(Zones[h].Z), Zones[h].Start, Zones[h].End);
+            }
+            else
+            {
+                std::printf("hold %-11s %6.1f-%6.1f  released from rest: VALLEYS at %.1f m\n",
+                    ZoneName(Zones[h].Z), Zones[h].Start, Zones[h].End, ValleyAt);
+                ++Failures;
+            }
+        }
+    }
+    std::printf("holding places: %zu (expect 4: station, lift, post-helix brake, final brake)\n",
+        Holds.size());
 
     // ---- The numbers to transcribe into SidewinderLayout().
-    std::printf("\nTRANSCRIBE:\n  const double DropLen = %.7f;\n  const double FillLen = %.7f;\n",
-        D.Doc.Segments[D.DropIndex].Length, D.Doc.Segments[D.FillIndex].Length);
-    return P.bCompleted ? 0 : 2;
+    std::printf("\nTRANSCRIBE:\n  const double DropLen = %.7f;\n  const double FillLen = %.7f;\n"
+        "  const double HelixTurns = %.7f;   // solved (closed-form guess was %.7f)\n"
+        "  const double SnakeArc2 = %.7f;   // the second bend's arc, the across lever\n"
+        "  const double McbrLen = %.7f;   // the mid-course brake, the return's along lever\n"
+        "  const double HomeDropM = %.7f;\n"
+        "  const double SeamTrimRad = %.10f;\n",
+        D.Doc.Segments[D.DropIndex].Length, D.Doc.Segments[D.FillIndex].Length,
+        D.Doc.Segments[D.HelixIndex].Turns, D.HelixTurns, Snake,
+        D.Doc.Segments[D.McbrIndex].Length, D.HomeDropOut, Trim);
+    if (Failures > 0) { std::printf("\nDESIGN CHECKS FAILED: %d\n", Failures); }
+    return Failures == 0 ? 0 : 2;
 }

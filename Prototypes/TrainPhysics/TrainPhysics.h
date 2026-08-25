@@ -468,6 +468,10 @@ public:
     /** Metres, nose to tail. Zero for a point mass. */
     double GetLength() const { return Config.TrainLength; }
 
+    /** The anti-rollback catch spans, so a caller can build an identical probe
+     *  train without keeping a second list of where the catches are. */
+    const std::vector<std::pair<double, double>>& GetCatches() const { return Catches; }
+
     /**
      * Centre of the train. Front and rear are half a length either side.
      *
@@ -936,3 +940,28 @@ private:
     std::vector<FTrackFrame> Samples;
     std::vector<double> SampleS;
 };
+
+// ------------------------------------------------------------- collision
+// Do two train spans overlap along the track? Arc-length intervals, nose and
+// tail -- exactly what the signalling is handed every frame. Deliberately a
+// free function and not part of the interlocking: the interlocking exists to
+// make this never return true, and the physical check runs BESIDE it as a
+// second, independent means of detection -- same shape as the block counter
+// against the occupancy, nothing in common but the answer. On a circuit a
+// span straddling the seam arrives wrapped (front < rear), so the test runs
+// on the ring; open track is a plain interval overlap. Touching exactly is
+// NOT overlapping: a train queued at zero gap behind a parked one is queued,
+// not crashed.
+inline bool TrainSpansOverlap(double RearA, double FrontA, double RearB, double FrontB,
+                              bool bCircuit, double TotalLength)
+{
+    if (!bCircuit || !(TotalLength > 0.0))
+    {
+        return RearA < FrontB && RearB < FrontA;
+    }
+    const double LenA = std::fmod(FrontA - RearA + TotalLength, TotalLength);
+    const double LenB = std::fmod(FrontB - RearB + TotalLength, TotalLength);
+    const double AtoB = std::fmod(RearB - RearA + TotalLength, TotalLength);
+    const double BtoA = std::fmod(RearA - RearB + TotalLength, TotalLength);
+    return AtoB < LenA || BtoA < LenB;
+}

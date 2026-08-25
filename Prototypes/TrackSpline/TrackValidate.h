@@ -479,6 +479,22 @@ inline FResolvedRollReport AnalyseResolvedRollRate(const FTrack& Track, double S
 // Compared rail centre to rail centre, so the threshold to judge against is
 // TrackWidth() at minimum — and a good deal more once a rider, a support
 // structure and a maintenance walkway are in the way.
+//
+// THE COLLISION CORRIDOR is that "good deal more", given a number: how close
+// two pieces of track may pass, rail centre to rail centre, before a train on
+// one sweeps space a train on the other needs. Each track brings an envelope —
+// a 1.40 m body, riders' reach past it, spine and ties below — and support
+// practice already holds 1.5 m clear of the track's swept width
+// (FSupportSettings::ClearanceM); two tracks each bring one, so the corridor is
+// twice that. Vertically the envelope is TALLER than it is wide (a rider above
+// the heartline, structure below the rails), so 3 m is the floor of what a
+// crossing needs, not a generous figure. The Sidewinder's level helix shipped
+// crossing itself at 0.109 m because nothing compared against this.
+// ponytail: one number for a swept volume; an oriented envelope (lateral vs
+// vertical corridors judged separately) is the upgrade when a legitimate
+// near-miss layout — racing tracks, a flyover — needs the distinction.
+constexpr double CollisionCorridorM = 3.0;
+
 struct FClearanceReport
 {
     double ClosestApproach = 1e9; // metres, rail centre to rail centre

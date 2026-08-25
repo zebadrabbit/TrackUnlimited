@@ -2872,6 +2872,12 @@ void TestTheActorsOwnLoopRunsTwoTrains()
         Sig.Tick(Dt);
         ReadTheDrives(Drives, All);
 
+        // The physical overlap check the actor now runs each scan, beside the
+        // interlocking. With the interlocking healthy it must NEVER fire, and
+        // this ten-minute run is its silence assertion.
+        assert(!TrainSpansOverlap(A.GetRearS(), A.GetFrontS(),
+                                  B.GetRearS(), B.GetFrontS(), true, T.TotalLength()));
+
         for (std::size_t b = 0; b < Sig.NumBlocks(); ++b)
         {
             if (Sig.OccupiedBy(0, b) && Sig.OccupiedBy(1, b))
@@ -2899,6 +2905,78 @@ void TestTheActorsOwnLoopRunsTwoTrains()
     // a permissive granted into an occupied one.
     assert(!bShared);
     assert(Sig.Violations() == 0);
+}
+
+void TestARearEndCollisionIsDetectedAndHaltsBothTrains()
+{
+    // The 2026-08-24 crash, reproduced on purpose: a train dead on open course
+    // and another arriving in its block. The interlocking would refuse that
+    // dispatch, so the second train is simply PLACED moving, the way the crash
+    // actually happened once a brake that could not stop what arrived had
+    // defeated the signalling. What is asserted is the last line of defence:
+    // the overlap is detected the scan it occurs, at touching distance, and
+    // the actor's policy — halt both where they touch, latch the E-stop —
+    // leaves two stationary trains in contact instead of one driving through
+    // the other.
+    //
+    // No zones on either train, deliberately: the point is that the PHYSICS
+    // catches what the control layer was never given the chance to.
+    const FCircuit C = BuildCircuit(nullptr);
+    const FTrack T = BuildTrack(C.Doc);
+    FTrainConfig Cfg;
+    Cfg.TrainLength = TrainLen;
+    FTrain A(T, Cfg), B(T, Cfg);
+    A.SetCircuit(true);
+    B.SetCircuit(true);
+
+    // B "valleyed" at the mid-course hold's middle — a device position, so
+    // flat by construction — and A coasting at it from 60 m behind.
+    B.Place(C.HoldMidS[1], 0.0);
+    A.Place(C.HoldMidS[1] - 60.0, 15.0);
+
+    FTrackDrives Drives(1);   // just the E-stop latch; no zone commands here
+
+    const double Dt = 1.0 / 240.0;
+    int CollisionFrame = -1;
+    for (int i = 0; i < 240 * 60; ++i)
+    {
+        A.Step(Dt);
+        B.Step(Dt);
+        if (TrainSpansOverlap(A.GetRearS(), A.GetFrontS(),
+                              B.GetRearS(), B.GetFrontS(), true, T.TotalLength()))
+        {
+            // The actor's collision policy, line for line: halt both in
+            // place, wreck them (no further stepping), trip the stop.
+            A.Place(A.GetDistance(), 0.0);
+            B.Place(B.GetDistance(), 0.0);
+            Drives.TripEmergencyStop("train collision");
+            CollisionFrame = i;
+            break;
+        }
+    }
+
+    assert(CollisionFrame >= 0);   // it hit — a detector that never fires detects nothing
+
+    // Detected at TOUCHING distance: the deepest one 240 Hz scan can bury a
+    // nose in a tail is one step's travel, centimetres.
+    const double Penetration = A.GetFrontS() - B.GetRearS();
+    assert(Penetration >= 0.0);
+    assert(Penetration < 0.12);
+
+    // Both dead where they touched, and the ride is stopped, loudly.
+    assert(A.GetSpeed() < 1e-12);
+    assert(B.GetSpeed() < 1e-12);
+    assert(Drives.IsEmergencyStopped());
+    assert(std::string(Drives.EmergencyStopReason()) == "train collision");
+
+    // And exact touch is NOT a collision: a train queued at zero gap is
+    // queued, not crashed — the boundary the detector must not eat.
+    assert(!TrainSpansOverlap(0.0, 15.0, 15.0, 30.0, true, T.TotalLength()));
+    assert(TrainSpansOverlap(0.0, 15.0, 14.99, 29.99, true, T.TotalLength()));
+
+    std::printf("  collision: rear-end detected %.3f m deep at frame %d; both halted, "
+                "E-stop latched with '%s'\n",
+                Penetration, CollisionFrame, Drives.EmergencyStopReason());
 }
 
 } // namespace
@@ -3159,6 +3237,7 @@ int main()
     TestAnEmergencyStopStopsTheRideNotTheTrains();
     TestTheCircuitCarriesFourTrains();
     TestTheActorsOwnLoopRunsTwoTrains();
+    TestARearEndCollisionIsDetectedAndHaltsBothTrains();
     TestTheShowcaseCapacityAndTheHelix();
 
     // The canonical figures, printed rather than only asserted, because the docs
