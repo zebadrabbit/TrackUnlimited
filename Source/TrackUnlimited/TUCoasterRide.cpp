@@ -7391,27 +7391,74 @@ void ATUCoasterRide::DrawPanels(UCanvas* Canvas)
 	DrawDiagnosticsPanel(Canvas);
 }
 
+// ONE TABLE for the trace colours and their meanings, shared by the world
+// polylines (DrawRideProfile) and the on-screen legend (DrawTelemetry): four
+// unlabeled coloured lines in the world is a chart with no key — user request
+// — and a second colour list would be a legend that lies the day a colour
+// moves. ORDER IS THE CONTRACT; both readers index it identically.
+// Okabe-Ito, colourblind-safe — see Docs/UI_CONVENTIONS.md.
+static const FColor GTraceColour[4] = {
+	FColor(86, 180, 233),    // vertical G   — sky blue
+	FColor(230, 159, 0),     // lateral G    — orange
+	FColor(0, 158, 115),     // speed        — bluish green
+	FColor(204, 121, 167),   // roll rate    — reddish purple
+};
+static const TCHAR* GTraceLegend[4] = {
+	TEXT("vertical G (1 m = 1 G)"),
+	TEXT("lateral G (1 m = 1 G)"),
+	TEXT("speed (1 m = 10 km/h)"),
+	TEXT("roll rate (1 m = 30 deg/s)"),
+};
+
 void ATUCoasterRide::DrawTelemetry(UCanvas* Canvas)
 {
-	if (!Canvas || TelemetryLines.IsEmpty()) { return; }
+	if (!Canvas) { return; }
 
 	// ITS OWN SLOT, under the banner and the hint. As on-screen debug messages
 	// these were drawn by the engine wherever it chose, which was over the frame
 	// header and the banner; the text itself is unchanged.
-	TArray<int32> Keys;
-	TelemetryLines.GetKeys(Keys);
-	Keys.Sort();
 	float Y = 90.f;
-	for (int32 K : Keys)
+	if (!TelemetryLines.IsEmpty())
 	{
-		const TPair<FColor, FString>& L = TelemetryLines[K];
-		TArray<FString> Parts;
-		L.Value.ParseIntoArray(Parts, TEXT("\n"), false);
-		for (const FString& Part : Parts)
+		TArray<int32> Keys;
+		TelemetryLines.GetKeys(Keys);
+		Keys.Sort();
+		for (int32 K : Keys)
 		{
-			PanelTile(Canvas, 10.f, Y, 8.f + PanelTextWidth(Canvas, Part), 16.f, PanelGround);
-			PanelLabel(Canvas, 12.f, Y + 1.f, Part, FLinearColor(L.Key));
-			Y += 16.f;
+			const TPair<FColor, FString>& L = TelemetryLines[K];
+			TArray<FString> Parts;
+			L.Value.ParseIntoArray(Parts, TEXT("\n"), false);
+			for (const FString& Part : Parts)
+			{
+				PanelTile(Canvas, 10.f, Y, 8.f + PanelTextWidth(Canvas, Part), 16.f, PanelGround);
+				PanelLabel(Canvas, 12.f, Y + 1.f, Part, FLinearColor(L.Key));
+				Y += 16.f;
+			}
+		}
+	}
+
+	// THE TRACE LEGEND, exactly when the traces are on screen: each label in
+	// its channel's own colour, from the shared table above, with the scale in
+	// the label because a trace whose units you have to remember is a number
+	// with the units filed elsewhere.
+	const bool bAnyTrace = bGraphVerticalG || bGraphLateralG || bGraphSpeed || bGraphRollRate;
+	const bool bDocumentOpen = Session.Mode() != EAppMode::MainMenu
+		&& Session.Mode() != EAppMode::Boot;
+	if (bAnyTrace && bDocumentOpen && !bHideOverlays)
+	{
+		const bool On[4] = {bGraphVerticalG, bGraphLateralG, bGraphSpeed, bGraphRollRate};
+		float X = 10.f;
+		const FString Head = TEXT("TRACE");
+		PanelTile(Canvas, X, Y, 8.f + PanelTextWidth(Canvas, Head), 16.f, PanelGround);
+		PanelLabel(Canvas, X + 2.f, Y + 1.f, Head, FLinearColor::White);
+		X += 8.f + PanelTextWidth(Canvas, Head) + 6.f;
+		for (int32 i = 0; i < 4; ++i)
+		{
+			if (!On[i]) { continue; }
+			const FString S(GTraceLegend[i]);
+			PanelTile(Canvas, X, Y, 8.f + PanelTextWidth(Canvas, S), 16.f, PanelGround);
+			PanelLabel(Canvas, X + 2.f, Y + 1.f, S, FLinearColor(GTraceColour[i]));
+			X += 8.f + PanelTextWidth(Canvas, S) + 6.f;
 		}
 	}
 }
@@ -10006,14 +10053,17 @@ void ATUCoasterRide::DrawRideProfile() const
 		double PerUnit;
 		double FRideSample::*Field;
 	};
-	// Okabe-Ito, the colourblind-safe qualitative palette — see Docs/UI_CONVENTIONS.md.
-	// The previous green/orange pair was the common deuteranopia collision. Blue #0072B2 is
-	// deliberately unused: ~3:1 against the background, too weak for a 2 px line.
+	// Colours from GTraceColour — ONE table for the lines and the legend, so
+	// the key on screen cannot lie about the line in the world. (Okabe-Ito,
+	// colourblind-safe — see Docs/UI_CONVENTIONS.md; the previous green/orange
+	// pair was the common deuteranopia collision, and blue #0072B2 is
+	// deliberately unused: ~3:1 against the background, too weak for a 2 px
+	// line.) Order matches the legend's — the contract.
 	const FChannel Channels[] = {
-		{bGraphVerticalG, FColor(86, 180, 233), 1.0, &FRideSample::VerticalG},          // sky blue
-		{bGraphLateralG, FColor(230, 159, 0), 1.0, &FRideSample::LateralG},             // orange
-		{bGraphSpeed, FColor(0, 158, 115), 1.0 / (10.0 / 3.6), &FRideSample::Speed},    // bluish green
-		{bGraphRollRate, FColor(204, 121, 167), 1.0 / 30.0, &FRideSample::RollRateDegPerSec}, // reddish purple
+		{bGraphVerticalG, GTraceColour[0], 1.0, &FRideSample::VerticalG},
+		{bGraphLateralG, GTraceColour[1], 1.0, &FRideSample::LateralG},
+		{bGraphSpeed, GTraceColour[2], 1.0 / (10.0 / 3.6), &FRideSample::Speed},
+		{bGraphRollRate, GTraceColour[3], 1.0 / 30.0, &FRideSample::RollRateDegPerSec},
 	};
 
 	if (Profile_.Samples.size() < 2)
