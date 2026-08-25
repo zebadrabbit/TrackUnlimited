@@ -468,9 +468,9 @@ void ATUCoasterRide::ApplyPresetTrainSetup(ETUPresetLayout Which)
 		break;
 	case ETUPresetLayout::Sidewinder:
 		// SEVEN CARS, 21 m, which is the brief, and every holding device on the
-		// ride is 26-30 m for it. Four holding places -- station, lift, the
-		// mid-course block and the final block -- run three trains: two
-		// moving, one staging.
+		// ride is 26-40 m for it. Five holding places -- station, lift, the
+		// crest brake, the home-stretch block and the final block -- ship
+		// three trains: the extra places are flow slack, not capacity.
 		CarCount = 7; CarLengthM = 3.f;
 		TrainCount = 3;
 		break;
@@ -1054,13 +1054,14 @@ TArray<FTUTrackSegment> ATUCoasterRide::SidewinderLayout()
 	// opposite holonomy; the old brake is the trim its pass-through always
 	// was; and the HOLD sits on the level home stretch, where a stopped
 	// train rolls to the final brake on the tyres' own push.
-	const double DropLen = 11.6965061;   // the height lever
-	const double FillLen = 7.5810656;    // the plan lever, on the OUTBOUND leg
+	const double DropLen = 11.6966188;   // the height lever
+	const double FillLen = 12.7906583;   // the plan lever, on the OUTBOUND leg
 	const double HelixTurns = 0.7887994; // the heading lever, solved
-	const double SnakeArc2 = 10.5496972; // the across lever, the snake's second bend
-	const double McbrLen = 40.0;         // the return's along lever (at its floor)
-	const double HomeDropM = 7.2111290;  // the home descent, from the height feedback
-	const double SeamTrimRad = 0.0741838587;   // the payback chain's measured pitch residual
+	const double SnakeArc2 = 10.5496969; // the across lever, the snake's second bend
+	const double TrimLen = 57.2093417;   // the -X leg, the return's true along lever
+	const double McbrLen = 40.0;         // the home-stretch brake
+	const double HomeDropM = 7.2110564;  // the home descent, from the height feedback
+	const double SeamTrimRad = 0.0741838588;   // the payback chain's measured pitch residual
 
 	const double HelixR = 20.0;
 	const double HClimb = Deg(3.0);      // the descent through the turn
@@ -1078,7 +1079,7 @@ TArray<FTUTrackSegment> ATUCoasterRide::SidewinderLayout()
 	};
 	auto LiftPitch = [&Out](double DeltaRad, double K)
 	{
-		AddEasedPitch(Out, DeltaRad, K, ETUSegmentZone::Lift, 8.f);
+		AddEasedPitch(Out, DeltaRad, K, ETUSegmentZone::Lift, 3.f);
 		Out[Out.Num() - 2].ZoneAccel = Out[Out.Num() - 2].ZoneDecel = 8.f;
 		Out[Out.Num() - 1].ZoneAccel = Out[Out.Num() - 1].ZoneDecel = 8.f;
 	};
@@ -1134,14 +1135,30 @@ TArray<FTUTrackSegment> ATUCoasterRide::SidewinderLayout()
 		Out.Add(A);
 	};
 
-	// ---- STATION and the LIFT: chain at 8 m/s and 8 m/s^2 of grip (a 35
-	// degree chain needs 5.6 just to hold), 35 degrees, crest 46.5 m.
+	// ---- STATION and the LIFT: chain at a REALISTIC 3 m/s (10.8 km/h). It
+	// ran 8 -- a launch wearing a chain's name -- because crest delivery was
+	// doing energy work; the user noticed. Grip stays 8 m/s^2: a 35 degree
+	// chain needs 5.6 just to hold, whatever speed it runs. Crest 46.5 m.
 	Device(26.0, ETUSegmentZone::Station, 3.f, 1.5f, 1.5f, 0.f);
-	Device(6.0, ETUSegmentZone::Lift, 8.f, 8.f, 8.f, 0.f);
+	Device(6.0, ETUSegmentZone::Lift, 3.f, 8.f, 8.f, 0.f);
 	LiftPitch(Deg(35.0), 0.05);
-	Device(56.0, ETUSegmentZone::Lift, 8.f, 8.f, 8.f, 0.f);
+	Device(56.0, ETUSegmentZone::Lift, 3.f, 8.f, 8.f, 0.f);
 	LiftPitch(-Deg(35.0), 0.05);
-	Device(4.0, ETUSegmentZone::Lift, 8.f, 8.f, 8.f, 0.f);
+
+	// ---- THE CREST BRAKE: the one place a mid-run hold is HONEST on this
+	// ride. Everywhere on the course a train released from rest cannot climb
+	// turn 2 -- the original crash -- but a pre-drop block brake stops a
+	// 3 m/s arrival trivially and releases into the ENTIRE drop, so it can
+	// never strand anyone. It is also the buffer the slow chain wants: a
+	// train waits here for the course to clear instead of hanging on the
+	// chain mid-climb. Fifth holding place; still three trains, so the flow
+	// gains slack rather than traffic.
+	//
+	// TYRES AT 8 m/s -- TRANSPORT TYRES: the energy budget was solved with
+	// the crest DELIVERING 8, and a 3 m/s hand-off stalled the through-train
+	// on turn 2's climb, measured. The plateau boosts 3 to 8 and the drop
+	// gets the delivery every margin was measured at.
+	Device(26.0, ETUSegmentZone::BlockBrake, 8.f, 3.f, 3.f, 4.f);
 	for (int32 i = 1; i < Out.Num(); ++i) { Out[i].bAntiRollback = true; }
 
 	// ---- THE DROP, 40 degrees, and the fill at the bottom where the train
@@ -1158,9 +1175,12 @@ TArray<FTUTrackSegment> ATUCoasterRide::SidewinderLayout()
 	// twice over -- see the header comment. A trim is what its pass-through
 	// always was; the hold moved to the home stretch.
 	{
+		// Its length is SOLVED: this is the one straight on the 180-degree
+		// leg, the ride's single piece of -X plan length, and the closure
+		// balances through it -- see the design program.
 		FTUTrackSegment Trim;
 		Trim.Kind = ETUSegmentKind::Straight;
-		Trim.Length = 30.f;
+		Trim.Length = static_cast<float>(TrimLen);
 		Trim.Zone = ETUSegmentZone::Brake;
 		Trim.ZoneSpeed = 26.f;
 		Trim.ZoneBrakeDecel = 4.f;
@@ -1244,6 +1264,7 @@ TArray<FTUTrackSegment> ATUCoasterRide::SidewinderLayout()
 		C2.RollMode = ETURollMode::WorldBank;
 		Out.Add(C2);
 	}
+	const int32 TailStart = Out.Num();   // the WorldBank tail begins here -- see the end
 
 	// ---- THE SEAM TRIM, where the residual is born: the payback chain's
 	// measured pitch leftovers, cancelled so everything after runs level.
@@ -1266,6 +1287,22 @@ TArray<FTUTrackSegment> ATUCoasterRide::SidewinderLayout()
 	// ---- THE FINAL BLOCK BRAKE, and home. Pad at 6, measured: at 3 it could
 	// not stop what arrives and overran toward a station with a train in it.
 	Device(26.0, ETUSegmentZone::BlockBrake, 3.f, 3.f, 3.f, 6.f);
+
+	// ---- THE WORLDBANK TAIL: everything from the seam trim home is rolled
+	// against the HORIZON, not the path frame. The payback chain leaves ~1.4
+	// degrees of residual frame twist that nothing authored can remove
+	// (holonomy is solid-angle -- both cancellation routes were measured and
+	// rejected in the design program), and a PathRelative tail WEARS that
+	// twist: the rails arrived at the seam rolled, a 4 cm crack in the
+	// spine, photographed. Rolled WorldBank, the rails are horizon-true
+	// whatever the frame carries, the seam matches PHYSICALLY, and the
+	// residual lives where residuals belong: in a frame nothing renders.
+	// Roll never touches the centreline, so the solved geometry is
+	// bit-identical.
+	for (int32 i = TailStart; i < Out.Num(); ++i)
+	{
+		Out[i].RollMode = ETURollMode::WorldBank;
+	}
 	return Out;
 }
 
@@ -1925,7 +1962,15 @@ void ATUCoasterRide::RebuildFromSegments()
 			const double Gap = Length(B.Position - A.Position);
 			const double Head = FMath::RadiansToDegrees(FMath::Acos(
 				FMath::Clamp(Dot(B.Tangent, A.Tangent), -1.0, 1.0)));
-			const double Roll = FMath::RadiansToDegrees(FMath::Abs(B.Roll - A.Roll));
+			// PHYSICAL roll, not the authored number. F.Roll compares what
+			// was TYPED, and a PathRelative tail inheriting residual frame
+			// twist reads 0.000 while the rails arrive visibly rolled --
+			// measured: a 1.4 degree kink at the station seam, photographed
+			// by the user before this check could see it. The rider frame's
+			// Up vectors are what the rails are built FROM, so they are what
+			// must agree across the seam.
+			const double Roll = FMath::RadiansToDegrees(FMath::Abs(FMath::Atan2(
+				Dot(Cross(A.Up, B.Up), A.Tangent), Dot(A.Up, B.Up))));
 			bTrackIsCircuit = Gap < 1e-3 && Head < 0.01 && Roll < 0.01;
 
 			UE_LOG(LogTemp, Log,
@@ -2578,6 +2623,28 @@ void ATUCoasterRide::RebuildFromSegments()
 	// O(track length) and the marker draws at frame rate.
 	ClearanceFoulAtW = ToWorld(Track.EvaluateAt(LastClearance.AtS).Position);
 	ClearanceFoulAndW = ToWorld(Track.EvaluateAt(LastClearance.AndS).Position);
+
+	// The corridor rings, one walk at 8 m — the tunnel-in-the-sky view of the
+	// keep-out volume. RIDER frame corners, not path frame: the envelope banks
+	// with the train, because a banked rider's reach banks with them.
+	CorridorRingsW.Reset();
+	{
+		const double Half = CollisionCorridorM * 0.5;
+		const double Total = Track.TotalLength();
+		FTrackFrame W = Track.EvaluateAt(0.0);
+		double S = 0.0;
+		for (;;)
+		{
+			CorridorRingsW.Add(ToWorld(W.Position + W.Lateral * Half + W.Up * Half));
+			CorridorRingsW.Add(ToWorld(W.Position - W.Lateral * Half + W.Up * Half));
+			CorridorRingsW.Add(ToWorld(W.Position - W.Lateral * Half - W.Up * Half));
+			CorridorRingsW.Add(ToWorld(W.Position + W.Lateral * Half - W.Up * Half));
+			if (S >= Total) { break; }
+			const double Next = FMath::Min(S + 8.0, Total);
+			W = Track.AdvanceFrom(W, S, Next);
+			S = Next;
+		}
+	}
 	UE_LOG(LogTemp, Log,
 		TEXT("TrackUnlimited: %d segments, %.1f m, C2=%s | ends %+.2f m vs station | ")
 		TEXT("closest approach %.2f m%s | sits %.2f m above the heartline origin"),
@@ -6220,7 +6287,7 @@ bool ATUCoasterRide::RunDocumentSmokeTest()
 		// The corridor is asserted here because this is the ride that shipped
 		// INSIDE it: the level helix crossed itself at 0.109 m. A regression
 		// fails the smoke test now, not somebody's evening.
-		if (!bTrackIsCircuit || !Profile_.bCompleted || Holding != 4 || Trains.Num() != 3
+		if (!bTrackIsCircuit || !Profile_.bCompleted || Holding != 5 || Trains.Num() != 3
 			|| CarCount != 7 || Helices != 1 || !bLeft || !bRight
 			|| StationAboveGround < 2.5 || StationAboveGround > 4.0
 			|| Profile_.TopSpeed * 3.6 < 100.0 || Profile_.MaxVerticalG > 3.6
@@ -8462,6 +8529,22 @@ void ATUCoasterRide::DrawCollisionBoxes() const
 			FVector(HalfL, HalfW, HalfW), ToWorldRotation(F),
 			bWrecked ? FColor(215, 60, 50) : FColor(80, 170, 200),
 			false, -1.f, 0, bWrecked ? 6.f : 1.5f);
+	}
+
+	// The corridor itself, as a HUD: a wireframe square every 8 m, cached at
+	// rebuild. This is the keep-out volume for anything solid — a tunnel, a
+	// rock, a support somebody hand-places — drawn so "where not to build"
+	// is a picture instead of a number.
+	if (bShowCollisionBoxes)
+	{
+		const FColor Dim(60, 130, 155);
+		for (int32 r = 0; r + 3 < CorridorRingsW.Num(); r += 4)
+		{
+			DrawDebugLine(GetWorld(), CorridorRingsW[r], CorridorRingsW[r + 1], Dim, false, -1.f, 0, 1.f);
+			DrawDebugLine(GetWorld(), CorridorRingsW[r + 1], CorridorRingsW[r + 2], Dim, false, -1.f, 0, 1.f);
+			DrawDebugLine(GetWorld(), CorridorRingsW[r + 2], CorridorRingsW[r + 3], Dim, false, -1.f, 0, 1.f);
+			DrawDebugLine(GetWorld(), CorridorRingsW[r + 3], CorridorRingsW[r], Dim, false, -1.f, 0, 1.f);
+		}
 	}
 
 	// And the CORRIDOR FOUL, if the last rebuild found one: the diagnostics

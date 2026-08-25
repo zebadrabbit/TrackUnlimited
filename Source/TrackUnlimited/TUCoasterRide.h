@@ -990,6 +990,12 @@ private:
 	FVector ClearanceFoulAtW = FVector::ZeroVector;
 	FVector ClearanceFoulAndW = FVector::ZeroVector;
 
+	// The corridor drawn as a HUD: one wireframe square every few metres, four
+	// corners per ring, flattened. Cached at rebuild from one AdvanceFrom walk
+	// — the swept keep-out volume a tunnel or any solid scenery must stay
+	// outside of, visible before there is any scenery to test.
+	TArray<FVector> CorridorRingsW;
+
 	// Rebuilt wholesale alongside the trains, for the same reason: block
 	// boundaries come off the segment list, so an edit to the track is an edit to
 	// the blocks. Null only if the track failed to build at all.
