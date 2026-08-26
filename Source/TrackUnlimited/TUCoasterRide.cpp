@@ -6877,6 +6877,7 @@ bool ATUCoasterRide::RunDocumentSmokeTest()
 				return false;
 			};
 			const bool bGroundRow = HasRow("Structure", "below the station");
+			const bool bCrestRow = HasRow("Ride", "of climb in hand");
 			const bool bQuietHelix = !HasRow("Geometry", "does not come out where a helix would");
 			int32 HelixAt = INDEX_NONE;
 			for (int32 i = 0; i < Segments.Num(); ++i)
@@ -6892,17 +6893,17 @@ bool ATUCoasterRide::RunDocumentSmokeTest()
 				Segments[HelixAt].ClimbAngleDegrees -= 10.f;
 				RebuildFromSegments();
 			}
-			if (!bGroundRow || !bQuietHelix || !bTiltedHelixRow)
+			if (!bGroundRow || !bCrestRow || !bQuietHelix || !bTiltedHelixRow)
 			{
 				UE_LOG(LogTUEvents, Error,
-					TEXT("smoke: the two comment-rules are not on screen (ground row %d, helix quiet when right %d, helix row when tilted %d)"),
-					bGroundRow, bQuietHelix, bTiltedHelixRow);
+					TEXT("smoke: the comment-rules are not on screen (ground row %d, crest row %d, helix quiet when right %d, helix row when tilted %d)"),
+					bGroundRow, bCrestRow, bQuietHelix, bTiltedHelixRow);
 				Failures.Add(TEXT("comment-rules"));
 			}
 			else
 			{
 				UE_LOG(LogTUEvents, Log,
-					TEXT("smoke: the station's height above the ground is a row, and a helix entered 10 deg off its climb gets one"));
+					TEXT("smoke: the station's height above the ground and the tightest crest are rows, and a helix entered 10 deg off its climb gets one"));
 			}
 		}
 
@@ -7530,6 +7531,39 @@ void ATUCoasterRide::BuildDiagnostics()
 				Diagnostics.Add(Lever.GapAfterM <= 0.05 ? EDiagSeverity::Info : EDiagSeverity::Warning,
 					"Closure", Lever.Message, T);
 			}
+		}
+	}
+
+	// ENERGY IN HAND, at the crest that has the least of it. Energy was
+	// invisible until the train stopped (Sidewinder UX list, item 6): the
+	// speed over each unpowered crest read as metres of climb still in hand,
+	// v^2/2g, and the tightest one named -- where a slower load, a wet rail or
+	// a headwind stalls the ride. A completed ride only; a stalled one has its
+	// own row and no crest to read.
+	if (Profile_.bCompleted && !Profile_.Samples.empty())
+	{
+		const FCrestMargin Crest = TightestCrest(Profile_, [this](double S)
+		{
+			// Powered: any device that can push. A trim brake cannot.
+			for (const FTUZoneSpan& Z : ZoneSpans)
+			{
+				if (Z.Kind != ETUSegmentZone::None && Z.Kind != ETUSegmentZone::Brake
+					&& S >= Z.StartS && S <= Z.EndS) { return true; }
+			}
+			return false;
+		});
+		if (Crest.bFound)
+		{
+			FDiagTarget T;
+			T.S = Crest.S;
+			const bool bTight = Crest.InHandM < 1.0;
+			Diagnostics.Add(bTight ? EDiagSeverity::Warning : EDiagSeverity::Info, "Ride",
+				TCHAR_TO_UTF8(*FString::Printf(
+					TEXT("tightest crest: at %.0f m the train crosses %.1f m up at %.1f m/s, which is %.1f m of ")
+					TEXT("climb in hand%s (%d unpowered crest%s)"),
+					Crest.S, Crest.HeightM, Crest.SpeedMs, Crest.InHandM,
+					bTight ? TEXT(" -- a slower load or a wet rail stalls it here") : TEXT(""),
+					Crest.Crests, Crest.Crests == 1 ? TEXT("") : TEXT("s"))), T);
 		}
 	}
 

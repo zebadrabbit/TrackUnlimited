@@ -1029,6 +1029,76 @@ static void TestRideProfileMeasuresTheWholeRideAtEditTime()
                 P.MaxVerticalG, P.LowestHeight);
 }
 
+static void TestTheTightestCrestSaysHowMuchClimbIsInHand()
+{
+    // Energy is invisible until the train stops. The profile can say, at each
+    // unpowered crest, how many metres of climb the train still has in hand
+    // (v^2/2g), and which crest has the least -- the one a wet rail stalls.
+    // The lift's own crest is powered and is not the ride's business.
+    auto HillTrack = [](double SecondHillM)
+    {
+        auto EasedPitch = [](FTrack& T, double PitchDelta, double Peak) {
+            const double K = PitchDelta >= 0.0 ? Peak : -Peak;
+            const double L = std::fabs(PitchDelta) / Peak;
+            FTrackSegment In; In.Length = L; In.PitchCurvatureEnd = K; T.AddSegment(In);
+            FTrackSegment Out; Out.Length = L; Out.PitchCurvatureStart = K; T.AddSegment(Out);
+        };
+        FTrack T;
+        T.AddSegment(MakeStraight(20.0));
+        EasedPitch(T, 25.0 * Pi / 180.0, 0.03);
+        T.AddSegment(MakeStraight(60.0));                  // lift, ~25 m up
+        EasedPitch(T, -50.0 * Pi / 180.0, 0.05);
+        T.AddSegment(MakeStraight(30.0));
+        EasedPitch(T, 25.0 * Pi / 180.0, 0.012);           // level again at the bottom
+        T.AddSegment(MakeStraight(20.0));
+        // The second hill: up 30 degrees, a run at height, back down.
+        EasedPitch(T, 30.0 * Pi / 180.0, 0.03);
+        T.AddSegment(MakeStraight(SecondHillM));
+        EasedPitch(T, -60.0 * Pi / 180.0, 0.03);
+        T.AddSegment(MakeStraight(SecondHillM));
+        EasedPitch(T, 30.0 * Pi / 180.0, 0.03);
+        T.AddSegment(MakeStraight(80.0));
+        return T;
+    };
+    auto Powered = [](double S) { return S <= 140.0; };   // the lift zone
+
+    // 4 m of run at the top crests at 26 m against a 33 m release from the
+    // chain -- a couple of metres in hand after resistance. 10 m stalls.
+    const FTrack Track = HillTrack(4.0);
+    FTrain Train(Track);
+    Train.AddZone(MakeLift(0.0, 140.0, 4.0, 6.0));
+    const FRideProfile P = RunRideProfile(Train, Track, 1.0);
+    assert(P.bCompleted);
+    const FCrestMargin M = TightestCrest(P, Powered);
+    assert(M.bFound);
+    assert(M.Crests == 1);                                  // the lift's crest is skipped
+    assert(M.S > 140.0);                                    // it is the second hill
+    assert(M.HeightM > 5.0 && M.HeightM < P.HighestHeight); // lower than the lift
+    // The number is the speed there, read as height: v^2 / 2g, and it matches
+    // the sample the crest was read from.
+    double SpeedThere = 0.0;
+    for (const FRideSample& Sm : P.Samples) { if (std::fabs(Sm.S - M.S) < 1e-9) { SpeedThere = Sm.Speed; } }
+    assert(Near(M.InHandM, SpeedThere * SpeedThere / (2.0 * GravityMs2), 1e-9));
+    assert(M.InHandM > 0.5);
+    // And with no lift excluded the top of the lift is a crest too, and the
+    // TIGHTEST one -- the chain crawls over it at 4 m/s, 0.8 m in hand.
+    const FCrestMargin All = TightestCrest(P, [](double) { return false; });
+    assert(All.Crests == 2);
+    assert(All.S < 140.0 && Near(All.InHandM, 16.0 / (2.0 * GravityMs2), 0.2));
+
+    // A hill the train cannot cross is a stall, which the profile already
+    // reports; there is no crest to read, so nothing is claimed.
+    const FTrack Tall = HillTrack(10.0);
+    FTrain TrainTall(Tall);
+    TrainTall.AddZone(MakeLift(0.0, 140.0, 4.0, 6.0));
+    const FRideProfile Stalled = RunRideProfile(TrainTall, Tall, 1.0);
+    assert(!Stalled.bCompleted);
+    assert(!TightestCrest(Stalled, Powered).bFound);
+
+    std::printf("  tightest crest: S=%.0f m at %.1f m/s, %.1f m of climb in hand (lift crest excluded); "
+                "a stalled ride claims nothing\n", M.S, M.SpeedMs, M.InHandM);
+}
+
 static void TestRideProfileReportsAStallRatherThanHanging()
 {
     // The single most useful thing an editor can say, and the only way to know
@@ -1259,6 +1329,7 @@ int main()
     TestLongTrainCrestsFasterThanAPoint();
     TestBackCarIsThrownHarderThanTheFront();
     TestRideProfileMeasuresTheWholeRideAtEditTime();
+    TestTheTightestCrestSaysHowMuchClimbIsInHand();
     TestRideProfileReportsAStallRatherThanHanging();
     TestRideProfileReportsARollbackDistinctlyFromAStall();
     TestRideProfileCarriesRollRateWhichGCannot();

@@ -28,6 +28,7 @@
 
 #include <cmath>
 #include <cstddef>
+#include <functional>
 #include <vector>
 
 struct FRideSample
@@ -265,6 +266,73 @@ inline FRideProfile RunRideProfile(FTrain& Train, const FTrack& Track,
         if (Sm.Height > P.HighestHeight) { P.HighestHeight = Sm.Height; }
     }
     return P;
+}
+
+// ===================== ENERGY IN HAND AT THE CRESTS =====================
+//
+// Energy is invisible until the train stops (Sidewinder UX list, item 6): a
+// return leg 700 m long at Crr 0.026 costs 600 m^2/s^2 nobody could see until
+// the train valleyed on the last rise. What an author can use is the speed
+// over each unpowered crest read as METRES OF CLIMB STILL IN HAND, v^2/2g,
+// and which crest has the least of it -- that is where a slower load, a wet
+// rail or a headwind stalls the ride. A crest is a local maximum of height
+// with at least MinProminenceM of rise before it and fall after it; crests
+// inside a powered span (the top of a lift) are the chain's business and are
+// skipped.
+struct FCrestMargin
+{
+    bool bFound = false;
+    double S = 0.0;
+    double SpeedMs = 0.0;
+    double HeightM = 0.0;
+    double InHandM = 0.0;   // v^2 / 2g at the crest
+    int Crests = 0;         // unpowered crests considered
+};
+
+inline FCrestMargin TightestCrest(const FRideProfile& P,
+                                  const std::function<bool(double)>& IsPoweredAt,
+                                  double MinProminenceM = 1.0)
+{
+    FCrestMargin Out;
+    if (P.Samples.size() < 3) { return Out; }
+    // Prominence pass: a candidate crest is confirmed once the track has fallen
+    // MinProminence below it, and replaced by any higher point seen before that.
+    double MinSince = P.Samples[0].Height;
+    bool bHaveCandidate = false;
+    std::size_t Candidate = 0;
+    for (std::size_t i = 1; i < P.Samples.size(); ++i)
+    {
+        const double H = P.Samples[i].Height;
+        if (bHaveCandidate)
+        {
+            if (H > P.Samples[Candidate].Height) { Candidate = i; }
+            else if (H <= P.Samples[Candidate].Height - MinProminenceM)
+            {
+                const FRideSample& C = P.Samples[Candidate];
+                if (!IsPoweredAt(C.S))
+                {
+                    ++Out.Crests;
+                    const double InHand = C.Speed * C.Speed / (2.0 * GravityMs2);
+                    if (!Out.bFound || InHand < Out.InHandM)
+                    {
+                        Out.bFound = true;
+                        Out.S = C.S;
+                        Out.SpeedMs = C.Speed;
+                        Out.HeightM = C.Height;
+                        Out.InHandM = InHand;
+                    }
+                }
+                bHaveCandidate = false;
+                MinSince = H;
+            }
+        }
+        else
+        {
+            if (H < MinSince) { MinSince = H; }
+            else if (H >= MinSince + MinProminenceM) { bHaveCandidate = true; Candidate = i; }
+        }
+    }
+    return Out;
 }
 
 // ponytail: one train, one lap, from a standing start. No multi-train
