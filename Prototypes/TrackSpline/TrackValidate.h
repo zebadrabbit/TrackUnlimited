@@ -252,24 +252,32 @@ inline std::vector<FTrackDiagnostic> ValidateTrack(
             Out.push_back(Make(ETrackIssue::CurvatureStep, false, i, Buf));
         }
 
-        // Across a roll-mode change the two numbers are not in the same frame
-        // of reference, so subtracting them means nothing. Say so and skip,
-        // rather than reporting a fabricated step or a fabricated clean bill.
-        // Whether the RESOLVED roll steps here needs the walked frame:
+        // Across a change of roll REFERENCE the two numbers are not in the same
+        // frame, so subtracting them means nothing. Say so and skip, rather than
+        // reporting a fabricated step or a fabricated clean bill. PathRelative
+        // and FollowsTorsion share a reference (the path frame, the second with
+        // an analytic offset), so a joint between them is compared through
+        // PathRollAt; only WorldBank needs the walked frame, and
         // AnalyseResolvedRollRate is the check that has it.
-        if (A.RollMode != B.RollMode)
+        const bool bAWorld = A.RollMode == ERollMode::WorldBank;
+        const bool bBWorld = B.RollMode == ERollMode::WorldBank;
+        if (bAWorld != bBWorld)
         {
+            auto ModeName = [](ERollMode M)
+            {
+                return M == ERollMode::WorldBank ? "world bank"
+                     : M == ERollMode::FollowsTorsion ? "follows torsion" : "path-relative";
+            };
             std::snprintf(Buf, sizeof(Buf),
                           "Roll reference changes into segment %zu (%s -> %s); roll checks here "
                           "were skipped, the two values measure from different things.",
-                          i + 1,
-                          A.RollMode == ERollMode::WorldBank ? "world bank" : "path-relative",
-                          B.RollMode == ERollMode::WorldBank ? "world bank" : "path-relative");
+                          i + 1, ModeName(A.RollMode), ModeName(B.RollMode));
             Out.push_back(Make(ETrackIssue::RollModeMixed, false, i, Buf));
             continue;
         }
 
-        const double RollStep = std::fabs(A.RollEnd - B.RollStart);
+        const double RollStep = bAWorld ? std::fabs(A.RollEnd - B.RollStart)
+                                        : std::fabs(PathRollAt(A, A.Length) - PathRollAt(B, 0.0));
         if (RollStep > Limits.RollJointTolerance)
         {
             std::snprintf(Buf, sizeof(Buf),

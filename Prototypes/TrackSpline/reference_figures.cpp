@@ -16,6 +16,7 @@
 // a diff between them is readable.
 
 #include "TrackSpline.h"
+#include "TrackValidate.h"
 #include "../../Prototypes/TrainPhysics/TrainPhysics.h"
 #include "../../Prototypes/TrainPhysics/RideProfile.h"
 
@@ -71,7 +72,7 @@ int main(int argc, char** argv)
     }
 
     const double Lift = Deg(25.0), Drop = Deg(-34.0);
-    const double LoopRadius = 9.0, LoopEase = 54.0, TurnRadius = 32.0;
+    const double LoopRadius = 9.0, LoopEase = 54.0, LoopSideStep = 5.5, TurnRadius = 32.0;
     const double Bank = std::atan((26.5 * 26.5) / (GravityMs2 * TurnRadius));
     const double LiftClimb = 90.99, DropLength = 24.0;
 
@@ -95,15 +96,33 @@ int main(int argc, char** argv)
     E[CrestFirst].Zone = EZone::Lift; E[CrestFirst].Speed = 4.0;  // chain over the top only
     Straight(DropLength);                                   // drop
     Eased(-Drop, 0.012);                                    // pull-out
+    // The loop SIDE-STEPS: the planar teardrop as a generalised helix (Lancret,
+    // torsion a constant ratio of curvature), exactly as ReferenceLayout()
+    // builds it. Rider follows the bend; everything after banks from the
+    // horizon because the loop leaves the path frame twisted by 2*pi*cos(rho).
     const std::size_t LoopFirst = E.size();
-    { FEntry A; A.Seg.Length = LoopEase; A.Seg.PitchCurvatureEnd = 1.0 / LoopRadius; E.push_back(A);
-      FEntry B; B.Seg.Length = 2.0 * Pi * LoopRadius - LoopEase;
-      B.Seg.PitchCurvatureStart = B.Seg.PitchCurvatureEnd = 1.0 / LoopRadius; E.push_back(B);
-      FEntry C; C.Seg.Length = LoopEase; C.Seg.PitchCurvatureStart = 1.0 / LoopRadius; E.push_back(C); }
-    { FEntry A; A.Seg = MakeClothoid(26.0, 0.0, 1.0 / TurnRadius, 0.0, Bank); E.push_back(A);
-      FEntry B; B.Seg = MakeArc(55.0, TurnRadius, Bank); E.push_back(B);
-      FEntry C; C.Seg = MakeClothoid(26.0, 1.0 / TurnRadius, 0.0, Bank, 0.0); E.push_back(C); }
+    const double Cot = LoopSideStep / (LoopEase + 2.0 * Pi * LoopRadius); // over the WHOLE loop
+    const double SinRho = 1.0 / std::sqrt(1.0 + Cot * Cot);
+    {
+        FEntry A; A.Seg.Length = LoopEase / SinRho; A.Seg.PitchCurvatureEnd = SinRho * SinRho / LoopRadius;
+        A.Seg.TorsionRatio = Cot; A.Seg.RollMode = ERollMode::FollowsTorsion; E.push_back(A);
+        FEntry B; B.Seg.Length = (2.0 * Pi * LoopRadius - LoopEase) / SinRho;
+        B.Seg.TorsionRatio = Cot; B.Seg.RollMode = ERollMode::FollowsTorsion;
+        ChainCurvature(A.Seg, B.Seg);
+        B.Seg.YawCurvatureEnd = B.Seg.YawCurvatureStart; B.Seg.PitchCurvatureEnd = B.Seg.PitchCurvatureStart;
+        B.Seg.RollEnd = B.Seg.RollStart; E.push_back(B);
+        FEntry C; C.Seg.Length = A.Seg.Length; C.Seg.TorsionRatio = Cot; C.Seg.RollMode = ERollMode::FollowsTorsion;
+        ChainCurvature(B.Seg, C.Seg); C.Seg.RollEnd = C.Seg.RollStart; E.push_back(C);
+    }
+    // Everything after the loop is authored in the frame the loop leaves: the
+    // curvature rotated back by the twist, the roll carrying it. One derived
+    // angle, the theorem's own, used twice.
+    const double Off = PathRollAt(E.back().Seg, E.back().Seg.Length);
+    { FEntry A; A.Seg = InTwistedFrame(MakeClothoid(26.0, 0.0, 1.0 / TurnRadius, 0.0, Bank), Off); E.push_back(A);
+      FEntry B; B.Seg = InTwistedFrame(MakeArc(55.0, TurnRadius, Bank), Off); E.push_back(B);
+      FEntry C; C.Seg = InTwistedFrame(MakeClothoid(26.0, 1.0 / TurnRadius, 0.0, Bank, 0.0), Off); E.push_back(C); }
     Straight(70.0, EZone::Brake, 0.0);                      // brake run
+    E.back().Seg = InTwistedFrame(E.back().Seg, Off);
 
     FTrack T;
     for (const FEntry& F : E) { T.AddSegment(F.Seg); }
@@ -225,6 +244,16 @@ int main(int argc, char** argv)
                     "(%+.2f g there)\n", LoopRadius, LoopEase, ApexZ, ApexS, ApexG);
         std::printf("  Loop, minimum felt G  %+.2f g at S = %.1f m — %.2f m of arc BEFORE the "
                     "apex, at %.2f m\n", MinG, MinGS, ApexS - MinGS, MinGZ);
+        {
+            // The legs: a generalised helix side-steps LoopLen*cos(rho) along its
+            // axis, and the legs cross at an angle, so the closest approach is a
+            // little under that. Against the 3.0 m corridor.
+            const FClearanceReport Cl = AnalyseSelfClearance(T, FTrackProfile{}, 0.5, 12.0, false);
+            std::printf("  Loop legs             %.2f m apart at closest (S = %.1f / %.1f m); "
+                        "side-step %.1f m, exit twist %.1f deg, corridor %.1f m\n",
+                        Cl.ClosestApproach, Cl.AtS, Cl.AndS, LoopSideStep,
+                        2.0 * Pi * Cot * SinRho * 180.0 / Pi, CollisionCorridorM);
+        }
         std::printf("  Banked turn           R%.1f m at %.2f deg\n",
                     TurnRadius, Bank * 180.0 / Pi);
         std::printf("  Ride time             %.1f s, dispatch to standstill at S = %.1f m\n",

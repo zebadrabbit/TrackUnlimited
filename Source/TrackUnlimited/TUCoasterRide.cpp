@@ -1320,6 +1320,11 @@ TArray<FTUTrackSegment> ATUCoasterRide::ReferenceLayout()
 	const double Drop = Deg(-34.0);
 	const double LoopRadius = 9.0;
 	const double LoopEase = 54.0;
+	// How far apart the loop's two legs land, measured along the loop's axis.
+	// The corridor is 3.0 m rail-centre to rail-centre, and the legs cross
+	// about 63% of the loop apart, so the closest approach is 0.63 of this:
+	// measured 3.47 m (reference_figures.cpp prints it).
+	const double LoopSideStep = 5.5;
 	const double TurnRadius = 32.0;
 	const double BankDeg = FMath::RadiansToDegrees(
 		FMath::Atan((26.5 * 26.5) / (GravityMs2 * TurnRadius)));
@@ -1412,60 +1417,93 @@ TArray<FTUTrackSegment> ATUCoasterRide::ReferenceLayout()
 	// radius is large where the train is fastest. A circular loop at this speed
 	// would pull over 9 G at the bottom, which is why real loops are not circles.
 	//
-	// Known defect, measured and left alone deliberately: being planar, its two
-	// legs pass 0.19 m from each other. See PHASE0_FINDINGS.md — every cheap fix
-	// was tried and costs more than the defect does.
+	// Until 2026-08-26 it was planar, and its two legs passed 0.19 m from each
+	// other -- a known defect left in deliberately, because every cheap fix
+	// measured worse than the defect (PHASE0_FINDINGS.md). The block below is
+	// the fix that is not cheap: a new authored quantity, not a tuning.
+	FTrackSegment LoopExit; // the exit ease, kept: the tail is authored in its frame
 	{
-		FTUTrackSegment EaseIn;
-		EaseIn.Kind = ETUSegmentKind::Raw;
-		EaseIn.Length = static_cast<float>(LoopEase);
-		EaseIn.PitchCurvatureEnd = static_cast<float>(1.0 / LoopRadius);
-		Out.Add(EaseIn);
-
-		FTUTrackSegment Crown;
-		Crown.Kind = ETUSegmentKind::Raw;
-		Crown.Length = static_cast<float>(2.0 * Pi * LoopRadius - LoopEase);
-		Crown.PitchCurvatureStart = static_cast<float>(1.0 / LoopRadius);
-		Crown.PitchCurvatureEnd = static_cast<float>(1.0 / LoopRadius);
-		Out.Add(Crown);
-
-		FTUTrackSegment EaseOut;
-		EaseOut.Kind = ETUSegmentKind::Raw;
-		EaseOut.Length = static_cast<float>(LoopEase);
-		EaseOut.PitchCurvatureStart = static_cast<float>(1.0 / LoopRadius);
-		Out.Add(EaseOut);
+		// AND IT SIDE-STEPS (2026-08-26). The same teardrop as a GENERALISED
+		// helix -- Lancret: torsion a constant RATIO of curvature -- so its
+		// projection onto the plane perpendicular to its axis is the loop that was
+		// always here, advancing along that axis at cos(rho) per metre. Exit
+		// tangent and height are the planar loop's EXACTLY, and the legs land
+		// LoopLen * cos(rho) apart. Five cheaper fixes were measured and failed
+		// (PHASE0_FINDINGS.md); the "crown" they put torsion on is 2.5 m of a
+		// 56.5 m loop, and constant torsion cannot follow a curvature ramp.
+		//
+		// Chained through the prototype's own ChainCurvature: the crown and the
+		// exit ease start where the twisted ease left the curvature vector AND the
+		// rider, which are derived numbers computed here rather than typed. The
+		// rider follows the bend, and everything after the loop banks from the
+		// horizon, because the path frame leaves the loop twisted by
+		// 2*pi*cos(rho) -- the Sidewinder's tail, for the same reason.
+		const double PlanarLen = 2.0 * Pi * LoopRadius;             // crown + one ease
+		const double Cot = LoopSideStep / (LoopEase + PlanarLen);   // cot(rho) over the WHOLE loop
+		const double SinRho = 1.0 / FMath::Sqrt(1.0 + Cot * Cot);
+		FTrackSegment A, B;
+		FTrackSegment& C = LoopExit;
+		A.Length = LoopEase / SinRho;
+		A.PitchCurvatureEnd = SinRho * SinRho / LoopRadius;
+		A.TorsionRatio = Cot;
+		A.RollMode = ERollMode::FollowsTorsion;
+		B.Length = (PlanarLen - LoopEase) / SinRho;
+		B.TorsionRatio = Cot;
+		B.RollMode = ERollMode::FollowsTorsion;
+		ChainCurvature(A, B);
+		B.YawCurvatureEnd = B.YawCurvatureStart;
+		B.PitchCurvatureEnd = B.PitchCurvatureStart;
+		B.RollEnd = B.RollStart;
+		C.Length = A.Length;
+		C.TorsionRatio = Cot;
+		C.RollMode = ERollMode::FollowsTorsion;
+		ChainCurvature(B, C);
+		C.RollEnd = C.RollStart;
+		for (const FTrackSegment& S : {A, B, C})
+		{
+			FTUTrackSegment R;
+			R.Kind = ETUSegmentKind::Raw;
+			R.Length = static_cast<float>(S.Length);
+			R.YawCurvatureStart = static_cast<float>(S.YawCurvatureStart);
+			R.YawCurvatureEnd = static_cast<float>(S.YawCurvatureEnd);
+			R.PitchCurvatureStart = static_cast<float>(S.PitchCurvatureStart);
+			R.PitchCurvatureEnd = static_cast<float>(S.PitchCurvatureEnd);
+			R.TorsionRatio = static_cast<float>(S.TorsionRatio);
+			R.RollStartDegrees = static_cast<float>(FMath::RadiansToDegrees(S.RollStart));
+			R.RollEndDegrees = static_cast<float>(FMath::RadiansToDegrees(S.RollEnd));
+			R.RollMode = ETURollMode::FollowsTorsion;
+			Out.Add(R);
+		}
 	}
 
-	// Banked turn, clothoid in and out so neither curvature nor roll steps.
-	// Path-relative, matching what this layout has always been: it follows an
-	// inversion, so the frame arrives carrying whatever twist the loop left it,
-	// and re-reading these numbers as bank-from-horizon would change the ride.
+	// Banked turn, clothoid in and out so neither curvature nor roll steps --
+	// AUTHORED IN THE FRAME THE LOOP LEAVES. The path frame exits the loop
+	// twisted by 2*pi*cos(rho), and a turn typed as plain yaw in that frame
+	// pitches by sin(twist) of its turning: measured, 24 m of drop. So the three
+	// pieces are the same clothoid / arc / clothoid put through InTwistedFrame
+	// (curvature rotated back, roll carrying the offset) and stored Raw, exactly
+	// as the Sidewinder authors its downstream. One derived angle, the theorem's.
+	const double Off = PathRollAt(LoopExit, LoopExit.Length);
+	const double Bank = FMath::DegreesToRadians(BankDeg);
+	for (const FTrackSegment& S : {
+			InTwistedFrame(MakeClothoid(26.0, 0.0, 1.0 / TurnRadius, 0.0, Bank), Off),
+			InTwistedFrame(MakeArc(55.0, TurnRadius, Bank), Off),
+			InTwistedFrame(MakeClothoid(26.0, 1.0 / TurnRadius, 0.0, Bank, 0.0), Off)})
 	{
-		FTUTrackSegment In;
-		In.Kind = ETUSegmentKind::Clothoid;
-		In.Length = 26.f;
-		In.CurvatureStart = 0.f;
-		In.CurvatureEnd = static_cast<float>(1.0 / TurnRadius);
-		In.RollEndDegrees = static_cast<float>(BankDeg);
-		Out.Add(In);
-
-		FTUTrackSegment Hold;
-		Hold.Kind = ETUSegmentKind::Arc;
-		Hold.Length = 55.f;
-		Hold.Radius = static_cast<float>(TurnRadius);
-		Hold.RollStartDegrees = Hold.RollEndDegrees = static_cast<float>(BankDeg);
-		Out.Add(Hold);
-
-		FTUTrackSegment OutEase;
-		OutEase.Kind = ETUSegmentKind::Clothoid;
-		OutEase.Length = 26.f;
-		OutEase.CurvatureStart = static_cast<float>(1.0 / TurnRadius);
-		OutEase.CurvatureEnd = 0.f;
-		OutEase.RollStartDegrees = static_cast<float>(BankDeg);
-		Out.Add(OutEase);
+		FTUTrackSegment R;
+		R.Kind = ETUSegmentKind::Raw;
+		R.Length = static_cast<float>(S.Length);
+		R.YawCurvatureStart = static_cast<float>(S.YawCurvatureStart);
+		R.YawCurvatureEnd = static_cast<float>(S.YawCurvatureEnd);
+		R.PitchCurvatureStart = static_cast<float>(S.PitchCurvatureStart);
+		R.PitchCurvatureEnd = static_cast<float>(S.PitchCurvatureEnd);
+		R.RollStartDegrees = static_cast<float>(FMath::RadiansToDegrees(S.RollStart));
+		R.RollEndDegrees = static_cast<float>(FMath::RadiansToDegrees(S.RollEnd));
+		Out.Add(R);
 	}
 
-	Straight(70.0, ETUSegmentZone::Brake, 0.f);           // brake run
+	FTUTrackSegment& BrakeRun = Straight(70.0, ETUSegmentZone::Brake, 0.f); // brake run
+	BrakeRun.RollStartDegrees = BrakeRun.RollEndDegrees = static_cast<float>(FMath::RadiansToDegrees(Off));
 	return Out;
 }
 
@@ -1480,6 +1518,14 @@ void ATUCoasterRide::RebuildFromSegments()
 	// just gained or lost blocks has channels that no longer mean what they meant,
 	// and carrying them across fires every cue on the rebuild.
 	ShowPublisher.Rebuilt();
+
+	// A TRAIN IS ITS CARS. Derived here rather than kept in step by hand: two
+	// fields that must agree are one field and a bug waiting for whichever gets
+	// written second. AND AT THE TOP, before the zone walk surveys the stop marks
+	// from it: derived after them, the first rebuild after a preset changed the
+	// cars put every platform's mark past its end with the OLD train, and the
+	// next rebuild quietly fixed it -- so nothing that rebuilt twice ever saw it.
+	TrainLengthM = FMath::Max(0.f, CarCount * CarLengthM);
 
 	FTrackDocument Doc;
 	Doc.HeartlineHeight = 1.1;
@@ -1496,7 +1542,16 @@ void ATUCoasterRide::RebuildFromSegments()
 	// KEPT, not only logged. The findings have been correct since Phase 0 and
 	// invisible outside a log for just as long; the panel is what makes them
 	// somewhere to go rather than something to scroll back for.
-	LastDiagnostics = ValidateTrack(BuildSegments(Doc));
+	// FLOAT-AWARE JOINT TOLERANCES. FTUTrackSegment stores floats, and a chained
+	// joint (the side-stepping loop, the Sidewinder's payback arc) is a derived
+	// double rounded to seven digits on each side — a 6e-9 step in curvature or
+	// roll there is transcription, not authoring, and the 1e-9 defaults were set
+	// for the double-precision suites. 1e-7 is a float's resolution on these
+	// magnitudes and still two decades under anything a rider could feel.
+	FTrackValidationLimits Limits;
+	Limits.CurvatureJointTolerance = 1e-7;
+	Limits.RollJointTolerance = 1e-7;
+	LastDiagnostics = ValidateTrack(BuildSegments(Doc), Limits);
 	for (const FTrackDiagnostic& D : LastDiagnostics)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("Track segment %d: %s"),
@@ -1876,10 +1931,6 @@ void ATUCoasterRide::RebuildFromSegments()
 		// never hold it. So the number of trains the layout can run is the number
 		// of hold-capable zones, and asking for more is refused rather than
 		// granted into open course.
-		// A TRAIN IS ITS CARS. Derived here rather than kept in step by hand: two
-		// fields that must agree are one field and a bug waiting for whichever gets
-		// written second.
-		TrainLengthM = FMath::Max(0.f, CarCount * CarLengthM);
 
 		TArray<double> HoldMidS;
 		HoldZoneIndices.Reset();
@@ -2649,7 +2700,7 @@ void ATUCoasterRide::RebuildFromSegments()
 		TEXT("TrackUnlimited: %d segments, %.1f m, C2=%s | ends %+.2f m vs station | ")
 		TEXT("closest approach %.2f m%s | sits %.2f m above the heartline origin"),
 		static_cast<int32>(Track.NumSegments()), Track.TotalLength(),
-		Track.IsCurvatureContinuous() ? TEXT("yes") : TEXT("NO"), Gap.HeightError,
+		Track.IsCurvatureContinuous(1e-7) ? TEXT("yes") : TEXT("NO"), Gap.HeightError, // float-stored joints
 		Clear.ClosestApproach,
 		Clear.bStructureOverlaps ? TEXT(" (TRACK PASSES THROUGH ITSELF)") : TEXT(""),
 		GroundOffsetM);
@@ -6261,6 +6312,71 @@ bool ATUCoasterRide::RunDocumentSmokeTest()
 				Segments.Num(), Track.TotalLength(), Profile_.TopSpeed * 3.6,
 				Profile_.Duration, Profile_.MinVerticalG, Profile_.MaxVerticalG,
 				Profile_.MaxAbsLateralG, Pads, Trims, CarCount, CarLengthM);
+		}
+
+		// ---- AND IT IS IN SPEC FOR COLLISION ----
+		//
+		// What the Sidewinder's crash taught, asked of the ride that ships as
+		// the showcase: the track keeps the corridor from itself, every hold
+		// can release a train that finishes, the fleet boots IN SERVICE, and
+		// that fleet runs a full lap of every train through every device with
+		// neither the interlocking nor the overlap check tripping. The last is
+		// the one no rebuild-time check can see -- staging is legal at scan
+		// zero and a violation eleven seconds later.
+		{
+			// THE MENU'S OWN PATH: the previous document ran the 15 m train every
+			// other preset uses (rebuilt, so the ride has DERIVED that length --
+			// setting the cars alone leaves the old figure in place), then one
+			// template load, which is one rebuild. The shed-and-return above
+			// rebuilds three times, and a stale train length only ever showed on
+			// the first. The four "cannot hold a 15.0 m train" warnings this logs
+			// are true of that train and are the precondition, not the finding.
+			CarCount = 5; CarLengthM = 3.f;
+			RebuildFromSegments();
+			StartFromTemplate(3);
+			int32 MarksPastEnd = 0;
+			for (int32 z = 0; StopMarks && z < ZoneSpans.Num() && z < static_cast<int32>(StopMarks->Num()); ++z)
+			{
+				if (StopMarks->PositionOf(static_cast<std::size_t>(z)) > ZoneSpans[z].EndS) { ++MarksPastEnd; }
+			}
+			int32 DeviceErrors = 0;
+			for (const FDeviceFinding& D : LastDeviceFindings)
+			{
+				if (D.bIsError) { ++DeviceErrors; }
+			}
+			int32 Moving = 0;
+			for (const TUniquePtr<FTrain>& T : Trains)
+			{
+				if (T->GetSpeed() > 0.0) { ++Moving; }
+			}
+			// One lap plus a margin, so the train staged furthest back has
+			// passed every device once.
+			const double LiveS = FMath::Max(Profile_.Duration, 30.0) + 10.0;
+			for (int32 i = 0; i < static_cast<int32>(240.0 * LiveS); ++i)
+			{
+				SimStep(1.0 / 240.0);
+			}
+			const bool bTripped = (Drives && Drives->IsEmergencyStopped())
+				|| bEmergencyStop || TrainWrecked.Contains(true);
+			if (LastClearance.ClosestApproach < CollisionCorridorM || DeviceErrors != 0
+				|| Moving == 0 || bTripped || MarksPastEnd != 0)
+			{
+				UE_LOG(LogTUEvents, Error,
+					TEXT("smoke: the showcase is out of spec (clearance %.2f m against %.1f, ")
+					TEXT("%d device error(s), %d stop mark(s) past their device, %d of %d trains moving at boot, tripped %d -- %s)"),
+					LastClearance.ClosestApproach, CollisionCorridorM, DeviceErrors, MarksPastEnd,
+					Moving, Trains.Num(), bTripped,
+					Drives ? UTF8_TO_TCHAR(Drives->EmergencyStopReason()) : TEXT("no drives"));
+				Failures.Add(TEXT("showcase-spec"));
+			}
+			else
+			{
+				UE_LOG(LogTUEvents, Log,
+					TEXT("smoke: the showcase is in spec -- clearance %.2f m, no device errors, every stop mark inside its device, ")
+					TEXT("%d of %d trains staged moving, %.0f s live with no trip and no wreck"),
+					LastClearance.ClosestApproach, Moving, Trains.Num(), LiveS);
+			}
+			RebuildFromSegments();
 		}
 	}
 

@@ -22,21 +22,22 @@ read off a ride profile run over the built geometry.
 
 | | |
 |---|---|
-| Segments | 16 — 4 straight, 2 clothoid, 1 arc, 9 raw (pitch) |
-| Developed length | **591.72 m** (sum of segment arc lengths, along the heartline) |
-| Horizontal extent | 367.21 m |
+| Segments | 16 — 4 straight, 12 raw (9 pitch, of which 3 are the side-stepping loop; 3 the banked turn, authored in the frame the loop leaves) |
+| Developed length | **591.86 m** (sum of segment arc lengths, along the heartline) |
+| Horizontal extent | 367.43 m |
 | Lift crest | **50.07 m** above station datum, at S = 159.0 m |
 | Lowest point | 0.00 m — the layout does not go below its own station |
 | Closure | ends **+0.0015 m** relative to the station |
 | Curvature continuity | ✅ verified to **1e-9** across all 15 joints |
 | Top speed | **107.5 km/h** (29.87 m/s) at S = 282.9 m |
-| Vertical G | **+0.66 to +4.52 g** (min at S = 173.8, max at S = 331.2) |
-| Peak lateral G | **0.37 g** at S = 428.6 m |
+| Vertical G | **+0.66 to +4.51 g** (min at S = 173.8, max at S = 331.2) |
+| Peak lateral G | **0.37 g** at S = 429.2 m |
 | Peak roll rate | 66.7 °/s at S = 415.5 m |
-| Loop | R9.0 m, 54 m eased in and out. Apex **27.90 m** at S = 359.5 m (+1.78 g there) |
-| Loop, minimum felt G | **+1.74 g** at S = 356.9 m — 2.51 m of arc *before* the apex, at 27.55 m |
+| Loop | R9.0 m, 54 m eased in and out. Apex **27.90 m** at S = 359.5 m (+1.77 g there) |
+| Loop, minimum felt G | **+1.73 g** at S = 357.0 m — 2.52 m of arc *before* the apex, at 27.55 m |
+| Loop legs | **3.46 m** apart at closest (S = 325.0 / 394.0 m); side-step 5.5 m, exit twist 17.9° — against the 3.0 m corridor |
 | Banked turn | R32.0 m at **65.92°**, clothoid in and out |
-| Ride time | **63.1 s**, dispatch to standstill at S = 567.6 m in the brake run |
+| Ride time | **63.1 s**, dispatch to standstill at S = 567.7 m in the brake run |
 | Heartline | 1.1 m above rail centreline |
 | Train | **15 m** long, nine sample points |
 | Chain speed | 4.0 m/s |
@@ -90,15 +91,28 @@ it. Only the **first** of the crest's two eased-pitch segments is powered; pitch
 into a 20.6 m segment, so the chain lets go just past the top. Powering both halves instead costs
 10 km/h of top speed and flattens the loop apex.
 
-**The loop is planar, and its two legs pass 0.189 m apart.** Built from pure pitch curvature, so it
-is exactly planar — against rails 1.215 m wide, that is a rider through solid steel. Every segment is
-individually valid, every joint continuous, every G reading plausible. It is a **known, measured
-defect left in deliberately**: fixing it needs a lateral component, i.e. torsion, and the measured
-cost is that torsion 0.003 opens the gap to 2.39 m but roughly triples peak lateral G and drops the
-exit 22.3 m. (Those trade figures were measured on the pre-correction layout, when peak lateral was
-0.36 g; the loop's own geometry has not moved since, so the clearance still reads 0.189 m.) That is
-a ride-design call, not a bug fix. See
-[`PHASE0_FINDINGS.md`](PHASE0_FINDINGS.md).
+**The loop side-steps, and its two legs pass 3.46 m apart — since 2026-08-26.** Until then it was
+planar, built from pure pitch curvature, and its legs passed **0.189 m** apart against rails 1.215 m
+wide: a rider through solid steel, with every segment valid, every joint continuous and every G
+reading plausible. It was left in deliberately because every cheap fix measured worse than the
+defect — constant torsion anywhere on it either made it circular (+9.49 g) or translated it 9 m
+down per metre of side-step (see [`PHASE0_FINDINGS.md`](PHASE0_FINDINGS.md)).
+
+The fix is a new authored quantity rather than a tuning: **`TorsionRatio`**, torsion as a constant
+multiple of curvature. By Lancret's theorem that makes the eased loop a *generalised helix* — its
+tangent keeps one angle ρ to a fixed horizontal axis — across the curvature ramps constant torsion
+could never follow. The loop projects onto the plane perpendicular to that axis as the very teardrop
+it always was (curvature scaled by sin²ρ, length by 1/sin ρ) and advances along the axis at cos ρ per
+metre, so the tangent returns **exactly** (5e-10 measured), the height is preserved, and the legs
+land 5.5 m apart along the axis — 3.46 m at their closest, because they cross about 63 % of the loop
+apart. The ratio is `5.5 / 110.5 = 0.0498`, ρ = 87.15°. **Every ride figure above is unchanged to
+the second decimal**: the projection *is* the old loop, the length grew 0.14 m, and peak lateral G
+stays 0.37 g because the rider's up follows the bend (`RollMode = FollowsTorsion`) — measured
+path-relative instead, the loop's whole twist would read as lateral G. The path frame leaves the
+loop twisted by **2π·cos ρ = 17.9°**, and the banked turn and brake run are authored *in that frame*
+(`InTwistedFrame`: curvature rotated back, roll carrying the offset) — a level turn typed as plain
+yaw in the twisted frame pitches by sin(twist) of its turning, measured as **24 m of drop** before
+that was done.
 
 ## Reproducing these numbers
 

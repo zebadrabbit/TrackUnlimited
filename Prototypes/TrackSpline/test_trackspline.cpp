@@ -1955,6 +1955,236 @@ static void TestCrossSectionSidednessAndWidth()
     std::printf("  left rail is inside a left turn; swept width %.3f m\n", TrackWidth(Profile));
 }
 
+// ------------------------------------------------- the loop that side-steps
+
+static double NumericCurvatureArc(const FTrackSegment& Seg, double U)
+{
+    // Simpson over |k(u)|, the thing TorsionPhaseAt integrates in closed form.
+    const int N = 2000;
+    const double H = U / N;
+    double Sum = 0.0;
+    for (int i = 0; i <= N; ++i)
+    {
+        const double u = i * H;
+        const double A = u / Seg.Length;
+        const double Y = Seg.YawCurvatureStart + (Seg.YawCurvatureEnd - Seg.YawCurvatureStart) * A;
+        const double P = Seg.PitchCurvatureStart + (Seg.PitchCurvatureEnd - Seg.PitchCurvatureStart) * A;
+        const double W = (i == 0 || i == N) ? 1.0 : (i % 2 ? 4.0 : 2.0);
+        Sum += W * std::sqrt(Y * Y + P * P);
+    }
+    return Sum * H / 3.0;
+}
+
+static void TestTorsionRatioMakesAnEasedLoopAGeneralisedHelix()
+{
+    // Lancret's theorem as an authoring tool. Torsion a constant RATIO of
+    // curvature makes a curve a generalised helix -- its tangent keeps one
+    // angle rho to a fixed axis -- and that stays true across a curvature
+    // RAMP, which constant Torsion cannot manage. So the reference layout's
+    // eased loop, re-authored with ratio cot(rho), projects onto the plane
+    // perpendicular to its axis as the planar loop it always was and advances
+    // along that axis at cos(rho) per metre: the tangent returns EXACTLY, the
+    // height is preserved, and the two legs land LoopLen*cos(rho) apart. That
+    // is the answer PHASE0_FINDINGS.md said the vocabulary could not express;
+    // the five cheaper fixes it lists all put torsion where the curvature is
+    // not, and the "crown" of this loop is 2.5 m of 56.5.
+    const double R = 9.0, Ease = 54.0, SideStep = 5.5; // the reference layout's numbers
+    const double PlanarLen = 2.0 * Pi * R;   // crown + one ease: the teardrop's parameter
+    const double LoopLen = Ease + PlanarLen;  // ease in + crown + ease out, the whole loop
+    const double Cot = SideStep / LoopLen;
+    const double SinRho = 1.0 / std::sqrt(1.0 + Cot * Cot);
+    const double CosRho = Cot * SinRho;
+
+    // ---- the phase integral, against Simpson, where the closed form has parts
+    // a clothoid never exercises: a ramp between NON-parallel vectors (the
+    // asinh term) and a ramp through zero (the |linear| kink).
+    {
+        FTrackSegment Skew;
+        Skew.Length = 12.0;
+        Skew.YawCurvatureStart = 0.02;  Skew.YawCurvatureEnd = -0.01;
+        Skew.PitchCurvatureStart = 0.01; Skew.PitchCurvatureEnd = 0.03;
+        Skew.TorsionRatio = 0.3;
+        Skew.Torsion = 0.004;
+        for (double U : {3.0, 7.5, 12.0})
+        {
+            const double Want = 0.004 * U + 0.3 * NumericCurvatureArc(Skew, U);
+            assert(std::fabs(TorsionPhaseAt(Skew, U) - Want) < 1e-9);
+        }
+        FTrackSegment Cross;
+        Cross.Length = 10.0;
+        Cross.PitchCurvatureStart = 0.05; Cross.PitchCurvatureEnd = -0.05;
+        Cross.TorsionRatio = 0.3;
+        assert(std::fabs(TorsionPhaseAt(Cross, 10.0) - 0.3 * 0.25) < 1e-12);
+        assert(std::fabs(TorsionPhaseAt(Cross, 5.0) - 0.3 * 0.125) < 1e-12);
+    }
+
+    // ---- the loop, planar and side-stepping, from the same three segments.
+    auto BuildLoop = [&](bool bSideStep, ERollMode TailMode, FTrack& Out,
+                         std::vector<FTrackSegment>* Keep = nullptr)
+    {
+        std::vector<FTrackSegment> Segs;
+        Segs.push_back(MakeStraight(30.0));
+        const double c = bSideStep ? Cot : 0.0;
+        const double s = bSideStep ? SinRho : 1.0;
+        const ERollMode Mode = bSideStep ? ERollMode::FollowsTorsion : ERollMode::PathRelative;
+        FTrackSegment A, B, C;
+        A.Length = Ease / s; A.PitchCurvatureEnd = s * s / R; A.TorsionRatio = c; A.RollMode = Mode;
+        B.Length = (PlanarLen - Ease) / s; B.TorsionRatio = c; B.RollMode = Mode;
+        ChainCurvature(A, B);
+        B.YawCurvatureEnd = B.YawCurvatureStart;
+        B.PitchCurvatureEnd = B.PitchCurvatureStart;
+        B.RollEnd = B.RollStart;
+        C.Length = A.Length; C.TorsionRatio = c; C.RollMode = Mode;
+        ChainCurvature(B, C);
+        C.RollEnd = C.RollStart;
+        Segs.push_back(A); Segs.push_back(B); Segs.push_back(C);
+        FTrackSegment Tail = MakeStraight(30.0);
+        Tail.RollMode = TailMode;
+        if (TailMode == ERollMode::FollowsTorsion) { ChainCurvature(C, Tail); Tail.RollEnd = Tail.RollStart; }
+        Segs.push_back(Tail);
+        for (const FTrackSegment& Seg : Segs) { Out.AddSegment(Seg); }
+        if (Keep) { *Keep = Segs; }
+    };
+    FTrack Planar, Stepped, WorldTail;
+    std::vector<FTrackSegment> SteppedSegs;
+    BuildLoop(false, ERollMode::PathRelative, Planar);
+    BuildLoop(true, ERollMode::FollowsTorsion, Stepped, &SteppedSegs); // every joint data-checkable
+    BuildLoop(true, ERollMode::WorldBank, WorldTail);                   // what the layouts ship
+    const double LoopStart = 30.0;
+    const double LoopEnd = 30.0 + LoopLen / SinRho;
+
+    assert(Planar.IsCurvatureContinuous());
+    assert(Stepped.IsCurvatureContinuous()); // chained curvature AND chained roll
+    assert(!WorldTail.IsCurvatureContinuous()); // the WorldBank joint is refused by design
+
+    // The theorem, measured: tangent returns exactly, height is preserved, and
+    // the displacement is the planar loop's in the tilted plane plus the
+    // side-step along the axis A = (cos rho, -sin rho, 0) — to the rider's
+    // RIGHT for a positive ratio, which is the sign convention pinned here.
+    const FTrackFrame P0 = Planar.EvaluateAt(LoopStart), P1 = Planar.EvaluateAt(30.0 + LoopLen);
+    const FTrackFrame S0 = Stepped.EvaluateAt(LoopStart), S1 = Stepped.EvaluateAt(LoopEnd);
+    assert(Length(S1.Tangent - S0.Tangent) < 1e-9);
+    assert(std::fabs(S1.Position.Z - S0.Position.Z) < 1e-6);
+    const double DxPlanar = P1.Position.X - P0.Position.X;
+    assert(std::fabs(P1.Position.Y - P0.Position.Y) < 1e-9 && std::fabs(P1.Position.Z - P0.Position.Z) < 1e-6);
+    const FVec3 Want{DxPlanar * SinRho + SideStep * CosRho, DxPlanar * CosRho - SideStep * SinRho, 0.0};
+    const FVec3 Got = S1.Position - S0.Position;
+    assert(Length(Got - Want) < 1e-6);
+
+    // WHAT THE LOOP LEAVES BEHIND, and how the tail is authored in it. The path
+    // frame exits twisted by 2*pi*cos(rho); a level 90-degree turn authored in
+    // that frame as plain yaw pitches DOWN by sin(twist) of its turning (the
+    // reference layout dropped 24 m). InTwistedFrame rotates the curvature the
+    // other way and carries the roll offset, and the turn is horizontal again:
+    // end tangent (0, 1, 0), same height, rider level — all to 1e-6. This pins
+    // the rotation's sign, which every layout with a torsioned loop relies on.
+    {
+        const double Off = PathRollAt(SteppedSegs[3], SteppedSegs[3].Length);
+        FTrack Turned, Naive;
+        for (std::size_t i = 0; i < 4; ++i) { Turned.AddSegment(SteppedSegs[i]); Naive.AddSegment(SteppedSegs[i]); }
+        // The reference layout's own tail: clothoid in, arc, clothoid out,
+        // banked 0.5 rad, then a straight. 2.53125 rad of heading in all.
+        const FTrackSegment Tail[] = {
+            MakeStraight(30.0),
+            MakeClothoid(26.0, 0.0, 1.0 / 32.0, 0.0, 0.5),
+            MakeArc(55.0, 32.0, 0.5),
+            MakeClothoid(26.0, 1.0 / 32.0, 0.0, 0.5, 0.0),
+            MakeStraight(30.0)};
+        for (const FTrackSegment& Seg : Tail)
+        {
+            Turned.AddSegment(InTwistedFrame(Seg, Off));
+            Naive.AddSegment(Seg);
+        }
+        assert(Turned.IsCurvatureContinuous()); // the FollowsTorsion -> PathRelative joint included
+        const FTrackFrame TE = Turned.EvaluateAt(Turned.TotalLength());
+        assert(std::fabs(TE.Tangent.Z) < 1e-6);                                   // horizontal
+        assert(std::fabs(std::atan2(TE.Tangent.Y, TE.Tangent.X) - 2.53125) < 1e-6); // and turned
+        assert(std::fabs(TE.Position.Z - S1.Position.Z) < 1e-6);                  // at loop height
+        assert(std::fabs(TE.Up.Z - 1.0) < 1e-6);                                   // rider level
+        const FTrackFrame NE = Naive.EvaluateAt(Naive.TotalLength());
+        assert(NE.Position.Z < S1.Position.Z - 5.0); // the drop, kept as the measurement
+    }
+
+    // The legs: from through-the-steel to past the corridor.
+    const FTrackProfile Profile;
+    const FClearanceReport Bad = AnalyseSelfClearance(Planar, Profile);
+    const FClearanceReport Good = AnalyseSelfClearance(Stepped, Profile);
+    assert(Bad.bStructureOverlaps);
+    assert(!Good.bStructureOverlaps);
+    assert(Good.ClosestApproach > CollisionCorridorM);
+    assert(Good.ClosestApproach < SideStep); // crossing at an angle: a little under the step
+
+    // The rider follows the bend: level again at the exit, and the twist the
+    // path frame carries out (2*pi*cos rho) is exactly what FollowsTorsion has
+    // rolled against. PathRelative would leave the rider that far from level;
+    // the wrong SIGN in PathRollAt would leave them twice as far.
+    const double Twist = 2.0 * Pi * CosRho;
+    assert(std::fabs(S1.Up.Z - 1.0) < 1e-6);
+    assert(std::fabs(std::fabs(LevelRollOffset(S1.Tangent, S1.PathLateral)) - Twist) < 1e-6);
+    {
+        FTrack Wrong;
+        for (FTrackSegment Seg : SteppedSegs)
+        {
+            Seg.RollMode = ERollMode::PathRelative;
+            Seg.RollStart = Seg.RollEnd = 0.0;
+            Wrong.AddSegment(Seg);
+        }
+        const FTrackFrame W1 = Wrong.EvaluateAt(LoopEnd);
+        assert(std::fabs(W1.Up.Z - std::cos(Twist)) < 1e-6);
+    }
+    // And a WorldBank tail lands on the same level rider, so the two ways of
+    // saying "level after the loop" agree -- the holonomy bookkeeping is right.
+    const FTrackFrame T1 = WorldTail.EvaluateAt(LoopEnd + 15.0);
+    const FTrackFrame T2 = Stepped.EvaluateAt(LoopEnd + 15.0);
+    assert(Length(T1.Up - T2.Up) < 1e-6 && std::fabs(T1.Up.Z - 1.0) < 1e-6);
+
+    // Gravity's lateral share through the loop is bounded by cos rho, because
+    // the rider's lateral is the binormal and that leans at most cos rho off
+    // horizontal on a generalised helix with a horizontal axis.
+    double WorstLean = 0.0;
+    FTrackFrame Walk = Stepped.EvaluateAt(LoopStart);
+    double Prev = LoopStart;
+    for (double s = LoopStart; s <= LoopEnd; s += 0.25)
+    {
+        Walk = Stepped.AdvanceFrom(Walk, Prev, s); Prev = s;
+        WorstLean = std::max(WorstLean, std::fabs(Walk.Lateral.Z));
+    }
+    assert(WorstLean < CosRho + 1e-6);
+
+    // And it survives the file: ratio and mode both written and read back, the
+    // geometry bit-identical on the other side.
+    {
+        FTrackDocument Doc;
+        for (const FTrackSegment& Seg : SteppedSegs)
+        {
+            FAuthoredSegment A;
+            A.Kind = ESegmentKind::Raw;
+            A.RawSegment = Seg;
+            A.RollStartDegrees = Seg.RollStart * 180.0 / Pi;
+            A.RollEndDegrees = Seg.RollEnd * 180.0 / Pi;
+            A.RollMode = Seg.RollMode;
+            Doc.Segments.push_back(A);
+        }
+        std::string Text, Err;
+        assert(WriteTrackJson(Doc, Text, Err));
+        assert(Text.find("\"torsionRatio\"") != std::string::npos);
+        assert(Text.find("\"followsTorsion\"") != std::string::npos);
+        FTrackDocument Back;
+        assert(ParseTrackJson(Text, Back, Err));
+        assert(Back.Segments[1].RawSegment.TorsionRatio == Cot);
+        assert(Back.Segments[1].RollMode == ERollMode::FollowsTorsion);
+        const FTrack Again = BuildTrack(Back);
+        const FTrackFrame E1 = Again.EvaluateAt(LoopEnd);
+        assert(Length(E1.Position - S1.Position) < 1e-9);
+    }
+
+    std::printf("  side-stepping loop: R%.0f m, %.0f m eased, ratio %.4f (rho %.2f deg): legs %.3f m "
+                "apart (planar %.3f), tangent returns to %.1e, exit twist %.1f deg absorbed, "
+                "worst lateral lean %.3f\n",
+                R, Ease, Cot, std::acos(CosRho) * 180.0 / Pi, Good.ClosestApproach,
+                Bad.ClosestApproach, Length(S1.Tangent - S0.Tangent), Twist * 180.0 / Pi, WorstLean);
+}
+
 int main()
 {
     TestValidationCatchesTheNaNThatGeometryCannot();
@@ -2007,6 +2237,7 @@ int main()
     TestDegenerateSegmentsRejected();
     TestAdvanceFromAgreesWithEvaluateAt();
     TestEvaluateClampsAndSpansSegments();
+    TestTorsionRatioMakesAnEasedLoopAGeneralisedHelix();
     std::printf("All track spline tests passed.\n");
     return 0;
 }

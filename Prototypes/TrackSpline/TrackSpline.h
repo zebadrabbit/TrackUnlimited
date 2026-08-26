@@ -81,6 +81,17 @@ enum class ERollMode
     // vertical the reference swings fast and the bank costs a real, large roll
     // rate — see AnalyseResolvedRollRate. Author inversions as PathRelative.
     WorldBank,
+
+    // Roll relative to the torsion-rotated curvature direction: the rider's up
+    // FOLLOWS THE BEND. Torsion rotates the curvature vector about the tangent;
+    // this mode rotates the rider with it, so roll 0 through a torsioned loop
+    // keeps the rider's up on the loop's own normal — and felt G reads as the
+    // planar loop's, where PathRelative would report the whole twist as lateral
+    // G. Data-only like PathRelative (the phase is analytic, TorsionPhaseAt), so
+    // it is defined everywhere, inversions included; on a segment with no
+    // torsion it IS PathRelative. Across a run of chained segments the roll has
+    // to be handed on exactly as the curvature is — ChainCurvature does both.
+    FollowsTorsion,
 };
 
 // One parametric segment. The curvature VECTOR is what varies over arc length:
@@ -121,6 +132,22 @@ struct FTrackSegment
     // the pre-torsion behaviour.
     double Torsion = 0.0;
 
+    // Dimensionless. Torsion PER UNIT CURVATURE, added to Torsion: the curvature
+    // vector rotates at (Torsion + TorsionRatio * |curvature|).
+    //
+    // A constant ratio is Lancret's theorem: the segment is a GENERALISED helix,
+    // its tangent keeping one angle rho = acot(ratio) to a fixed axis — and it
+    // stays one across a curvature RAMP, which constant Torsion cannot. That is
+    // what side-steps an eased loop without translating it. An eased loop
+    // authored with ratio c projects onto the plane perpendicular to its axis as
+    // the planar loop it was (curvature scaled by sin^2 rho, length by 1/sin
+    // rho) and advances along the axis at cos rho per metre: its tangent returns
+    // EXACTLY, its height is preserved, and its two legs land (arc length x
+    // cos rho) apart. PHASE0_FINDINGS.md records five cheaper ways that were
+    // measured and failed; the "crown" they put torsion on is 2.5 m of a 56.5 m
+    // loop. Zero leaves every existing segment bit-identical.
+    double TorsionRatio = 0.0;
+
     // Radians. +ve banks *into* a +ve (left) turn: the rider's up-vector tilts
     // toward the centre of the turn, the way a motorcycle leans. What these are
     // measured from is RollMode's job.
@@ -129,8 +156,53 @@ struct FTrackSegment
     ERollMode RollMode = ERollMode::PathRelative;
 };
 
+// The angle the curvature vector has rotated about the tangent at local arc
+// length U: Torsion*U, plus TorsionRatio times the curvature MAGNITUDE
+// integrated to U. The vector ramps linearly, so its magnitude is the square
+// root of a quadratic and the integral is closed-form. The asinh term is what a
+// ramp between NON-parallel vectors needs; along one direction (a clothoid, a
+// chained loop segment) the discriminant is zero and the first term alone is
+// the integral of |linear|, zero crossing included.
+inline double TorsionPhaseAt(const FTrackSegment& Seg, double U)
+{
+    const double Phi = Seg.Torsion * U;
+    if (Seg.TorsionRatio == 0.0 || !(Seg.Length > 0.0) || !(U > 0.0))
+    {
+        return Phi;
+    }
+    const double DY = (Seg.YawCurvatureEnd - Seg.YawCurvatureStart) / Seg.Length;
+    const double DP = (Seg.PitchCurvatureEnd - Seg.PitchCurvatureStart) / Seg.Length;
+    // |k(u)|^2 = a u^2 + b u + c
+    const double a = DY * DY + DP * DP;
+    const double b = 2.0 * (Seg.YawCurvatureStart * DY + Seg.PitchCurvatureStart * DP);
+    const double c = Seg.YawCurvatureStart * Seg.YawCurvatureStart
+                   + Seg.PitchCurvatureStart * Seg.PitchCurvatureStart;
+    double Integral = 0.0;
+    if (a < 1e-30)
+    {
+        Integral = std::sqrt(c > 0.0 ? c : 0.0) * U;
+    }
+    else
+    {
+        const double D = 4.0 * a * c - b * b; // >= 0 by Cauchy-Schwarz; 0 along one direction
+        auto F = [&](double u)
+        {
+            const double q = a * u * u + b * u + c;
+            const double r = std::sqrt(q > 0.0 ? q : 0.0);
+            double v = (2.0 * a * u + b) * r / (4.0 * a);
+            if (D > 0.0)
+            {
+                v += D / (8.0 * a * std::sqrt(a)) * std::asinh((2.0 * a * u + b) / std::sqrt(D));
+            }
+            return v;
+        };
+        Integral = F(U) - F(0.0);
+    }
+    return Phi + Seg.TorsionRatio * Integral;
+}
+
 // The curvature vector at local arc length U along a segment: linear ramp
-// first, then rotated about the tangent by Torsion*U.
+// first, then rotated about the tangent by TorsionPhaseAt(U).
 //
 // Rotating about the tangent takes Lateral toward Up (right-hand rule, since
 // Tangent x Lateral = Up), which is why the yaw component leaks into pitch with
@@ -143,17 +215,34 @@ inline void CurvatureAt(const FTrackSegment& Seg, double U, double& OutYaw, doub
     const double Pitch =
         Seg.PitchCurvatureStart + (Seg.PitchCurvatureEnd - Seg.PitchCurvatureStart) * A;
 
-    if (Seg.Torsion == 0.0)
+    if (Seg.Torsion == 0.0 && Seg.TorsionRatio == 0.0)
     {
         OutYaw = Yaw;
         OutPitch = Pitch;
         return;
     }
-    const double Phi = Seg.Torsion * U;
+    const double Phi = TorsionPhaseAt(Seg, U);
     const double C = std::cos(Phi);
     const double S = std::sin(Phi);
     OutYaw = Yaw * C - Pitch * S;
     OutPitch = Yaw * S + Pitch * C;
+}
+
+// The PathRelative roll a segment carries at local arc length U: the authored
+// lerp, and for FollowsTorsion the rotation the curvature vector has undergone,
+// so the rider's up stays on the bend. The sign is the one under which a
+// torsioned loop reads the planar loop's felt G — asserted in the suite rather
+// than reasoned about here. WorldBank needs the walked frame and is resolved in
+// FTrack::Finish; everything data-only about roll is defined here, once.
+inline double PathRollAt(const FTrackSegment& Seg, double U)
+{
+    const double A = Seg.Length > 0.0 ? U / Seg.Length : 0.0;
+    double Roll = Seg.RollStart + (Seg.RollEnd - Seg.RollStart) * A;
+    if (Seg.RollMode == ERollMode::FollowsTorsion)
+    {
+        Roll -= TorsionPhaseAt(Seg, U);
+    }
+    return Roll;
 }
 
 // Hand the curvature vector from one segment to the next, so a RUN of torsioned
@@ -181,6 +270,41 @@ inline void CurvatureAt(const FTrackSegment& Seg, double U, double& OutYaw, doub
 inline void ChainCurvature(const FTrackSegment& A, FTrackSegment& B)
 {
     CurvatureAt(A, A.Length, B.YawCurvatureStart, B.PitchCurvatureStart);
+    // A rider following the bend has to be handed on with it: B's roll phase
+    // starts from zero, so B's authored start must be where A's resolved roll
+    // ended, or the rider snaps back by A's whole twist at the joint. Same
+    // discipline as the curvature, same caveat — a derived number.
+    if (B.RollMode == ERollMode::FollowsTorsion && A.RollMode != ERollMode::WorldBank)
+    {
+        B.RollStart = PathRollAt(A, A.Length);
+    }
+}
+
+// Re-express a segment authored LEVEL — yaw curvature, roll measured from level
+// — in a path frame that arrives twisted by RollOffset about the tangent, which
+// is what a torsioned loop leaves behind (2*pi*cos rho of it). The curvature
+// vector is rotated the opposite way to the frame and the roll carries the
+// offset, so the segment does exactly what was meant: a horizontal turn stays
+// horizontal, a bank reads from the horizon. Without this a turn authored after
+// the loop pitches by sin(twist) of its turning — measured 24 m of drop on the
+// reference layout's 107-degree turn. RollOffset is PathRollAt at the end of
+// the last torsioned segment, i.e. the rider-level roll there; for plain
+// (untorsioned) segments only, since a torsioned one rotates its own vector.
+inline FTrackSegment InTwistedFrame(FTrackSegment Seg, double RollOffset)
+{
+    const double C = std::cos(-RollOffset);
+    const double S = std::sin(-RollOffset);
+    auto Rotate = [&](double& Yaw, double& Pitch)
+    {
+        const double Y = Yaw, P = Pitch;
+        Yaw = Y * C - P * S;
+        Pitch = Y * S + P * C;
+    };
+    Rotate(Seg.YawCurvatureStart, Seg.PitchCurvatureStart);
+    Rotate(Seg.YawCurvatureEnd, Seg.PitchCurvatureEnd);
+    Seg.RollStart += RollOffset;
+    Seg.RollEnd += RollOffset;
+    return Seg;
 }
 
 inline FTrackSegment MakeStraight(double InLength, double Roll = 0.0)
@@ -529,17 +653,23 @@ public:
             }
 
             // Roll values are only comparable when both sides measure from the
-            // same thing. Across a mode change the two numbers are in different
-            // units of meaning, and whether the resolved roll actually steps
-            // depends on the frame at the joint — which this data-only check
-            // does not have. Refusing is the conservative answer: it can cry
-            // wolf on a joint that happens to be level, and the alternative is
-            // reporting a real instantaneous twist as continuous.
-            if (A.RollMode != B.RollMode)
+            // same thing. PathRelative and FollowsTorsion both measure from the
+            // path frame — the second with an analytic offset, PathRollAt — so
+            // a joint between them has a data-only answer. WorldBank does not:
+            // whether the resolved roll steps into or out of it depends on the
+            // frame at the joint, which this check does not have. Refusing is
+            // the conservative answer there: it can cry wolf on a joint that
+            // happens to be level, and the alternative is reporting a real
+            // instantaneous twist as continuous.
+            const bool bAWorld = A.RollMode == ERollMode::WorldBank;
+            const bool bBWorld = B.RollMode == ERollMode::WorldBank;
+            if (bAWorld != bBWorld)
             {
                 return false;
             }
-            if (std::fabs(A.RollEnd - B.RollStart) > Tolerance)
+            const double RollA = bAWorld ? A.RollEnd : PathRollAt(A, A.Length);
+            const double RollB = bBWorld ? B.RollStart : PathRollAt(B, 0.0);
+            if (std::fabs(RollA - RollB) > Tolerance)
             {
                 return false;
             }
@@ -580,8 +710,7 @@ private:
         if (!Segments.empty())
         {
             const FTrackSegment& Seg = Segments[Index];
-            const double A = Seg.Length > 0.0 ? Local / Seg.Length : 0.0;
-            Out.Roll = Lerp(Seg.RollStart, Seg.RollEnd, A);
+            Out.Roll = PathRollAt(Seg, Local);
             if (Seg.RollMode == ERollMode::WorldBank)
             {
                 // Solved here, against the frame we just walked to, rather than

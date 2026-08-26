@@ -663,7 +663,8 @@ inline bool WriteTrackJson(const FTrackDocument& Doc, std::string& Out, std::str
             if (!Check(S.Length, "length", i) || !Check(S.YawCurvatureStart, "yawStart", i)
                 || !Check(S.YawCurvatureEnd, "yawEnd", i)
                 || !Check(S.PitchCurvatureStart, "pitchStart", i)
-                || !Check(S.PitchCurvatureEnd, "pitchEnd", i) || !Check(S.Torsion, "torsion", i))
+                || !Check(S.PitchCurvatureEnd, "pitchEnd", i) || !Check(S.Torsion, "torsion", i)
+                || !Check(S.TorsionRatio, "torsionRatio", i))
             {
                 return false;
             }
@@ -681,6 +682,10 @@ inline bool WriteTrackJson(const FTrackDocument& Doc, std::string& Out, std::str
             if (S.Torsion != 0.0)
             {
                 Add("torsion", S.Torsion);
+            }
+            if (S.TorsionRatio != 0.0)
+            {
+                Add("torsionRatio", S.TorsionRatio);
             }
             break;
         }
@@ -708,6 +713,10 @@ inline bool WriteTrackJson(const FTrackDocument& Doc, std::string& Out, std::str
         if (A.RollMode == ERollMode::WorldBank)
         {
             Row += ", \"rollMode\": \"worldBank\"";
+        }
+        else if (A.RollMode == ERollMode::FollowsTorsion)
+        {
+            Row += ", \"rollMode\": \"followsTorsion\"";
         }
 
         // ---- THE DEVICE.
@@ -932,7 +941,8 @@ inline bool ParseTrackJson(const std::string& Text, FTrackDocument& Out, std::st
                   && ReadNumber(F, "yawEnd", A.RawSegment.YawCurvatureEnd, false, FieldError)
                   && ReadNumber(F, "pitchStart", A.RawSegment.PitchCurvatureStart, false, FieldError)
                   && ReadNumber(F, "pitchEnd", A.RawSegment.PitchCurvatureEnd, false, FieldError)
-                  && ReadNumber(F, "torsion", A.RawSegment.Torsion, false, FieldError);
+                  && ReadNumber(F, "torsion", A.RawSegment.Torsion, false, FieldError)
+                  && ReadNumber(F, "torsionRatio", A.RawSegment.TorsionRatio, false, FieldError);
             break;
         }
 
@@ -953,6 +963,10 @@ inline bool ParseTrackJson(const std::string& Text, FTrackDocument& Out, std::st
             if (*Mode == "worldBank")
             {
                 A.RollMode = ERollMode::WorldBank;
+            }
+            else if (*Mode == "followsTorsion")
+            {
+                A.RollMode = ERollMode::FollowsTorsion;
             }
             else if (*Mode != "pathRelative")
             {

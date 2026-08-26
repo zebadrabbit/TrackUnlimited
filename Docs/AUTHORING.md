@@ -47,7 +47,7 @@ that data.
 | `Arc` | length, radius | `κ = const`. **+ve radius is a left turn, −ve a right turn** |
 | `Clothoid` | length, κ start, κ end | `κ` varies linearly. The transition curve |
 | `Helix` | radius, climb angle, turns | Constant curvature plus constant torsion. Length is derived. **Not composable from authored data — see below** |
-| `Raw` | curvature endpoints, torsion | Everything the vocabulary cannot say yet |
+| `Raw` | curvature endpoints, torsion, torsion ratio | Everything the vocabulary cannot say yet. **Torsion ratio** is torsion as a constant multiple of curvature — a generalised helix (Lancret), which is how an eased loop side-steps its own legs; pair it with the *follows torsion* roll mode |
 
 Every kind additionally carries **roll start**, **roll end** and a **roll mode**.
 
@@ -89,6 +89,13 @@ this; see [`DEFERRED_DECISIONS.md`](DEFERRED_DECISIONS.md).
   inverted and vertical track. This is what the integrator sees, and what `FTrackFrame::Roll`
   reports.
 - **Bank** is measured from the horizon — what a spirit level reads. Undefined pointing straight up.
+- **Follows torsion** (`FollowsTorsion`, 2026-08-26) is roll measured from the torsion-rotated bend:
+  the rider's up stays on the loop's own normal wherever torsion has carried it. Data-only like
+  path-relative, so defined everywhere. It exists for the side-stepping loop, where path-relative
+  would report the loop's whole twist (17.9° on the reference layout) as lateral G. Across a run of
+  chained segments the roll is handed on with the curvature — `ChainCurvature` does both — and what
+  follows the loop is authored in the twisted frame it leaves (`InTwistedFrame`), because the path
+  frame does not untwist on its own.
 
 `Roll = 0` is **not** level on non-planar track. A corner hill authored at roll 0 exits 54.736° off
 level path-relative and 5.7e-14 world-referenced. Say which one you mean.

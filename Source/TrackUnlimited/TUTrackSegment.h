@@ -47,6 +47,10 @@ enum class ETURollMode : uint8
 	// by "bank this turn 30 degrees". Undefined pointing straight up, so do not
 	// use it through an inversion.
 	WorldBank UMETA(DisplayName = "Bank (from horizon)"),
+	// Measured from the torsion-rotated bend: the rider's up follows the loop's
+	// own normal wherever torsion has carried it. Roll 0 through a side-stepping
+	// loop reads the planar loop's felt G. Defined everywhere, like path-relative.
+	FollowsTorsion UMETA(DisplayName = "Roll (follows torsion)"),
 };
 
 // Powered track. One shape covers all of them — they differ only in target
@@ -465,6 +469,18 @@ struct FTUTrackSegment
 		meta = (EditCondition = "Kind == ETUSegmentKind::Raw", EditConditionHides))
 	float Torsion = 0.f;
 
+	/**
+	 * Torsion per unit curvature, on top of Torsion. A constant ratio makes the
+	 * segment a generalised helix (its tangent keeps one angle to a fixed axis)
+	 * even across a curvature ramp — which is what lets an eased loop side-step
+	 * its own legs without translating: side-step = loop length x ratio, near
+	 * enough. Pair it with roll mode "follows torsion" or the twist reads as
+	 * lateral G.
+	 */
+	UPROPERTY(EditAnywhere, Category = "Raw curvature",
+		meta = (EditCondition = "Kind == ETUSegmentKind::Raw", EditConditionHides))
+	float TorsionRatio = 0.f;
+
 	// -------- Powered track.
 
 	UPROPERTY(EditAnywhere, Category = "Zone")
@@ -689,7 +705,8 @@ inline FAuthoredSegment ToAuthored(const FTUTrackSegment& S)
 	A.RollStartDegrees = S.RollStartDegrees;
 	A.RollEndDegrees = S.RollEndDegrees;
 	A.RollMode = S.RollMode == ETURollMode::WorldBank ? ERollMode::WorldBank
-													 : ERollMode::PathRelative;
+			   : S.RollMode == ETURollMode::FollowsTorsion ? ERollMode::FollowsTorsion
+														   : ERollMode::PathRelative;
 
 	// THE CONTROL LAYER. Absent here until 2026-08-08, which meant a saved track
 	// was geometry with no brakes, no station and no lift — and nothing could see
@@ -708,6 +725,7 @@ inline FAuthoredSegment ToAuthored(const FTUTrackSegment& S)
 	A.RawSegment.PitchCurvatureStart = S.PitchCurvatureStart;
 	A.RawSegment.PitchCurvatureEnd = S.PitchCurvatureEnd;
 	A.RawSegment.Torsion = S.Torsion;
+	A.RawSegment.TorsionRatio = S.TorsionRatio;
 	return A;
 }
 
@@ -735,7 +753,8 @@ inline FTUTrackSegment FromAuthored(const FAuthoredSegment& A)
 	S.RollStartDegrees = static_cast<float>(A.RollStartDegrees);
 	S.RollEndDegrees = static_cast<float>(A.RollEndDegrees);
 	S.RollMode = A.RollMode == ERollMode::WorldBank ? ETURollMode::WorldBank
-													: ETURollMode::PathRelative;
+			   : A.RollMode == ERollMode::FollowsTorsion ? ETURollMode::FollowsTorsion
+														 : ETURollMode::PathRelative;
 
 	S.Zone = FromAuthoredZone(A.Zone);
 	S.ZoneSpeed = static_cast<float>(A.ZoneSpeed);
@@ -752,5 +771,6 @@ inline FTUTrackSegment FromAuthored(const FAuthoredSegment& A)
 	// Torsion only means anything on a Raw segment — every other kind derives its
 	// own, and the file stores these three only for Raw for exactly that reason.
 	S.Torsion = static_cast<float>(A.RawSegment.Torsion);
+	S.TorsionRatio = static_cast<float>(A.RawSegment.TorsionRatio);
 	return S;
 }
