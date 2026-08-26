@@ -656,6 +656,26 @@ int main()
 
     int Failures = P.bCompleted ? 0 : 1;
 
+    // ---- EVERY AUTHORED SEGMENT WAS BUILT, and the validator's errors count.
+    // A negative arc -- a turn whose easements ate more than the turn -- is
+    // refused by FTrack::AddSegment and silently dropped by BuildTrack, so the
+    // circuit still closed by symmetry and every later device sat 39 m early
+    // (Sidewinder UX list, item 3). This program never ran the validator; the
+    // editor does, and its BadLength row now says the consequence. Here it is a
+    // failed design, with the sentence.
+    for (const FTrackDiagnostic& Dg : ValidateTrack(BuildSegments(D.Doc)))
+    {
+        if (!Dg.bIsError) { continue; }
+        std::printf("validator: segment %zu: %s\n", Dg.SegmentIndex, Dg.Message.c_str());
+        ++Failures;
+    }
+    if (T.NumSegments() != D.Doc.Segments.size())
+    {
+        std::printf("BUILT %zu of %zu authored segments -- something was dropped\n",
+            T.NumSegments(), D.Doc.Segments.size());
+        ++Failures;
+    }
+
     // ---- THE COLLISION CORRIDOR, measured the short way round. The level
     // helix shipped crossing itself at 0.109 m because nothing measured this;
     // now the design cannot print its figures without passing its own corridor.

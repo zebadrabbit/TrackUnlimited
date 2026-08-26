@@ -222,6 +222,54 @@ void TestTheDEVICESOwnDecelerationIsUsed()
     std::printf("  and the message quotes the rate it used\n  OK\n\n");
 }
 
+void TestAChainThatCannotHaulItsGradeSaysSo()
+{
+    std::printf("A chain pushing under g*sin(grade) is reported; one above it is silent\n");
+
+    FDeviceAuditSettings S;
+    auto Lift = [](double Accel, double GradeDeg)
+    {
+        FDeviceSpan D;
+        D.StartS = 20.0;
+        D.EndS = 120.0;
+        D.CommandedSpeed = 3.0;
+        D.bCanRelease = true;      // a chain pushes
+        D.bCanHold = true;         // and holds (it is a block boundary on most rides)
+        D.bIsBlockBoundary = true;
+        D.Name = "lift";
+        D.AccelMs2 = Accel;
+        D.MaxGradeSin = std::sin(GradeDeg * 3.14159265358979323846 / 180.0);
+        return D;
+    };
+    // The Sidewinder's chain at 25 degrees needs 4.14 m/s^2 before rolling
+    // resistance. At 3 it stalls; at 8 (what shipped) it is silent.
+    const auto Stalls = AuditDevices({Lift(3.0, 25.0)}, S, [](double) { return 3.0; });
+    assert(Has(Stalls, EDeviceProblem::CannotHaulGrade));
+    bool bNamesTheNumbers = false;
+    for (const FDeviceFinding& X : Stalls)
+    {
+        if (X.Problem == EDeviceProblem::CannotHaulGrade)
+        {
+            std::printf("  %s\n", X.What.c_str());
+            bNamesTheNumbers = X.What.find("25.0 degrees") != std::string::npos
+                            && X.What.find("takes 4.1 m/s^2") != std::string::npos
+                            && X.What.find("3.0 m/s^2") != std::string::npos
+                            && X.bIsError;
+        }
+    }
+    assert(bNamesTheNumbers);
+    assert(!Has(AuditDevices({Lift(8.0, 25.0)}, S, [](double) { return 3.0; }), EDeviceProblem::CannotHaulGrade));
+    // A drive on the flat, or a brake on a hill, is never asked.
+    assert(!Has(AuditDevices({Lift(1.0, 0.0)}, S, [](double) { return 3.0; }), EDeviceProblem::CannotHaulGrade));
+    FDeviceSpan Brake = Lift(0.0, 30.0);
+    Brake.bCanRelease = false;
+    Brake.bIsBlockBoundary = false;
+    assert(!Has(AuditDevices({Brake}, S, [](double) { return 3.0; }), EDeviceProblem::CannotHaulGrade));
+    // Exactly g*sin(grade) is still a stall: the floor, before resistance.
+    assert(Has(AuditDevices({Lift(4.1, 25.0)}, S, [](double) { return 3.0; }), EDeviceProblem::CannotHaulGrade));
+    std::printf("  OK\n\n");
+}
+
 int main()
 {
     std::printf("DeviceAudit: what a layout's devices will actually do\n\n");
@@ -233,6 +281,7 @@ int main()
     TestATRIMThatIsNOTABlockBoundaryIsSILENT();
     TestTheAuditReadsTheProfileATTheDeviceStart();
     TestTheDEVICESOwnDecelerationIsUsed();
+    TestAChainThatCannotHaulItsGradeSaysSo();
 
     std::printf("test_deviceaudit: all assertions passed.\n");
     return 0;

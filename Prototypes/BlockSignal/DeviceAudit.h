@@ -66,6 +66,13 @@ enum class EDeviceProblem
     // measured 2026-08-24, valleyed train, rear-end. Found by simulation, not
     // arithmetic — v^2 bookkeeping cannot see a hump two hills downstream.
     CannotFinishFromRest,
+
+    // A drive on a grade it cannot hold: its tractive acceleration is under
+    // g*sin(grade), so a train on it is pulled back harder than the chain can
+    // pull forward, and it stalls -- or rolls back onto the catch. The audit
+    // checked that brakes stop and never that lifts lift (Sidewinder UX list,
+    // item 4: a chain with grip under g*sin(grade) stalled, silently).
+    CannotHaulGrade,
 };
 
 struct FDeviceFinding
@@ -99,6 +106,13 @@ struct FDeviceSpan
     // Zero means "ask the settings", for a caller that has no zone to read.
     double DecelMs2 = 0.0;
 
+    // What it can PUSH with, and the steepest grade it pushes on -- sin of the
+    // pitch angle, positive climbing, the caller's walk of the track through
+    // this span. Zero grade (or zero accel) asks nothing; the check is only
+    // for a tractive device on a climb.
+    double AccelMs2 = 0.0;
+    double MaxGradeSin = 0.0;
+
     double Length() const { return EndS - StartS; }
 };
 
@@ -124,6 +138,7 @@ inline const char* DeviceProblemName(EDeviceProblem P)
     case EDeviceProblem::CannotStopArrival:     return "device cannot stop what arrives";
     case EDeviceProblem::HoldsButCannotRelease: return "block boundary that cannot release";
     case EDeviceProblem::CannotFinishFromRest:  return "a train held here cannot finish";
+    case EDeviceProblem::CannotHaulGrade:       return "drive cannot haul its grade";
     default:                                    return "block boundary that cannot hold";
     }
 }
@@ -197,6 +212,32 @@ inline std::vector<FDeviceFinding> AuditDevices(
                     D.Name.c_str(), D.StartS, Entry, Need, Decel,
                     Usable, Exit, Need - Usable);
                 Out.push_back({D.StartS, EDeviceProblem::CannotStopArrival, true, Buf});
+            }
+        }
+
+        // ---- Can it HAUL the grade it is on?
+        //
+        // A chain pushing at less than g*sin(grade) does not lift a train up
+        // that grade; it holds it back less than gravity pulls, and the train
+        // slows to a stand on the chain -- or rolls back onto the catch if
+        // there is one. Rolling resistance makes it worse, so the figure here
+        // is the FLOOR: a drive at exactly g*sin(grade) still stalls. Only a
+        // tractive device on a climb is asked; a brake on a hill has no push
+        // to be short of, and a launch on the flat has no grade.
+        if (D.bCanRelease && D.AccelMs2 > 0.0 && D.MaxGradeSin > 0.0)
+        {
+            const double Need = 9.80665 * D.MaxGradeSin;
+            if (D.AccelMs2 < Need)
+            {
+                const double GradeDeg = std::asin(D.MaxGradeSin) * 180.0 / 3.14159265358979323846;
+                std::snprintf(Buf, sizeof(Buf),
+                    "%s at %.0f m climbs %.1f degrees at its steepest and can push at "
+                    "%.1f m/s^2, but holding a train on that grade takes %.1f m/s^2 "
+                    "before rolling resistance. It stalls on the chain. Raise its "
+                    "accel above %.1f, or ease the grade below %.1f degrees.",
+                    D.Name.c_str(), D.StartS, GradeDeg, D.AccelMs2, Need, Need,
+                    std::asin(D.AccelMs2 / 9.80665) * 180.0 / 3.14159265358979323846);
+                Out.push_back({D.StartS, EDeviceProblem::CannotHaulGrade, true, Buf});
             }
         }
 

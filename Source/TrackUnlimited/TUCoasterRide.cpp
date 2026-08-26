@@ -415,7 +415,7 @@ void ATUCoasterRide::ApplyPresetWalkways()
 	{
 		const bool bWants = Segments[i].Zone != ETUSegmentZone::None;
 		if (bWants && !bInRun) { RunStart = S; bInRun = true; }
-		S += static_cast<double>(Segments[i].Length);
+		S += SegmentLengthOf(Segments[i]);
 		const bool bEnds = bInRun && (!bWants || i == Segments.Num() - 1);
 		if (bEnds)
 		{
@@ -423,7 +423,7 @@ void ATUCoasterRide::ApplyPresetWalkways()
 			W.StartS = static_cast<float>(RunStart);
 			// A run that ended because the NEXT segment is unpowered stops at the
 			// start of this one; one that ended at the last segment runs to the end.
-			W.EndS = static_cast<float>(bWants ? S : S - static_cast<double>(Segments[i].Length));
+			W.EndS = static_cast<float>(bWants ? S : S - SegmentLengthOf(Segments[i]));
 			// THE SIDE IS A SETTING NOW, and it was hardcoded to Both. See the
 			// property's own comment for why one side is the better default: the
 			// old version put a deck and a handrail down both flanks of every
@@ -1610,6 +1610,15 @@ void ATUCoasterRide::RebuildFromSegments()
 		RebuildTrackMesh();
 		RebuildTrainMesh();
 		if (Cars) { Cars->ClearInstances(); }
+		// AND THE PANEL STILL SAYS WHY. Returning here skipped BuildDiagnostics,
+		// so a document whose only segment could not be built -- a lone
+		// negative arc -- showed an empty track and an empty panel, when the
+		// validator had the sentence all along. Nothing from the previous track
+		// may leak into it: the profile, the audit and the corridor are reset.
+		Profile_ = FRideProfile();
+		LastDeviceFindings.clear();
+		LastClearance = FClearanceReport();
+		BuildDiagnostics();
 		return;
 	}
 
@@ -2487,6 +2496,23 @@ void ATUCoasterRide::RebuildFromSegments()
 	// reassuring somebody about a layout the signalling was refusing to run.
 	{
 		LastDeviceFindings.clear();
+		// THE GRADE UNDER EACH DEVICE, from one coarse walk of the track: the
+		// tangent's rise is sin(pitch), and a chain has to beat g times the
+		// steepest of it. One walk for every device -- EvaluateAt per device is
+		// the O(n^2) trap this project keeps unlearning.
+		std::vector<double> GradeS, GradeSin;
+		if (Track.TotalLength() > 0.0)
+		{
+			FTrackFrame W = Track.EvaluateAt(0.0);
+			double Prev = 0.0;
+			for (double s = 0.0; s <= Track.TotalLength(); s += 2.0)
+			{
+				W = Track.AdvanceFrom(W, Prev, s);
+				Prev = s;
+				GradeS.push_back(s);
+				GradeSin.push_back(W.Tangent.Z);
+			}
+		}
 		std::vector<FDeviceSpan> Devices;
 		Devices.reserve(static_cast<std::size_t>(Zones.Num()));
 		for (const FTrackZone& Z : Zones)
@@ -2497,6 +2523,14 @@ void ATUCoasterRide::RebuildFromSegments()
 			D.CommandedSpeed = Z.TargetSpeed;
 			D.bCanHold = Z.MaxDecel > 0.0;
 			D.bCanRelease = Z.MaxAccel > 0.0;
+			D.AccelMs2 = Z.MaxAccel;
+			for (std::size_t g = 0; g < GradeS.size(); ++g)
+			{
+				if (GradeS[g] >= Z.StartS && GradeS[g] <= Z.EndS)
+				{
+					D.MaxGradeSin = FMath::Max(D.MaxGradeSin, GradeSin[g]);
+				}
+			}
 			// THE ZONE'S OWN RATE. The audit had a global service deceleration and
 			// it did not match the Grip these are built with, so it was predicting
 			// stopping distances the physics would never produce.
@@ -3496,6 +3530,80 @@ void ATUCoasterRide::EditorAction(int32 Action, bool bShift)
 const TCHAR* ATUCoasterRide::KindNameOf(ETUSegmentKind K) { return SegmentKindName(K); }
 const TCHAR* ATUCoasterRide::ZoneNameOf(ETUSegmentZone Z) { return ZoneKindName(Z); }
 const TCHAR* ATUCoasterRide::PitchEaseNameOf(ETUPitchEase E) { return PitchEaseName(E); }
+
+double ATUCoasterRide::SegmentLengthOf(const FTUTrackSegment& S)
+{
+	// Through the same BuildSegment the track is built with, so the answer is
+	// the built length by construction. A row the build refuses (a negative
+	// arc) is 0 here, which is exactly what the built track has for it.
+	const double L = BuildSegment(ToAuthored(S)).Length;
+	return L > 0.0 ? L : 0.0;
+}
+
+FString ATUCoasterRide::SelectionSummary() const
+{
+	// WHAT THE SELECTION ACTUALLY DOES, derived from the built track rather
+	// than read off the fields. A helix row's Turns is the helix's own, and its
+	// two easements turn as well: on the Sidewinder a "1.0 turn" helix with its
+	// easements turned 417 degrees and nothing on screen said so (Sidewinder UX
+	// list, item 2). Select the three rows and this is their total. One walk
+	// over the selection's span, never EvaluateAt per segment.
+	TArray<int32> Sorted;
+	for (int32 i : Selection) { if (Segments.IsValidIndex(i)) { Sorted.AddUnique(i); } }
+	if (Sorted.Num() == 0 && Segments.IsValidIndex(SelectedSegment)) { Sorted.Add(SelectedSegment); }
+	if (Sorted.Num() == 0 || Track.NumSegments() == 0) { return FString(); }
+	Sorted.Sort();
+
+	const double TwoPi = 2.0 * 3.14159265358979323846;
+	auto Heading = [](const FTrackFrame& F) { return FMath::Atan2(F.Tangent.Y, F.Tangent.X); };
+	auto PitchOf = [](const FTrackFrame& F) { return FMath::Asin(FMath::Clamp(F.Tangent.Z, -1.0, 1.0)); };
+	auto Unwrap = [TwoPi](double D)
+	{
+		while (D > 0.5 * TwoPi) { D -= TwoPi; }
+		while (D < -0.5 * TwoPi) { D += TwoPi; }
+		return D;
+	};
+
+	// Where each row starts, from the BUILT lengths (SegmentLengthOf), which is
+	// what the track was built from -- the stored Length field is not, for a
+	// helix or a pitch row.
+	TArray<double> StartAt;
+	StartAt.Reserve(Segments.Num() + 1);
+	double Acc = 0.0;
+	for (const FTUTrackSegment& S : Segments) { StartAt.Add(Acc); Acc += SegmentLengthOf(S); }
+	StartAt.Add(Acc);
+
+	double Len = 0.0, Turn = 0.0, Pitch = 0.0;
+	double Prev = StartAt[Sorted[0]];
+	FTrackFrame W = Track.EvaluateAt(Prev);
+	for (int32 i : Sorted)
+	{
+		const double S0 = StartAt[i], S1 = StartAt[i + 1];
+		if (S1 <= S0 || S0 < Prev) { continue; }
+		W = Track.AdvanceFrom(W, Prev, S0); Prev = S0;
+		double H = Heading(W);
+		const double P0 = PitchOf(W);
+		// Heading is UNWRAPPED through the segment, sampled every few metres,
+		// so a full turn reads 360 and not 0 -- which is the whole point.
+		for (double s = S0 + 4.0; s < S1; s += 4.0)
+		{
+			W = Track.AdvanceFrom(W, Prev, s); Prev = s;
+			Turn += Unwrap(Heading(W) - H); H = Heading(W);
+		}
+		W = Track.AdvanceFrom(W, Prev, S1); Prev = S1;
+		Turn += Unwrap(Heading(W) - H);
+		Pitch += PitchOf(W) - P0;
+		Len += S1 - S0;
+	}
+	const double TurnDeg = FMath::RadiansToDegrees(Turn);
+	const double PitchDeg = FMath::RadiansToDegrees(Pitch);
+	const FString Who = Sorted.Num() == 1
+		? FString::Printf(TEXT("segment %d"), Sorted[0])
+		: FString::Printf(TEXT("%d segments"), Sorted.Num());
+	return FString::Printf(TEXT("%s: %.1f m, turns %.1f deg %s, %s %.1f deg"),
+		*Who, Len, FMath::Abs(TurnDeg), TurnDeg >= 0.0 ? TEXT("left") : TEXT("right"),
+		PitchDeg >= 0.0 ? TEXT("climbs") : TEXT("drops"), FMath::Abs(PitchDeg));
+}
 
 void ATUCoasterRide::KeyBackspace()
 {
@@ -4600,7 +4708,7 @@ double ATUCoasterRide::ConsoleStandS() const
 	double End = 0.0;
 	for (int32 i = 0; i < Segments.Num(); ++i)
 	{
-		const double L = static_cast<double>(Segments[i].Length);
+		const double L = SegmentLengthOf(Segments[i]);
 		if (Segments[i].Zone == ETUSegmentZone::Station
 			|| Segments[i].Zone == ETUSegmentZone::StationLoad
 			|| Segments[i].Zone == ETUSegmentZone::StationUnload)
@@ -4629,7 +4737,7 @@ void ATUCoasterRide::FrameStation()
 	bool bFound = false;
 	for (int32 i = 0; i < Segments.Num(); ++i)
 	{
-		const double L = static_cast<double>(Segments[i].Length);
+		const double L = SegmentLengthOf(Segments[i]);
 		if (!bFound && (Segments[i].Zone == ETUSegmentZone::Station
 			|| Segments[i].Zone == ETUSegmentZone::StationLoad
 			|| Segments[i].Zone == ETUSegmentZone::StationUnload))
@@ -5028,9 +5136,9 @@ void ATUCoasterRide::FrameSelectedSegment()
 	double Start = 0.0;
 	for (int32 i = 0; i < SelectedSegment; ++i)
 	{
-		Start += static_cast<double>(Segments[i].Length);
+		Start += SegmentLengthOf(Segments[i]);
 	}
-	const double End = Start + static_cast<double>(Segments[SelectedSegment].Length);
+	const double End = Start + SegmentLengthOf(Segments[SelectedSegment]);
 
 	// Sampled directly across the span rather than walked: a handful of EvaluateAt
 	// calls on a BOUNDED range, where walking the whole track to find one segment
@@ -6347,13 +6455,21 @@ bool ATUCoasterRide::RunDocumentSmokeTest()
 			FMath::IsNearlyEqual(ReadField(S0, EEditField::RollStart), 5.0, 1e-4)
 			&& FMath::IsNearlyEqual(ReadField(S0, EEditField::Roll), 25.0, 1e-4);
 
+		// AND THE PANEL SAYS WHAT IT DOES: the summary line reads the built
+		// track, so a row's turn is what the ride turns, not what a field says.
+		SelectedSegment = 0;
+		Selection = {0};
+		const FString Summary = SelectionSummary();
+		const bool bSummary = Summary.Contains(TEXT("turns 91.7 deg left"))
+			&& Summary.Contains(TEXT("40.0 m"));
+
 		if (!bNeverRaw || !bRawEscapes || S0.Kind != ETUSegmentKind::Arc
-			|| TurnedDeg < 45.0 || !bRollPair)
+			|| TurnedDeg < 45.0 || !bRollPair || !bSummary)
 		{
 			UE_LOG(LogTUEvents, Error,
 				TEXT("smoke: the shipping editor cannot author (never-raw %d, raw-escapes %d, ")
-				TEXT("arc %d, turned %.1f deg, roll pair %d)"),
-				bNeverRaw, bRawEscapes, S0.Kind == ETUSegmentKind::Arc, TurnedDeg, bRollPair);
+				TEXT("arc %d, turned %.1f deg, roll pair %d, summary \"%s\")"),
+				bNeverRaw, bRawEscapes, S0.Kind == ETUSegmentKind::Arc, TurnedDeg, bRollPair, *Summary);
 			Failures.Add(TEXT("authoring"));
 		}
 		else
@@ -6403,6 +6519,40 @@ bool ATUCoasterRide::RunDocumentSmokeTest()
 				TEXT("climbing %.2f deg and %.2f m up at the end"),
 				Track.TotalLength(), ClimbDeg, Rise);
 		}
+
+		// AND A SEGMENT THAT CANNOT BE BUILT SAYS SO, WITH THE CONSEQUENCE. A
+		// negative arc -- a turn whose easements ate more than the turn -- is
+		// refused by the build and was silently dropped, which put every later
+		// device on the Sidewinder 39 m early. The red row now says NOT BUILT
+		// and how far everything after it slid.
+		S0.Kind = ETUSegmentKind::Arc;
+		WriteField(S0, EEditField::Length, -9.7);
+		WriteField(S0, EEditField::Radius, 35.0);
+		RebuildFromSegments();
+		bool bSaysNotBuilt = false;
+		for (std::size_t i = 0; i < Diagnostics.Num(); ++i)
+		{
+			const FDiagRow& R = Diagnostics.At(i);
+			if (R.Severity == EDiagSeverity::Error && R.Text.find("NOT BUILT") != std::string::npos
+				&& R.Text.find("9.7 m earlier") != std::string::npos)
+			{
+				bSaysNotBuilt = true;
+			}
+		}
+		if (!bSaysNotBuilt || Track.NumSegments() != 0)
+		{
+			UE_LOG(LogTUEvents, Error,
+				TEXT("smoke: a negative arc is not reported as NOT BUILT (row %d, %d segment(s) built of 1)"),
+				bSaysNotBuilt, static_cast<int32>(Track.NumSegments()));
+			Failures.Add(TEXT("negative-arc"));
+		}
+		else
+		{
+			UE_LOG(LogTUEvents, Log,
+				TEXT("smoke: a -9.7 m arc gets a red row saying NOT BUILT and that everything after it sits 9.7 m early"));
+		}
+		WriteField(S0, EEditField::Length, 40.0);
+		RebuildFromSegments();
 	}
 
 	// ===================== THE SHOWCASE ACTUALLY RUNS =====================
@@ -6611,6 +6761,55 @@ bool ATUCoasterRide::RunDocumentSmokeTest()
 				Segments.Num(), Track.TotalLength(), Profile_.TopSpeed * 3.6, Profile_.Duration,
 				Profile_.MinVerticalG, Profile_.MaxVerticalG, Profile_.MaxAbsLateralG,
 				StationAboveGround, Trains.Num(), CarCount, Holding);
+		}
+
+		// ---- AND THE HELIX SAYS WHAT IT TURNS, WITH ITS EASEMENTS ----
+		//
+		// The row says 0.79 turns. Its two easements turn as well, and until
+		// the summary line existed nothing on screen added them up -- the UX
+		// list's "1.0 = 417 degrees". Select the helix alone, then with its
+		// neighbours: the three must turn more than the one, by the easements.
+		{
+			int32 HelixAt = INDEX_NONE;
+			for (int32 i = 0; i < Segments.Num(); ++i)
+			{
+				if (Segments[i].Kind == ETUSegmentKind::Helix) { HelixAt = i; break; }
+			}
+			double Alone = 0.0, WithEases = 0.0;
+			auto TurnOf = [](const FString& S)
+			{
+				FString L, R; double V = 0.0;
+				if (S.Split(TEXT("turns "), &L, &R)) { V = FCString::Atod(*R); }
+				return V;
+			};
+			// The helix is bracketed by its pitch-turning PAIRS (two rows each
+			// side, ~8.5 degrees of yaw apiece); the yaw easements -- 20 m
+			// clothoids into R 20, 28.6 degrees each -- are the rows three out.
+			// Seven rows: easement, pitch pair, helix, pitch pair, easement.
+			if (HelixAt > 2 && HelixAt + 3 < Segments.Num())
+			{
+				SelectedSegment = HelixAt;
+				Selection = {HelixAt};
+				Alone = TurnOf(SelectionSummary());
+				Selection = {HelixAt - 3, HelixAt - 2, HelixAt - 1, HelixAt,
+							 HelixAt + 1, HelixAt + 2, HelixAt + 3};
+				WithEases = TurnOf(SelectionSummary());
+				Selection = {};
+			}
+			const double HelixTurnDeg = HelixAt >= 0 ? Segments[HelixAt].Turns * 360.0 : 0.0;
+			if (HelixAt <= 2 || FMath::Abs(Alone - HelixTurnDeg) > 1.0 || WithEases < Alone + 40.0)
+			{
+				UE_LOG(LogTUEvents, Error,
+					TEXT("smoke: the summary line does not add up the helix (helix at %d, row %.1f deg, alone %.1f, with easements %.1f)"),
+					HelixAt, HelixTurnDeg, Alone, WithEases);
+				Failures.Add(TEXT("helix-summary"));
+			}
+			else
+			{
+				UE_LOG(LogTUEvents, Log,
+					TEXT("smoke: the helix row turns %.1f deg alone and %.1f deg with its easements, and the panel says so"),
+					Alone, WithEases);
+			}
 		}
 
 		// ---- AND IT RUNS FOR HALF A MINUTE WITHOUT TRIPPING ----

@@ -157,21 +157,26 @@ void UTUSegmentEditorWidget::Rebuild()
 	const int32 Window = 8;
 	const int32 First = FMath::Max(0, FMath::Min(R->SelectedSegment - Window / 2, Segments.Num() - Window));
 	const int32 Last = FMath::Min(Segments.Num(), First + Window);
+	// THE BUILT LENGTH AND POSITION, not the stored Length field: a helix or a
+	// pitch row derives its length from its other fields, and the stored
+	// number is whatever default it was born with. SegmentLengthOf is what the
+	// track was built from.
 	double SAt = 0.0;
-	for (int32 i = 0; i < First; ++i) { SAt += Segments[i].Length; }
+	for (int32 i = 0; i < First; ++i) { SAt += ATUCoasterRide::SegmentLengthOf(Segments[i]); }
 	for (int32 i = First; i < Last; ++i)
 	{
 		const bool bSel = i == R->SelectedSegment;
 		const bool bDevice = Segments[i].Zone != ETUSegmentZone::None;
+		const double L = ATUCoasterRide::SegmentLengthOf(Segments[i]);
 		UButton* B = AddRow(-1000 - i, bSel);
 		Cols(B, {
 			{28.f, FString::Printf(TEXT("%d"), i)},
 			{72.f, FString(ATUCoasterRide::KindNameOf(Segments[i].Kind))},
-			{64.f, FString::Printf(TEXT("%.1f m"), Segments[i].Length)},
+			{64.f, FString::Printf(TEXT("%.1f m"), L)},
 			{56.f, FString::Printf(TEXT("@%.0f"), SAt)},
 			{0.f, bDevice ? FString(ATUCoasterRide::ZoneNameOf(Segments[i].Zone)) : FString()}},
 			bSel ? Cyan : (bDevice ? Amber : Text));
-		SAt += Segments[i].Length;
+		SAt += L;
 	}
 	if (Segments.Num() > Window)
 	{
@@ -180,6 +185,11 @@ void UTUSegmentEditorWidget::Rebuild()
 
 	if (!Segments.IsValidIndex(R->SelectedSegment)) { return; }
 	const FTUTrackSegment& Seg = Segments[R->SelectedSegment];
+
+	// WHAT THE SELECTION ACTUALLY DOES, off the built track. A helix row says
+	// "1.0 turns" and its two easements each turn as well; select all three
+	// and this line says the 417 degrees the ride really turns.
+	AddLine(R->SelectionSummary(), Dim);
 
 	// The fields, per kind -- EditConditionHides from the tested model.
 	const EEditKind Kind = ATUCoasterRide::KindOf(Seg.Kind);

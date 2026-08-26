@@ -151,8 +151,17 @@ inline void ValidateSegment(const FTrackSegment& Seg, std::size_t Index,
 
     if (!(Seg.Length > 0.0))
     {
-        std::snprintf(Buf, sizeof(Buf), "Length is %.6g; it must be greater than zero.",
-                      Seg.Length);
+        // THE CONSEQUENCE, not just the rule: a segment with no length is NOT
+        // BUILT (FTrack::AddSegment refuses it), so everything after it sits
+        // that much earlier than authored. On the Sidewinder four turns whose
+        // easements ate more than the turn each lost 9.7 m of arc this way,
+        // the circuit still closed by symmetry, and every later device sat
+        // 39 m early -- with nothing saying so.
+        std::snprintf(Buf, sizeof(Buf),
+                      "Length is %.6g m; it must be greater than zero. NOT BUILT: everything "
+                      "after it sits %.4g m earlier than authored. Easements longer than "
+                      "their turn is the usual cause.",
+                      Seg.Length, -Seg.Length);
         Out.push_back(Make(ETrackIssue::BadLength, true, Index, Buf));
         return;
     }

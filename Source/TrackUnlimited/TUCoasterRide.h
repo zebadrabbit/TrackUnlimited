@@ -2134,6 +2134,15 @@ public:
 	static const TCHAR* KindNameOf(ETUSegmentKind K);
 	static const TCHAR* ZoneNameOf(ETUSegmentZone Z);
 	static const TCHAR* PitchEaseNameOf(ETUPitchEase E);
+	/** What the selection ACTUALLY does, off the built track: length, heading turned, pitch changed. */
+	FString SelectionSummary() const;
+	/**
+	 * THE LENGTH A ROW BUILDS TO, not its stored Length field. A helix or a
+	 * pitch row derives its length from its other fields and the stored number
+	 * is whatever default it was born with -- and five places summed that
+	 * default to find where a segment was. Zero for a row that will not build.
+	 */
+	static double SegmentLengthOf(const FTUTrackSegment& S);
 	/** Bumped by every RebuildFromSegments, so a panel can tell the segments changed without diffing them. */
 	int32 SegmentsRevision = 0;
 	/**
