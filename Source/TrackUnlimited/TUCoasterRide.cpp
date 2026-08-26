@@ -3232,12 +3232,16 @@ void ATUCoasterRide::WriteKeyBindings() const
 bool ATUCoasterRide::RebindKey(const FString& Action, const FString& KeyName, bool bPersist)
 {
 	// F1-F12 ARE THE EDITOR'S and their bindings are live in PIE -- the lesson
-	// that moved Settings off F1. Refused here, so the one key that would make
-	// the world change rendering at the same moment the UI did cannot be chosen.
+	// that moved Settings off F1. They were REFUSED here until 2026-08-26, when
+	// the developer decided function keys are fine because the shipping path is
+	// standalone, where the editor is not listening. Allowed now, with the one
+	// caveat said out loud: in PIE the editor's viewport view modes still fire
+	// on the same press, so the world changes rendering as the UI does.
 	if (KeyName.Len() >= 2 && KeyName[0] == TEXT('F') && FChar::IsDigit(KeyName[1]))
 	{
-		UE_LOG(LogTUEvents, Warning, TEXT("controls: [%s] belongs to the editor; not bound"), *KeyName);
-		return false;
+		UE_LOG(LogTUEvents, Warning,
+			TEXT("controls: [%s] is bound; in PIE the editor answers to it as well (fine in standalone)"),
+			*KeyName);
 	}
 	const TArray<int32>* Idx = ActionBindingIndex.Find(Action);
 	if (!Idx || !InputComponent)
@@ -7117,19 +7121,21 @@ bool ATUCoasterRide::RunDocumentSmokeTest()
 			if ((C.ActionA == "key.seat" && C.ActionB == "key.train")
 				|| (C.ActionA == "key.train" && C.ActionB == "key.seat")) { ++Reported; }
 		}
-		const bool bRefusedF = !RebindKey(TEXT("key.seat"), TEXT("F5")) && LiveKeyFor(TEXT("key.seat")) == TEXT("T");
+		// Function keys are ALLOWED since 2026-08-26 (standalone is the shipping
+		// path; in PIE the editor answers too, and the log says so).
+		const bool bAcceptsF = RebindKey(TEXT("key.seat"), TEXT("F5")) && LiveKeyFor(TEXT("key.seat")) == TEXT("F5");
 		const bool bRestored = RebindKey(TEXT("key.seat"), TEXT("N")) && LiveKeyFor(TEXT("key.seat")) == TEXT("N")
 			&& Bindings.Conflicts().empty();
-		if (!(bMoved && bWritten && Reported == 1 && bRefusedF && bRestored))
+		if (!(bMoved && bWritten && Reported == 1 && bAcceptsF && bRestored))
 		{
 			UE_LOG(LogTUEvents, Error,
-				TEXT("smoke: rebinding is wrong (moved %d, written %d, conflicts %d, refused F %d, restored %d)"),
-				bMoved, bWritten, Reported, bRefusedF, bRestored);
+				TEXT("smoke: rebinding is wrong (moved %d, written %d, conflicts %d, accepts F %d, restored %d)"),
+				bMoved, bWritten, Reported, bAcceptsF, bRestored);
 			Failures.Add(TEXT("rebind"));
 		}
 		else
 		{
-			UE_LOG(LogTUEvents, Log, TEXT("smoke: [N] rebinds live, persists, reports a clash with [T], refuses F5, restores"));
+			UE_LOG(LogTUEvents, Log, TEXT("smoke: [N] rebinds live, persists, reports a clash with [T], accepts F5, restores"));
 		}
 		if (bHadKeys) { FFileHelper::SaveStringToFile(SavedKeys, *KeyBindingsPath()); }
 		else { Files.Delete(*KeyBindingsPath(), false, true, true); }
