@@ -6860,6 +6860,52 @@ bool ATUCoasterRide::RunDocumentSmokeTest()
 			}
 		}
 
+		// ---- AND TWO RULES ARE ON SCREEN, NOT IN COMMENTS ----
+		//
+		// The station's height above the ground is stated (the supports take
+		// the lowest point as the ground); a helix entered off its climb angle
+		// is reported with both angles. The Sidewinder enters its helix at its
+		// climb, so the row is absent until the climb is knocked 10 degrees.
+		{
+			auto HasRow = [this](const char* Group, const char* Needle)
+			{
+				for (std::size_t i = 0; i < Diagnostics.Num(); ++i)
+				{
+					const FDiagRow& R = Diagnostics.At(i);
+					if (R.Group == Group && R.Text.find(Needle) != std::string::npos) { return true; }
+				}
+				return false;
+			};
+			const bool bGroundRow = HasRow("Structure", "below the station");
+			const bool bQuietHelix = !HasRow("Geometry", "does not come out where a helix would");
+			int32 HelixAt = INDEX_NONE;
+			for (int32 i = 0; i < Segments.Num(); ++i)
+			{
+				if (Segments[i].Kind == ETUSegmentKind::Helix) { HelixAt = i; break; }
+			}
+			bool bTiltedHelixRow = false;
+			if (HelixAt != INDEX_NONE)
+			{
+				Segments[HelixAt].ClimbAngleDegrees += 10.f;
+				RebuildFromSegments();
+				bTiltedHelixRow = HasRow("Geometry", "axis tilts 10.0 deg");
+				Segments[HelixAt].ClimbAngleDegrees -= 10.f;
+				RebuildFromSegments();
+			}
+			if (!bGroundRow || !bQuietHelix || !bTiltedHelixRow)
+			{
+				UE_LOG(LogTUEvents, Error,
+					TEXT("smoke: the two comment-rules are not on screen (ground row %d, helix quiet when right %d, helix row when tilted %d)"),
+					bGroundRow, bQuietHelix, bTiltedHelixRow);
+				Failures.Add(TEXT("comment-rules"));
+			}
+			else
+			{
+				UE_LOG(LogTUEvents, Log,
+					TEXT("smoke: the station's height above the ground is a row, and a helix entered 10 deg off its climb gets one"));
+			}
+		}
+
 		// ---- AND IT RUNS FOR HALF A MINUTE WITHOUT TRIPPING ----
 		//
 		// The rebuild checks are all taken at scan zero, and the first
@@ -7552,6 +7598,62 @@ void ATUCoasterRide::BuildDiagnostics()
 				TCHAR_TO_UTF8(*FString::Printf(TEXT("%d supports, longest unsupported run %.1f m"),
 					static_cast<int32>(Plan.Leg.size()), Plan.LongestGapM)));
 		}
+	}
+
+	// ===================== TWO RULES THAT LIVED IN COMMENTS =====================
+	//
+	// Sidewinder UX list, items 10 and 12: things the developer learned from a
+	// header comment and from the supports, which is to say from nowhere on
+	// screen.
+
+	// A HELIX MUST BE ENTERED AT ITS CLIMB ANGLE. MakeHelix produces constant
+	// curvature and torsion, which is a helix about WHATEVER axis the incoming
+	// frame implies; enter it level and ask it to climb 15 degrees and the axis
+	// tilts 15 degrees instead, so it does not come out where a helix would
+	// (the Sidewinder's exit clothoid turned 13 degrees of pitch this way).
+	// The row says the two angles and the fix.
+	if (Track.NumSegments() == Segments.Num())
+	{
+		double At = 0.0;
+		for (int32 i = 0; i < Segments.Num(); ++i)
+		{
+			const FTUTrackSegment& S = Segments[i];
+			if (S.Kind == ETUSegmentKind::Helix)
+			{
+				const FTrackFrame F = Track.EvaluateAt(At);
+				const double PitchDeg = FMath::RadiansToDegrees(
+					FMath::Asin(FMath::Clamp(F.Tangent.Z, -1.0, 1.0)));
+				const double Off = PitchDeg - S.ClimbAngleDegrees;
+				if (FMath::Abs(Off) > 1.0)
+				{
+					FDiagTarget T;
+					T.Segment = i;
+					Diagnostics.Add(EDiagSeverity::Warning, "Geometry",
+						TCHAR_TO_UTF8(*FString::Printf(
+							TEXT("the helix at segment %d is entered pitched %.1f deg but climbs at %.1f deg, so its ")
+							TEXT("axis tilts %.1f deg and it does not come out where a helix would. Pitch the approach ")
+							TEXT("to %.1f deg first (a Pitch curve), or set the climb to %.1f."),
+							i, PitchDeg, S.ClimbAngleDegrees, FMath::Abs(Off),
+							S.ClimbAngleDegrees, PitchDeg)), T);
+				}
+			}
+			At += SegmentLengthOf(S);
+		}
+	}
+
+	// WHERE THE GROUND IS. The supports take the track's lowest point as the
+	// ground, so how high the station stands is DERIVED from the layout -- the
+	// developer learned that from the legs appearing, not from anything that
+	// said so. Informational: it is the rule, stated.
+	if (!Profile_.Samples.empty())
+	{
+		const double Up = -Profile_.LowestHeight;
+		Diagnostics.Add(EDiagSeverity::Info, "Structure",
+			Up > 0.05
+				? TCHAR_TO_UTF8(*FString::Printf(
+					TEXT("the ground is the track's lowest point, %.1f m below the station: the platform ")
+					TEXT("stands that high on supports"), Up))
+				: std::string("the station is the lowest point of the track: it sits on the ground"));
 	}
 
 	Diagnostics.Sort();
