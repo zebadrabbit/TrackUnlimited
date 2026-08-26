@@ -271,6 +271,7 @@ inline std::vector<FSettingEntry> SettingsSchema()
             {"key.redo",        "Redo",                 "L"},
             {"key.insert",      "Insert a segment",     "I"},
             {"key.remove",      "Remove the segment",   "R"},
+            {"key.bankturn",    "Bank the selected turn (arc -> clothoid, arc, clothoid)", "Y"},
             {"key.dispatch",    "Dispatch",             "SpaceBar"},
             {"key.estop",       "Emergency stop",       "BackSpace"},
             {"key.reset",       "Reset E-stop",         "End"},

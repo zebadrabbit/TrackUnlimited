@@ -1858,6 +1858,8 @@ private:
 	 * which is defensible only because undo landed first.
 	 */
 	void InsertSegment();
+	/** [Y]: make the selected arc a banked turn -- clothoids either side, three roll pairs from the speed the profile measures there. */
+	void BankSelectedTurn();
 	void RemoveSegment();
 
 	/**

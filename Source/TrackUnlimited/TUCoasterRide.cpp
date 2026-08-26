@@ -3068,6 +3068,10 @@ void ATUCoasterRide::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 		&ATUCoasterRide::InsertSegment);
 	PlayerInputComponent->BindKey(EKeys::R, IE_Pressed, this,
 		&ATUCoasterRide::RemoveSegment);
+	// [Y] BANK THE SELECTED TURN: the one macro. Same guard as [I] and [R],
+	// because it changes the list too.
+	PlayerInputComponent->BindKey(EKeys::Y, IE_Pressed, this,
+		&ATUCoasterRide::BankSelectedTurn);
 
 	// THE SEGMENT EDITOR. Numeric entry only — constraint 1 holds absolutely, and
 	// a digit key IS typed entry rather than a stepper wearing its name.
@@ -3802,6 +3806,80 @@ void ATUCoasterRide::RemoveSegment()
 	SelectedSegment = FMath::Clamp(At, -1, Segments.Num() - 1);
 	RebuildFromSegments();
 	PushHistory(FString::Printf(TEXT("remove segment %d"), At));
+}
+
+void ATUCoasterRide::BankSelectedTurn()
+{
+	// ===================== THE ONE MACRO: BANK THIS TURN =====================
+	//
+	// Banking a turn was one number typed three times, into three different
+	// pairs -- in: 0 -> B, hold: B -> B, out: B -> 0 -- which multi-select
+	// cannot do because the pairs differ (Sidewinder UX list, item 8). This
+	// takes the selected ARC and makes it a banked turn: a clothoid easing in
+	// from straight, the arc holding, a clothoid easing out, with the bank the
+	// profile's own speed there needs to cancel lateral G. Nothing is dragged
+	// and nothing placed -- it is three rows typed for you, and [J] undoes it
+	// as one edit. It does not run on a segment that is not an arc: there is
+	// no turn to bank.
+	if (!Session.EditsAllowed() || IsTypingInField()
+		|| !Segments.IsValidIndex(SelectedSegment)
+		|| Segments[SelectedSegment].Kind != ETUSegmentKind::Arc
+		|| !(FMath::Abs(Segments[SelectedSegment].Radius) > 0.f))
+	{
+		return;
+	}
+	const int32 At = SelectedSegment;
+	const FTUTrackSegment Arc = Segments[At];
+	const double R = Arc.Radius;
+
+	// THE SPEED THE PROFILE MEASURED AT THIS ARC, or 15 m/s on a ride that
+	// has not run -- a bank has to be for SOME speed, and the ride's own is
+	// the honest one. Read at the arc's middle.
+	double StartS = 0.0;
+	for (int32 i = 0; i < At; ++i) { StartS += SegmentLengthOf(Segments[i]); }
+	const double MidS = StartS + 0.5 * SegmentLengthOf(Arc);
+	double Speed = 15.0;
+	if (Profile_.bCompleted)
+	{
+		for (const FRideSample& Sm : Profile_.Samples)
+		{
+			Speed = Sm.Speed;
+			if (Sm.S >= MidS) { break; }
+		}
+	}
+	// +ve roll banks INTO a +ve (left) turn, so the bank carries the radius'
+	// sign. Easement length: what it takes to ease the curvature at this speed,
+	// floored so a slow turn still gets a real transition.
+	const double Bank = BankDegreesFor(FMath::Max(Speed, 3.0), FMath::Abs(R)) * (R < 0.0 ? -1.0 : 1.0);
+	const double Ease = FMath::Clamp(Speed * 1.2, 12.0, 40.0);
+
+	FTUTrackSegment In;
+	In.Kind = ETUSegmentKind::Clothoid;
+	In.Length = static_cast<float>(Ease);
+	In.CurvatureStart = 0.f;
+	In.CurvatureEnd = static_cast<float>(1.0 / R);
+	In.RollStartDegrees = 0.f;
+	In.RollEndDegrees = static_cast<float>(Bank);
+
+	FTUTrackSegment Hold = Arc;
+	Hold.RollStartDegrees = Hold.RollEndDegrees = static_cast<float>(Bank);
+
+	FTUTrackSegment Out;
+	Out.Kind = ETUSegmentKind::Clothoid;
+	Out.Length = static_cast<float>(Ease);
+	Out.CurvatureStart = static_cast<float>(1.0 / R);
+	Out.CurvatureEnd = 0.f;
+	Out.RollStartDegrees = static_cast<float>(Bank);
+	Out.RollEndDegrees = 0.f;
+
+	Segments[At] = Hold;
+	Segments.Insert(Out, At + 1);
+	Segments.Insert(In, At);
+	SelectedSegment = At + 1;   // the arc, where it was: the thing you were looking at
+	RebuildFromSegments();
+	PushHistory(FString::Printf(TEXT("bank turn at segment %d (%.1f deg for %.1f m/s)"), At, Bank, Speed));
+	LogEvent(FString::Printf(TEXT("banked the turn at segment %d: %.1f deg for %.1f m/s, %.0f m easements"),
+		At, Bank, Speed, Ease));
 }
 
 void ATUCoasterRide::CancelField()
@@ -6553,6 +6631,45 @@ bool ATUCoasterRide::RunDocumentSmokeTest()
 		}
 		WriteField(S0, EEditField::Length, 40.0);
 		RebuildFromSegments();
+
+		// AND A TURN IS BANKED IN ONE PRESS. [Y] on the arc makes it three
+		// rows -- clothoid in, the arc, clothoid out -- with the three roll
+		// pairs typed for you from the speed the profile measures there, and
+		// [J] takes all three back as one edit.
+		WriteField(S0, EEditField::RollStart, 0.0);
+		WriteField(S0, EEditField::Roll, 0.0);
+		RebuildFromSegments();
+		// The history point a real edit commits on Enter; WriteField here is
+		// the raw setter, so undo would otherwise return to the inserted straight.
+		PushHistory(TEXT("smoke: the arc before banking"));
+		SelectedSegment = 0;
+		BankSelectedTurn();
+		const bool bThreeRows = Segments.Num() == 3
+			&& Segments[0].Kind == ETUSegmentKind::Clothoid
+			&& Segments[1].Kind == ETUSegmentKind::Arc
+			&& Segments[2].Kind == ETUSegmentKind::Clothoid;
+		const float Bank = bThreeRows ? Segments[1].RollStartDegrees : 0.f;
+		const bool bThreePairs = bThreeRows
+			&& Segments[0].RollStartDegrees == 0.f && Segments[0].RollEndDegrees == Bank
+			&& Segments[1].RollEndDegrees == Bank
+			&& Segments[2].RollStartDegrees == Bank && Segments[2].RollEndDegrees == 0.f
+			&& Bank > 5.f && Bank < 80.f;
+		const bool bSmooth = Track.IsCurvatureContinuous(1e-7) && SelectedSegment == 1;
+		UndoEdit();
+		const bool bUndoneAsOne = Segments.Num() == 1 && Segments[0].Kind == ETUSegmentKind::Arc;
+		if (!bThreeRows || !bThreePairs || !bSmooth || !bUndoneAsOne)
+		{
+			UE_LOG(LogTUEvents, Error,
+				TEXT("smoke: [Y] does not bank the turn (three rows %d, three pairs %d, bank %.1f, smooth %d, undone as one %d)"),
+				bThreeRows, bThreePairs, Bank, bSmooth, bUndoneAsOne);
+			Failures.Add(TEXT("bank-turn"));
+		}
+		else
+		{
+			UE_LOG(LogTUEvents, Log,
+				TEXT("smoke: [Y] banks the arc %.1f deg with clothoids either side, curvature and roll continuous, and one [J] takes it back"),
+				Bank);
+		}
 	}
 
 	// ===================== THE SEAM NAMES ITS LEVER =====================

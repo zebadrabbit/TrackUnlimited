@@ -149,7 +149,7 @@ void UTUSegmentEditorWidget::Rebuild()
 
 	const bool bEditsAllowed = R->Session.EditsAllowed();
 	AddLine(bEditsAllowed
-		? TEXT("SEGMENTS   [B] hide   click a field, type, Enter")
+		? TEXT("SEGMENTS   [I] insert  [Y] bank a turn  [B] hide   click a field, type, Enter")
 		: TEXT("SEGMENTS   read-only while the ride runs   [Tab] to BUILD"),
 		bEditsAllowed ? Dim : Amber);
 
