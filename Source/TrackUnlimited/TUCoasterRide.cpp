@@ -6555,6 +6555,54 @@ bool ATUCoasterRide::RunDocumentSmokeTest()
 		RebuildFromSegments();
 	}
 
+	// ===================== THE SEAM NAMES ITS LEVER =====================
+	//
+	// Shorten the launched circuit's longest straight by 5 m and it no longer
+	// closes. The closure rows must then say not just "5.0 m apart" but WHICH
+	// segment closes it and by how much -- the lever the Sidewinder's closure
+	// was found with by hand. Restored by loading the template again.
+	{
+		StartFromTemplate(1);
+		int32 Longest = INDEX_NONE;
+		for (int32 i = 0; i < Segments.Num(); ++i)
+		{
+			if (Segments[i].Kind == ETUSegmentKind::Straight
+				&& (Longest == INDEX_NONE || Segments[i].Length > Segments[Longest].Length))
+			{
+				Longest = i;
+			}
+		}
+		bool bNamesALever = false;
+		FString LeverRow;
+		if (Longest != INDEX_NONE)
+		{
+			Segments[Longest].Length -= 5.f;
+			RebuildFromSegments();
+			for (std::size_t i = 0; i < Diagnostics.Num(); ++i)
+			{
+				const FDiagRow& R = Diagnostics.At(i);
+				if (R.Group == "Closure" && R.Text.find("closes to") != std::string::npos
+					&& R.Text.find(" 5.0 m ") != std::string::npos)
+				{
+					bNamesALever = true;
+					LeverRow = UTF8_TO_TCHAR(R.Text.c_str());
+				}
+			}
+		}
+		if (bTrackIsCircuit || !bNamesALever)
+		{
+			UE_LOG(LogTUEvents, Error,
+				TEXT("smoke: a 5 m short circuit does not name its lever (circuit %d, longest straight %d, row found %d)"),
+				bTrackIsCircuit, Longest, bNamesALever);
+			Failures.Add(TEXT("closure-lever"));
+		}
+		else
+		{
+			UE_LOG(LogTUEvents, Log, TEXT("smoke: 5 m short of closing, the panel says: %s"), *LeverRow);
+		}
+		StartFromTemplate(1);
+	}
+
 	// ===================== THE SHOWCASE ACTUALLY RUNS =====================
 	//
 	// It is derived from a proven closed circuit and every change was chosen to be
@@ -7411,6 +7459,32 @@ void ATUCoasterRide::BuildDiagnostics()
 		Diagnostics.AddClosure(B.Position.X - A.Position.X,
 			B.Position.Y - A.Position.Y,
 			B.Position.Z - A.Position.Z, 0.05);
+
+		// AND WHICH SEGMENT MOVES THE SEAM. A layout a few metres from closing is
+		// somebody trying to close it, and "5.2 m apart" is the number without
+		// the lever: the row below names the one length change that closes the
+		// most of it, or says no single length can and that the next lever
+		// needs another heading -- the Sidewinder's own lesson, found by a
+		// hand-run probe. Only asked of a near miss: a point-to-point ride ends
+		// hundreds of metres from its station on purpose, and a CSV import is
+		// four thousand candidates for a question nobody asked.
+		const double PlanGap = FMath::Sqrt(FMath::Square(B.Position.X - A.Position.X)
+			+ FMath::Square(B.Position.Y - A.Position.Y));
+		const double FullGap = Length(B.Position - A.Position);
+		if (FullGap > 0.05 && PlanGap < 50.0 && Segments.Num() <= 200)
+		{
+			FTrackDocument Doc;
+			Doc.HeartlineHeight = 1.1;
+			for (const FTUTrackSegment& S : Segments) { Doc.Segments.push_back(ToAuthored(S)); }
+			const FClosureLever Lever = SuggestClosureLever(Doc, CircuitTarget(Track));
+			if (Lever.bFound)
+			{
+				FDiagTarget T;
+				T.Segment = static_cast<int>(Lever.SegmentIndex);
+				Diagnostics.Add(Lever.GapAfterM <= 0.05 ? EDiagSeverity::Info : EDiagSeverity::Warning,
+					"Closure", Lever.Message, T);
+			}
+		}
 	}
 
 	// The ride itself, and a stall hides every number derived from a run that did

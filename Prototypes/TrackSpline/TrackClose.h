@@ -326,6 +326,111 @@ inline bool SolveDense(std::vector<double>& A, std::vector<double>& B, int N,
 
 } // namespace TrackCloseDetail
 
+// ------------------------------------------------------------------ the lever
+
+// WHICH SEGMENT MOVES THE SEAM, and by how much per metre. The Sidewinder's
+// closure was found the slow way: every +X lever pinned at a floor while the
+// seam sat 1.7 m short, because the one piece of -X length (the trim leg) had
+// never been freed -- a lever collinear with an existing one buys nothing, and
+// nothing on screen said which heading the gap needed (Sidewinder UX list,
+// items 5 and 7). This is the lever-sensitivity probe that settled it, as a
+// diagnostics row: perturb each length-bearing segment by a metre, see where
+// the end goes, and name the ONE whose length change closes the most of the
+// gap -- with the change, and with what is left. When nothing single closes
+// it, say so, because that is the answer that matters: the next lever needs a
+// different heading.
+struct FClosureLever
+{
+    bool bFound = false;
+    std::size_t SegmentIndex = 0;
+    double CurrentLengthM = 0.0;
+    double ChangeM = 0.0;          // +ve lengthen, -ve shorten
+    FVec3 PerMetre{0.0, 0.0, 0.0}; // where the end goes per metre of this length
+    double GapBeforeM = 0.0;       // over the target's active axes
+    double GapAfterM = 0.0;        // what this one change leaves
+    std::size_t Candidates = 0;    // how many segments were tried
+    std::string Message;
+};
+
+inline FClosureLever SuggestClosureLever(const FTrackDocument& Doc, const FClosureTarget& Target,
+                                         double StepM = 1.0, std::size_t MaxCandidates = 64)
+{
+    FClosureLever Out;
+    if (Doc.Segments.empty()) { return Out; }
+    auto Active = [&Target](const FVec3& V)
+    {
+        return FVec3{Target.bMatchX ? V.X : 0.0, Target.bMatchY ? V.Y : 0.0, Target.bMatchZ ? V.Z : 0.0};
+    };
+    const FTrack Base = BuildTrack(Doc);
+    if (Base.NumSegments() == 0) { return Out; }
+    const FVec3 G = Active(MeasureClosure(Base, Target).Position);
+    Out.GapBeforeM = Length(G);
+    if (!(Out.GapBeforeM > 0.0)) { return Out; }
+
+    double BestResidual = Out.GapBeforeM;
+    for (std::size_t i = 0; i < Doc.Segments.size() && Out.Candidates < MaxCandidates; ++i)
+    {
+        const ESegmentKind K = Doc.Segments[i].Kind;
+        // Only a kind whose LENGTH is authored: a helix's and a pitch curve's are
+        // derived, and a radius change is a different lever with its own sign.
+        if (K != ESegmentKind::Straight && K != ESegmentKind::Arc
+            && K != ESegmentKind::Clothoid && K != ESegmentKind::Raw) { continue; }
+        FTrackDocument Trial = Doc;
+        double* L = TrackCloseDetail::FieldPtr(Trial.Segments[i], EClosureField::Length);
+        if (L == nullptr || !(*L > 0.0)) { continue; }
+        const double Current = *L;
+        *L += StepM;
+        ++Out.Candidates;
+        const FTrack T = BuildTrack(Trial);
+        if (T.NumSegments() != Base.NumSegments()) { continue; }
+        const FVec3 Delta = (Active(MeasureClosure(T, Target).Position) - G) * (1.0 / StepM);
+        const double DD = Dot(Delta, Delta);
+        if (!(DD > 1e-12)) { continue; }
+        // The length change that lands the end nearest the target along this
+        // lever, floored so the segment keeps a metre of itself.
+        double X = -Dot(G, Delta) / DD;
+        if (Current + X < 1.0) { X = 1.0 - Current; }
+        const double Residual = Length(G + Delta * X);
+        if (Residual < BestResidual - 1e-9
+            || (std::fabs(Residual - BestResidual) <= 1e-9 && Out.bFound && std::fabs(X) < std::fabs(Out.ChangeM)))
+        {
+            BestResidual = Residual;
+            Out.bFound = true;
+            Out.SegmentIndex = i;
+            Out.CurrentLengthM = Current;
+            Out.ChangeM = X;
+            Out.PerMetre = Delta;
+            Out.GapAfterM = Residual;
+        }
+    }
+    if (!Out.bFound) { return Out; }
+
+    char Buf[320];
+    const char* Verb = Out.ChangeM >= 0.0 ? "lengthen" : "shorten";
+    const bool bCloses = Out.GapAfterM <= 0.05;
+    if (bCloses)
+    {
+        std::snprintf(Buf, sizeof(Buf),
+            "segment %zu (%s, %.1f m) moves the seam %.2f m per metre along (%+.2f, %+.2f, %+.2f): "
+            "%s it %.1f m and the gap closes to %.2f m.",
+            Out.SegmentIndex, TrackIODetail::KindName(Doc.Segments[Out.SegmentIndex].Kind), Out.CurrentLengthM,
+            Length(Out.PerMetre), Out.PerMetre.X, Out.PerMetre.Y, Out.PerMetre.Z,
+            Verb, std::fabs(Out.ChangeM), Out.GapAfterM);
+    }
+    else
+    {
+        std::snprintf(Buf, sizeof(Buf),
+            "no single length closes it. Segment %zu (%s, %.1f m) gets closest: %s it %.1f m and "
+            "%.2f m of the %.2f m gap is left, across its heading (%+.2f, %+.2f, %+.2f) -- the next lever "
+            "needs a segment running a different way.",
+            Out.SegmentIndex, TrackIODetail::KindName(Doc.Segments[Out.SegmentIndex].Kind), Out.CurrentLengthM,
+            Verb, std::fabs(Out.ChangeM), Out.GapAfterM, Out.GapBeforeM,
+            Out.PerMetre.X, Out.PerMetre.Y, Out.PerMetre.Z);
+    }
+    Out.Message = Buf;
+    return Out;
+}
+
 // -------------------------------------------------------------------- solving
 
 // Damped Gauss-Newton (Levenberg) on the authored parameters the caller freed.

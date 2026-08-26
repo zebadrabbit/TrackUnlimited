@@ -2257,6 +2257,69 @@ static void TestThePitchKindIsTheHillThePresetsAlwaysBuilt()
                 "turns %.3f deg, and survives the file\n", Length(EA.Position - EB.Position), Turned);
 }
 
+// --------------------------------------------------- the closure lever
+
+static void TestTheClosureLeverNamesTheSegmentThatMovesTheSeam()
+{
+    // The Sidewinder's closure was found by a probe run by hand: perturb each
+    // length, see where the seam goes. This is that probe as a sentence. An
+    // oval that closes by symmetry -- two 180s, outbound and return the same
+    // length -- with the return shortened 5 m ends 5 m short along +X, and the
+    // one change that closes it is the return straight, or the collinear
+    // outbound one, by exactly 5 m.
+    const double R = 30.0, Ease = 20.0;
+    auto Turn = [&](std::vector<FAuthoredSegment>& S)
+    {
+        S.push_back(AuthorClothoid(Ease, 0.0, 1.0 / R));
+        S.push_back(AuthorArc(3.14159265358979323846 * R - Ease, R));
+        S.push_back(AuthorClothoid(Ease, 1.0 / R, 0.0));
+    };
+    FTrackDocument Doc;
+    Doc.Segments.push_back(AuthorStraight(120.0));   // 0: outbound
+    Turn(Doc.Segments);                              // 1..3
+    Doc.Segments.push_back(AuthorStraight(115.0));   // 4: return, 5 m short
+    Turn(Doc.Segments);                              // 5..7
+    const FTrack T = BuildTrack(Doc);
+    const FClosureTarget Target = CircuitTarget(T);
+    const FClosureGap Before = MeasureClosure(T, Target);
+    assert(std::fabs(Before.PositionError - 5.0) < 1e-3);
+
+    const FClosureLever Lever = SuggestClosureLever(Doc, Target);
+    std::printf("  lever: %s\n", Lever.Message.c_str());
+    assert(Lever.bFound);
+    assert(Lever.Candidates == 8);
+    assert(Lever.SegmentIndex == 4 || Lever.SegmentIndex == 0);
+    assert(std::fabs(std::fabs(Lever.ChangeM) - 5.0) < 1e-3);
+    assert(Lever.GapAfterM < 1e-3);
+    assert(Lever.Message.find("closes to") != std::string::npos);
+    // Applying what it says closes the circuit.
+    FTrackDocument Fixed = Doc;
+    Fixed.Segments[Lever.SegmentIndex].Length += Lever.ChangeM;
+    assert(MeasureClosure(BuildTrack(Fixed), CircuitTarget(BuildTrack(Fixed))).PositionError < 1e-3);
+
+    // A gap ACROSS every lever's heading is the Sidewinder's lesson: when the
+    // only length-bearing pieces run the same way, no one of them can close a
+    // gap that runs another, and the lever says so rather than pretending --
+    // names the closest, says what is left, and that the next lever needs a
+    // different heading. Turns as flat helices, whose length is derived and so
+    // are not levers; the return turn over-turns by 0.01 of a revolution.
+    FTrackDocument Skew;
+    Skew.Segments.push_back(AuthorStraight(120.0));
+    Skew.Segments.push_back(AuthorHelix(R, 0.0, 0.5));
+    Skew.Segments.push_back(AuthorStraight(120.0));
+    Skew.Segments.push_back(AuthorHelix(R, 0.0, 0.51));
+    const FTrack TS = BuildTrack(Skew);
+    const FClosureGap SkewGap = MeasureClosure(TS, CircuitTarget(TS));
+    assert(SkewGap.PositionError > 0.5);
+    const FClosureLever Across = SuggestClosureLever(Skew, CircuitTarget(TS));
+    std::printf("  across: %s\n", Across.Message.c_str());
+    assert(Across.bFound);
+    assert(Across.Candidates == 2);
+    assert(Across.GapAfterM > 0.05);
+    assert(Across.Message.find("no single length closes it") != std::string::npos);
+    assert(Across.Message.find("different way") != std::string::npos);
+}
+
 int main()
 {
     TestValidationCatchesTheNaNThatGeometryCannot();
@@ -2311,6 +2374,7 @@ int main()
     TestEvaluateClampsAndSpansSegments();
     TestTorsionRatioMakesAnEasedLoopAGeneralisedHelix();
     TestThePitchKindIsTheHillThePresetsAlwaysBuilt();
+    TestTheClosureLeverNamesTheSegmentThatMovesTheSeam();
     std::printf("All track spline tests passed.\n");
     return 0;
 }
