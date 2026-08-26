@@ -2133,6 +2133,7 @@ public:
 	void EditorAction(int32 Action, bool bShift);
 	static const TCHAR* KindNameOf(ETUSegmentKind K);
 	static const TCHAR* ZoneNameOf(ETUSegmentZone Z);
+	static const TCHAR* PitchEaseNameOf(ETUPitchEase E);
 	/** Bumped by every RebuildFromSegments, so a panel can tell the segments changed without diffing them. */
 	int32 SegmentsRevision = 0;
 	/**

@@ -33,7 +33,19 @@ enum class ETUSegmentKind : uint8
 	Arc UMETA(DisplayName = "Arc (constant radius)"),
 	Clothoid UMETA(DisplayName = "Clothoid (transition)"),
 	Helix UMETA(DisplayName = "Helix"),
-	Raw UMETA(DisplayName = "Raw curvature (hills, imports)"),
+	Raw UMETA(DisplayName = "Raw curvature (imports)"),
+	// Appended AFTER Raw: this enum is stored by VALUE in a level, and a
+	// renumbered enumerator turns every stored segment into something else.
+	Pitch UMETA(DisplayName = "Pitch (vertical curve)"),
+};
+
+// The shape of a vertical curve. Mirrors EPitchEase in TrackSpline.h.
+UENUM(BlueprintType)
+enum class ETUPitchEase : uint8
+{
+	EaseIn UMETA(DisplayName = "Ease in (straight to radius)"),
+	EaseOut UMETA(DisplayName = "Ease out (radius to straight)"),
+	Constant UMETA(DisplayName = "Constant radius"),
 };
 
 UENUM(BlueprintType)
@@ -401,14 +413,14 @@ struct FTUTrackSegment
 	UPROPERTY(EditAnywhere, Category = "Segment")
 	ETUSegmentKind Kind = ETUSegmentKind::Straight;
 
-	/** Metres along the track. A helix derives its own length from radius, climb and turns. */
+	/** Metres along the track. A helix or a pitch curve derives its own length from its other fields. */
 	UPROPERTY(EditAnywhere, Category = "Segment", meta = (ClampMin = "0.05", UIMin = "1.0",
-		EditCondition = "Kind != ETUSegmentKind::Helix", EditConditionHides))
+		EditCondition = "Kind != ETUSegmentKind::Helix && Kind != ETUSegmentKind::Pitch", EditConditionHides))
 	float Length = 20.f;
 
-	/** Metres. Positive turns left, negative turns right. */
+	/** Metres. Positive turns left, negative turns right; a pitch curve's tightest radius, sign ignored. */
 	UPROPERTY(EditAnywhere, Category = "Segment", meta = (UIMin = "-200.0", UIMax = "200.0",
-		EditCondition = "Kind == ETUSegmentKind::Arc || Kind == ETUSegmentKind::Helix",
+		EditCondition = "Kind == ETUSegmentKind::Arc || Kind == ETUSegmentKind::Helix || Kind == ETUSegmentKind::Pitch",
 		EditConditionHides))
 	float Radius = 30.f;
 
@@ -430,6 +442,16 @@ struct FTUTrackSegment
 	UPROPERTY(EditAnywhere, Category = "Segment", meta = (UIMin = "0.1", UIMax = "5.0",
 		EditCondition = "Kind == ETUSegmentKind::Helix", EditConditionHides))
 	float Turns = 1.f;
+
+	/** Degrees the nose comes up through this piece; negative points it down. Radius is the tightest in it; length is derived. */
+	UPROPERTY(EditAnywhere, Category = "Segment", meta = (UIMin = "-60.0", UIMax = "60.0",
+		EditCondition = "Kind == ETUSegmentKind::Pitch", EditConditionHides))
+	float PitchDeltaDegrees = 20.f;
+
+	/** Ease in (straight to radius), ease out, or hold the radius. A crest is one of each. */
+	UPROPERTY(EditAnywhere, Category = "Segment",
+		meta = (EditCondition = "Kind == ETUSegmentKind::Pitch", EditConditionHides))
+	ETUPitchEase PitchEase = ETUPitchEase::EaseIn;
 
 	/** Degrees at the start of the segment. See RollMode for what it is measured FROM. */
 	UPROPERTY(EditAnywhere, Category = "Roll", meta = (UIMin = "-180.0", UIMax = "180.0"))
@@ -694,6 +716,7 @@ inline FAuthoredSegment ToAuthored(const FTUTrackSegment& S)
 	case ETUSegmentKind::Arc: A.Kind = ESegmentKind::Arc; break;
 	case ETUSegmentKind::Clothoid: A.Kind = ESegmentKind::Clothoid; break;
 	case ETUSegmentKind::Helix: A.Kind = ESegmentKind::Helix; break;
+	case ETUSegmentKind::Pitch: A.Kind = ESegmentKind::Pitch; break;
 	case ETUSegmentKind::Raw: A.Kind = ESegmentKind::Raw; break;
 	}
 	A.Length = S.Length;
@@ -702,6 +725,10 @@ inline FAuthoredSegment ToAuthored(const FTUTrackSegment& S)
 	A.CurvatureEnd = S.CurvatureEnd;
 	A.ClimbAngleDegrees = S.ClimbAngleDegrees;
 	A.Turns = S.Turns;
+	A.PitchDeltaDegrees = S.PitchDeltaDegrees;
+	A.PitchEase = S.PitchEase == ETUPitchEase::EaseOut ? EPitchEase::EaseOut
+			   : S.PitchEase == ETUPitchEase::Constant ? EPitchEase::Constant
+													   : EPitchEase::EaseIn;
 	A.RollStartDegrees = S.RollStartDegrees;
 	A.RollEndDegrees = S.RollEndDegrees;
 	A.RollMode = S.RollMode == ETURollMode::WorldBank ? ERollMode::WorldBank
@@ -742,6 +769,7 @@ inline FTUTrackSegment FromAuthored(const FAuthoredSegment& A)
 	case ESegmentKind::Arc: S.Kind = ETUSegmentKind::Arc; break;
 	case ESegmentKind::Clothoid: S.Kind = ETUSegmentKind::Clothoid; break;
 	case ESegmentKind::Helix: S.Kind = ETUSegmentKind::Helix; break;
+	case ESegmentKind::Pitch: S.Kind = ETUSegmentKind::Pitch; break;
 	case ESegmentKind::Raw: S.Kind = ETUSegmentKind::Raw; break;
 	}
 	S.Length = static_cast<float>(A.Kind == ESegmentKind::Raw ? A.RawSegment.Length : A.Length);
@@ -750,6 +778,10 @@ inline FTUTrackSegment FromAuthored(const FAuthoredSegment& A)
 	S.CurvatureEnd = static_cast<float>(A.CurvatureEnd);
 	S.ClimbAngleDegrees = static_cast<float>(A.ClimbAngleDegrees);
 	S.Turns = static_cast<float>(A.Turns);
+	S.PitchDeltaDegrees = static_cast<float>(A.PitchDeltaDegrees);
+	S.PitchEase = A.PitchEase == EPitchEase::EaseOut ? ETUPitchEase::EaseOut
+			   : A.PitchEase == EPitchEase::Constant ? ETUPitchEase::Constant
+													 : ETUPitchEase::EaseIn;
 	S.RollStartDegrees = static_cast<float>(A.RollStartDegrees);
 	S.RollEndDegrees = static_cast<float>(A.RollEndDegrees);
 	S.RollMode = A.RollMode == ERollMode::WorldBank ? ETURollMode::WorldBank

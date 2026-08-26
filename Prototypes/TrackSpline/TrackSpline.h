@@ -368,6 +368,38 @@ inline FTrackSegment MakeHelix(double Radius, double ClimbAngle, double Turns, d
     return Seg;
 }
 
+// A VERTICAL curve from what somebody types: how far the nose comes up (or
+// down, negative) and the tightest radius in it. Three shapes, which between
+// them are how every hill in the presets was already built out of Raw pairs:
+// an EASE IN (pitch curvature 0 -> 1/R), an EASE OUT (1/R -> 0), and a
+// CONSTANT vertical arc to hold between them. Length is derived -- R*|delta|
+// for the arc and 2R*|delta| for an ease, because a linear ramp turns half of
+// what constant curvature does over the same length -- so a lift crest is
+// "ease in 29.5 degrees down at R 20, ease out the same" rather than two
+// lengths and two curvatures somebody had to compute. Until 2026-08-26 no hill
+// had ever been authored outside a preset: the runtime editor could not cycle
+// into Raw, and Raw was the only kind with pitch.
+enum class EPitchEase
+{
+    EaseIn,
+    EaseOut,
+    Constant,
+};
+
+inline FTrackSegment MakePitch(double DeltaRad, double Radius, EPitchEase Ease, double Roll = 0.0)
+{
+    const double R = std::fabs(Radius);
+    const double D = std::fabs(DeltaRad);
+    const double K = (R > 0.0 ? 1.0 / R : 0.0) * (DeltaRad < 0.0 ? -1.0 : 1.0);
+
+    FTrackSegment Seg;
+    Seg.Length = (Ease == EPitchEase::Constant ? 1.0 : 2.0) * R * D;
+    Seg.PitchCurvatureStart = Ease == EPitchEase::EaseIn ? 0.0 : K;
+    Seg.PitchCurvatureEnd = Ease == EPitchEase::EaseOut ? 0.0 : K;
+    Seg.RollStart = Seg.RollEnd = Roll;
+    return Seg;
+}
+
 // ---------------------------------------------------------------------- frame
 
 // Two bases, and the difference between them is the whole heartline idea:

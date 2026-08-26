@@ -47,6 +47,7 @@ that data.
 | `Arc` | length, radius | `κ = const`. **+ve radius is a left turn, −ve a right turn** |
 | `Clothoid` | length, κ start, κ end | `κ` varies linearly. The transition curve |
 | `Helix` | radius, climb angle, turns | Constant curvature plus constant torsion. Length is derived. **Not composable from authored data — see below** |
+| `Pitch` | pitch change (deg), radius, ease (in / out / constant) | A vertical curve — a climb, a crest, a pull-out. Length is derived (R·Δ for constant, 2R·Δ for an ease). A hill is one *ease in* and one *ease out*; a vertical arc between them holds the radius. Added 2026-08-26: until then no hill had been authored outside a preset |
 | `Raw` | curvature endpoints, torsion, torsion ratio | Everything the vocabulary cannot say yet. **Torsion ratio** is torsion as a constant multiple of curvature — a generalised helix (Lancret), which is how an eased loop side-steps its own legs; pair it with the *follows torsion* roll mode |
 
 Every kind additionally carries **roll start**, **roll end** and a **roll mode**.

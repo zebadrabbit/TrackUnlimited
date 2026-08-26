@@ -206,6 +206,7 @@ void UTUSegmentEditorWidget::Rebuild()
 			Value = Seg.Zone == ETUSegmentZone::None ? FString(TEXT("none")) : FString(ATUCoasterRide::ZoneNameOf(Seg.Zone));
 		}
 		else if (F == EEditField::StartsNewDevice) { Value = Seg.bStartsNewDevice ? TEXT("yes") : TEXT("no"); }
+		else if (F == EEditField::PitchEase) { Value = ATUCoasterRide::PitchEaseNameOf(Seg.PitchEase); }
 		else
 		{
 			const bool bDiffers = bMulti && f < MultiFields.size() && MultiFields[f].bDiffers;

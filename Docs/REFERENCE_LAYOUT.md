@@ -22,7 +22,7 @@ read off a ride profile run over the built geometry.
 
 | | |
 |---|---|
-| Segments | 16 — 4 straight, 12 raw (9 pitch, of which 3 are the side-stepping loop; 3 the banked turn, authored in the frame the loop leaves) |
+| Segments | 16 — 4 straight, 6 pitch (the lift's ease-in, the crest, the pull-out: one *ease in* and one *ease out* each), 6 raw (the side-stepping loop; the banked turn, authored in the frame the loop leaves) |
 | Developed length | **591.86 m** (sum of segment arc lengths, along the heartline) |
 | Horizontal extent | 367.43 m |
 | Lift crest | **50.07 m** above station datum, at S = 159.0 m |

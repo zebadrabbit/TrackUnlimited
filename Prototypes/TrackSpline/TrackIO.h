@@ -72,6 +72,12 @@ enum class ESegmentKind
     // a track nobody can meaningfully edit, and that is exactly what
     // CLAUDE.md's scope guard says an import is.
     Raw,
+
+    // A vertical curve: how far the nose comes up or down, the tightest radius
+    // in it, and whether it eases in, eases out or holds -- MakePitch. Appended
+    // AFTER Raw because the editor's enum stores this by value in a level, and
+    // a renumbered enumerator turns every stored hill into something else.
+    Pitch,
 };
 
 // One row of the editor's segment list. Which fields matter depends on Kind —
@@ -122,6 +128,8 @@ struct FAuthoredSegment
     double CurvatureEnd = 0.0;
     double ClimbAngleDegrees = 0.0; // helix, +ve ascending
     double Turns = 0.0;             // helix, revolutions
+    double PitchDeltaDegrees = 0.0; // pitch, +ve raises the nose; Radius is its tightest radius
+    EPitchEase PitchEase = EPitchEase::EaseIn;
 
     double RollStartDegrees = 0.0; // every kind
     double RollEndDegrees = 0.0;
@@ -183,6 +191,9 @@ inline FTrackSegment BuildSegment(const FAuthoredSegment& A)
     case ESegmentKind::Raw:
         Seg = A.RawSegment;
         break;
+    case ESegmentKind::Pitch:
+        Seg = MakePitch(A.PitchDeltaDegrees * AuthoredDegreesToRadians, A.Radius, A.PitchEase);
+        break;
     }
     // Roll is applied here rather than through the Make* roll arguments so that
     // every kind carries it identically and Raw cannot disagree with the rest.
@@ -237,6 +248,19 @@ inline FAuthoredSegment AuthorHelix(double Radius, double ClimbAngleDegrees, dou
     A.ClimbAngleDegrees = ClimbAngleDegrees;
     A.Turns = Turns;
     A.RollStartDegrees = A.RollEndDegrees = RollDegrees;
+    return A;
+}
+
+inline FAuthoredSegment AuthorPitch(double PitchDeltaDegrees, double Radius, EPitchEase Ease,
+                                    double RollStartDegrees = 0.0, double RollEndDegrees = 0.0)
+{
+    FAuthoredSegment A;
+    A.Kind = ESegmentKind::Pitch;
+    A.PitchDeltaDegrees = PitchDeltaDegrees;
+    A.Radius = Radius;
+    A.PitchEase = Ease;
+    A.RollStartDegrees = RollStartDegrees;
+    A.RollEndDegrees = RollEndDegrees;
     return A;
 }
 
@@ -317,6 +341,7 @@ inline const char* KindName(ESegmentKind K)
     case ESegmentKind::Clothoid: return "clothoid";
     case ESegmentKind::Helix: return "helix";
     case ESegmentKind::Raw: return "raw";
+    case ESegmentKind::Pitch: return "pitch";
     }
     return "raw";
 }
@@ -328,6 +353,27 @@ inline bool KindFromName(const std::string& S, ESegmentKind& Out)
     if (S == "clothoid") { Out = ESegmentKind::Clothoid; return true; }
     if (S == "helix") { Out = ESegmentKind::Helix; return true; }
     if (S == "raw") { Out = ESegmentKind::Raw; return true; }
+    if (S == "pitch") { Out = ESegmentKind::Pitch; return true; }
+    return false;
+}
+
+// As permanent as the kind names: these land in files.
+inline const char* PitchEaseName(EPitchEase E)
+{
+    switch (E)
+    {
+    case EPitchEase::EaseIn: return "in";
+    case EPitchEase::EaseOut: return "out";
+    case EPitchEase::Constant: return "constant";
+    }
+    return "in";
+}
+
+inline bool PitchEaseFromName(const std::string& S, EPitchEase& Out)
+{
+    if (S == "in") { Out = EPitchEase::EaseIn; return true; }
+    if (S == "out") { Out = EPitchEase::EaseOut; return true; }
+    if (S == "constant") { Out = EPitchEase::Constant; return true; }
     return false;
 }
 
@@ -657,6 +703,13 @@ inline bool WriteTrackJson(const FTrackDocument& Doc, std::string& Out, std::str
             Add("climbAngleDeg", A.ClimbAngleDegrees);
             Add("turns", A.Turns);
             break;
+        case ESegmentKind::Pitch:
+            if (!Check(A.Radius, "radius", i) || !Check(A.PitchDeltaDegrees, "pitchDeg", i)) { return false; }
+            // No length, for the helix's reason: it is derived from these.
+            Add("radius", A.Radius);
+            Add("pitchDeg", A.PitchDeltaDegrees);
+            Row += std::string(", \"pitchEase\": \"") + PitchEaseName(A.PitchEase) + "\"";
+            break;
         case ESegmentKind::Raw:
         {
             const FTrackSegment& S = A.RawSegment;
@@ -943,6 +996,26 @@ inline bool ParseTrackJson(const std::string& Text, FTrackDocument& Out, std::st
                   && ReadNumber(F, "pitchEnd", A.RawSegment.PitchCurvatureEnd, false, FieldError)
                   && ReadNumber(F, "torsion", A.RawSegment.Torsion, false, FieldError)
                   && ReadNumber(F, "torsionRatio", A.RawSegment.TorsionRatio, false, FieldError);
+            break;
+        case ESegmentKind::Pitch:
+            bOk = ReadNumber(F, "radius", A.Radius, true, FieldError)
+                  && ReadNumber(F, "pitchDeg", A.PitchDeltaDegrees, true, FieldError);
+            if (bOk)
+            {
+                // REQUIRED, and an unknown one is refused: a hill read with the
+                // wrong ease is a different hill that still looks valid.
+                const std::string* E = Find(F, "pitchEase");
+                if (E == nullptr)
+                {
+                    FieldError = "pitch needs \"pitchEase\" (in, out or constant)";
+                    bOk = false;
+                }
+                else if (!PitchEaseFromName(*E, A.PitchEase))
+                {
+                    FieldError = "unknown pitchEase \"" + *E + "\"; expected in, out or constant";
+                    bOk = false;
+                }
+            }
             break;
         }
 

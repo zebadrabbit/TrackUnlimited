@@ -46,6 +46,10 @@ enum class EEditKind
     Arc,
     Clothoid,
     Helix,
+    // A vertical curve, from 2026-08-26: pitch change, tightest radius, and
+    // whether it eases in, eases out or holds. The kind that lets a hill be
+    // authored anywhere but a preset.
+    Pitch,
 };
 
 // Every field the editor can show. Deliberately a flat list rather than one per
@@ -64,6 +68,11 @@ enum class EEditField
     CurvatureEnd,
     ClimbAngle,
     Turns,
+    // THE VERTICAL CURVE'S TWO: how far the nose comes up or down, and its
+    // shape (ease in / ease out / constant), which is picked, not typed. Its
+    // radius is the Radius row every turn already has.
+    PitchDelta,
+    PitchEase,
     // ROLL IS A PAIR, and only the END of it was reachable. A bank authored
     // one segment at a time therefore started at 0 every time and STEPPED at
     // each joint -- which TrackValidate then correctly complained about, the
@@ -89,6 +98,8 @@ inline const char* FieldName(EEditField F)
     case EEditField::CurvatureEnd:    return "Curvature end";
     case EEditField::ClimbAngle:      return "Climb angle";
     case EEditField::Turns:           return "Turns";
+    case EEditField::PitchDelta:      return "Pitch change";
+    case EEditField::PitchEase:       return "Pitch shape";
     case EEditField::Kind:            return "Kind";
     case EEditField::RollStart:       return "Roll start";
     case EEditField::Roll:            return "Roll end";
@@ -125,6 +136,7 @@ inline const char* FieldUnit(EEditField F)
     case EEditField::CurvatureStart:
     case EEditField::CurvatureEnd:   return "1/m";
     case EEditField::ClimbAngle:
+    case EEditField::PitchDelta:
     case EEditField::RollStart:
     case EEditField::Roll:           return "deg";
     case EEditField::ZoneSpeed:      return "m/s";
@@ -135,6 +147,7 @@ inline const char* FieldUnit(EEditField F)
     // that a new field with a dimension cannot inherit "no unit" by silence.
     case EEditField::Turns:            // a count
     case EEditField::Kind:             // a choice
+    case EEditField::PitchEase:        // a choice
     case EEditField::ZoneKind:         // a choice
     case EEditField::StartsNewDevice:  // a tick box
     case EEditField::Count:          return "";
@@ -157,6 +170,7 @@ inline const char* FieldUnit(EEditField F)
 inline bool IsChoiceField(EEditField F)
 {
     return F == EEditField::Kind
+        || F == EEditField::PitchEase
         || F == EEditField::ZoneKind
         || F == EEditField::StartsNewDevice;
 }
@@ -172,16 +186,20 @@ inline bool KindUsesField(EEditKind K, EEditField F)
     {
     case EEditField::Length:
         // A helix is authored by radius, climb and TURNS — its length is derived,
-        // so offering a length field would be offering to overconstrain it.
-        return K != EEditKind::Helix;
+        // so offering a length field would be offering to overconstrain it. A
+        // pitch curve likewise: pitch change and radius fix its length.
+        return K != EEditKind::Helix && K != EEditKind::Pitch;
     case EEditField::Radius:
-        return K == EEditKind::Arc || K == EEditKind::Helix;
+        return K == EEditKind::Arc || K == EEditKind::Helix || K == EEditKind::Pitch;
     case EEditField::CurvatureStart:
     case EEditField::CurvatureEnd:
         return K == EEditKind::Clothoid;
     case EEditField::ClimbAngle:
     case EEditField::Turns:
         return K == EEditKind::Helix;
+    case EEditField::PitchDelta:
+    case EEditField::PitchEase:
+        return K == EEditKind::Pitch;
     case EEditField::Kind:
     case EEditField::RollStart:
     case EEditField::Roll:

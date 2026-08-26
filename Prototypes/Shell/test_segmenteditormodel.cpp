@@ -64,9 +64,21 @@ void TestEachKINDShowsItsOwnFields()
     assert(Visible(E, EEditField::Radius) && Visible(E, EEditField::Turns));
     assert(!Visible(E, EEditField::Length));
 
+    // A PITCH CURVE is authored by pitch change, radius and shape; its length
+    // is derived too, and it shows none of the turn's fields.
+    E.SetSegments({Make(EEditKind::Straight), Make(EEditKind::Arc),
+                   Make(EEditKind::Clothoid), Make(EEditKind::Helix), Make(EEditKind::Pitch)});
+    E.Select({4});
+    assert(Visible(E, EEditField::PitchDelta) && Visible(E, EEditField::PitchEase));
+    assert(Visible(E, EEditField::Radius));
+    assert(!Visible(E, EEditField::Length) && !Visible(E, EEditField::Turns)
+           && !Visible(E, EEditField::CurvatureStart));
+    E.Select({1});
+    assert(!Visible(E, EEditField::PitchDelta) && !Visible(E, EEditField::PitchEase));
+
     // Roll is on everything, because any segment can be banked.
-    for (std::size_t i = 0; i < 4; ++i) { E.Select({i}); assert(Visible(E, EEditField::Roll)); }
-    std::printf("  each kind shows its own fields, and a helix has no length field\n");
+    for (std::size_t i = 0; i < 5; ++i) { E.Select({i}); assert(Visible(E, EEditField::Roll)); }
+    std::printf("  each kind shows its own fields; a helix and a pitch curve have no length field\n");
 }
 
 void TestHIDDENIsNOTDeleted()

@@ -50,8 +50,9 @@ inline FFieldHelp HelpFor(EEditField F)
     case EEditField::Kind:
         return {"What SHAPE this piece is. Straight, Arc (a constant-radius turn), "
                 "Clothoid (a transition that eases from one curvature into another), "
-                "or Helix. Click to change it. Nothing you have typed is lost when you "
-                "do -- a radius you set on an arc is still there if you come back.",
+                "Helix, or Pitch (a vertical curve: a climb, a crest, a pull-out). Click "
+                "to change it. Nothing you have typed is lost when you do -- a radius "
+                "you set on an arc is still there if you come back.",
                 0.0, 0.0, false};
     case EEditField::Length:
         return {"How far this piece of track runs, measured along the track itself "
@@ -77,6 +78,18 @@ inline FFieldHelp HelpFor(EEditField F)
         return {"How many times round. Fractions are allowed — 1.5 turns is a helix that "
                 "ends facing the opposite way.",
                 0.25, 3.0, true};
+    case EEditField::PitchDelta:
+        return {"How far the nose comes UP through this piece, in degrees; negative "
+                "points it down. A lift climb is one piece easing in to +25, a crest "
+                "is one easing in to -30 and one easing out by the same, a pull-out "
+                "brings it back to 0. Length follows from this and the radius.",
+                -60.0, 60.0, true};
+    case EEditField::PitchEase:
+        return {"The SHAPE of the vertical curve. EASE IN starts straight and bends "
+                "harder to the radius; EASE OUT does the opposite; CONSTANT holds the "
+                "radius the whole way. A hill that eases in and out again is two "
+                "pieces, and a rider feels no kick at either end of it.",
+                0.0, 0.0, false};
     case EEditField::RollStart:
         return {"How far the track is banked where this piece BEGINS. Set it to the "
                 "previous piece's roll end and the bank flows through the joint; leave "

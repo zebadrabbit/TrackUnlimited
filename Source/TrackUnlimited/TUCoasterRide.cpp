@@ -290,7 +290,8 @@ namespace
 	{
 		static const ETUSegmentKind Authorable[] = {
 			ETUSegmentKind::Straight, ETUSegmentKind::Arc,
-			ETUSegmentKind::Clothoid, ETUSegmentKind::Helix};
+			ETUSegmentKind::Clothoid, ETUSegmentKind::Helix,
+			ETUSegmentKind::Pitch};
 		int32 At = 0;
 		for (int32 k = 0; k < UE_ARRAY_COUNT(Authorable); ++k)
 		{
@@ -312,6 +313,18 @@ namespace
 		case ETUSegmentKind::Clothoid: return TEXT("clothoid");
 		case ETUSegmentKind::Helix:    return TEXT("helix");
 		case ETUSegmentKind::Raw:      return TEXT("raw");
+		case ETUSegmentKind::Pitch:    return TEXT("pitch");
+		}
+		return TEXT("-");
+	}
+
+	const TCHAR* PitchEaseName(ETUPitchEase E)
+	{
+		switch (E)
+		{
+		case ETUPitchEase::EaseIn:   return TEXT("ease in");
+		case ETUPitchEase::EaseOut:  return TEXT("ease out");
+		case ETUPitchEase::Constant: return TEXT("constant");
 		}
 		return TEXT("-");
 	}
@@ -507,8 +520,12 @@ void AddStraight(TArray<FTUTrackSegment>& Out, double Length,
 }
 
 // A vertical curve with no curvature step at either end: pitch curvature ramps
-// 0 -> peak -> 0, so both joints stay continuous. Two Raw segments, because the
-// authored vocabulary is still yaw-only and no Make* helper builds pitch.
+// 0 -> peak -> 0, so both joints stay continuous. Two Raw segments, KEPT that
+// way for the circuit presets after the Pitch kind landed (2026-08-26): their
+// closures were solved against these float-rounded lengths and curvatures, and
+// a Pitch row re-derives both from a rounded angle and radius -- a second
+// rounding, which on a 1.3 km circuit is a seam. The reference layout, which
+// closes on height alone, authors its hills as Pitch rows (see ReferenceLayout).
 void AddEasedPitch(TArray<FTUTrackSegment>& Out, double PitchDelta, double PeakCurvature,
 	ETUSegmentZone Zone = ETUSegmentZone::None, float ZoneSpeed = 0.f)
 {
@@ -1361,30 +1378,26 @@ TArray<FTUTrackSegment> ATUCoasterRide::ReferenceLayout()
 	};
 
 	// A vertical curve with no curvature step at either end: pitch curvature
-	// ramps 0 -> peak -> 0, so both joints stay continuous. Two Raw segments,
-	// because no Make* helper builds pitch curvature — the authored vocabulary
-	// is still yaw-only, which is exactly what ESegmentKind::Raw records.
+	// ramps 0 -> peak -> 0, so both joints stay continuous. TWO PITCH ROWS
+	// since 2026-08-26 -- ease in over half the change, ease out over the
+	// other half, at the radius the peak curvature is -- rather than two Raw
+	// segments carrying derived lengths and curvatures. Same geometry
+	// (asserted bit-for-bit in test_trackspline.cpp), and now a hill somebody
+	// can read and retype in the runtime editor, which no preset's hill was.
 	auto EasedPitch = [&Out](double PitchDelta, double PeakCurvature,
 		ETUSegmentZone Zone = ETUSegmentZone::None, float ZoneSpeed = 0.f)
 	{
-		const double K = PitchDelta >= 0.0 ? PeakCurvature : -PeakCurvature;
-		const double L = FMath::Abs(PitchDelta) / PeakCurvature;
-
-		FTUTrackSegment In;
-		In.Kind = ETUSegmentKind::Raw;
-		In.Length = static_cast<float>(L);
-		In.PitchCurvatureEnd = static_cast<float>(K);
-		In.Zone = Zone;
-		if (Zone != ETUSegmentZone::None) { In.ZoneSpeed = ZoneSpeed; }
-		Out.Add(In);
-
-		FTUTrackSegment Tail;
-		Tail.Kind = ETUSegmentKind::Raw;
-		Tail.Length = static_cast<float>(L);
-		Tail.PitchCurvatureStart = static_cast<float>(K);
-		Tail.Zone = Zone;
-		if (Zone != ETUSegmentZone::None) { Tail.ZoneSpeed = ZoneSpeed; }
-		Out.Add(Tail);
+		for (const ETUPitchEase Ease : {ETUPitchEase::EaseIn, ETUPitchEase::EaseOut})
+		{
+			FTUTrackSegment P;
+			P.Kind = ETUSegmentKind::Pitch;
+			P.PitchDeltaDegrees = static_cast<float>(FMath::RadiansToDegrees(PitchDelta * 0.5));
+			P.Radius = static_cast<float>(1.0 / PeakCurvature);
+			P.PitchEase = Ease;
+			P.Zone = Zone;
+			if (Zone != ETUSegmentZone::None) { P.ZoneSpeed = ZoneSpeed; }
+			Out.Add(P);
+		}
 	};
 
 	Straight(20.0, ETUSegmentZone::Station, 4.f);      // station
@@ -3241,6 +3254,7 @@ EEditKind ATUCoasterRide::KindOf(ETUSegmentKind K)
 	case ETUSegmentKind::Arc:      return EEditKind::Arc;
 	case ETUSegmentKind::Clothoid: return EEditKind::Clothoid;
 	case ETUSegmentKind::Helix:    return EEditKind::Helix;
+	case ETUSegmentKind::Pitch:    return EEditKind::Pitch;
 	case ETUSegmentKind::Straight: return EEditKind::Straight;
 	// RAW IS SHOWN AS A STRAIGHT'S FIELD SET, and that is a real answer rather
 	// than a fallthrough: raw curvature is authored as a sampled profile by the
@@ -3261,6 +3275,8 @@ double ATUCoasterRide::ReadField(const FTUTrackSegment& S, EEditField F) const
 	case EEditField::CurvatureEnd:   return S.CurvatureEnd;
 	case EEditField::ClimbAngle:     return S.ClimbAngleDegrees;
 	case EEditField::Turns:          return S.Turns;
+	case EEditField::PitchDelta:     return S.PitchDeltaDegrees;
+	case EEditField::PitchEase:      return static_cast<double>(S.PitchEase);
 	case EEditField::Kind:           return static_cast<double>(KindOf(S.Kind));
 	case EEditField::RollStart:      return S.RollStartDegrees;
 	case EEditField::Roll:           return S.RollEndDegrees;
@@ -3287,6 +3303,8 @@ void ATUCoasterRide::WriteField(FTUTrackSegment& S, EEditField F, double V)
 	case EEditField::CurvatureEnd:   S.CurvatureEnd = static_cast<float>(V); break;
 	case EEditField::ClimbAngle:     S.ClimbAngleDegrees = static_cast<float>(V); break;
 	case EEditField::Turns:          S.Turns = static_cast<float>(V); break;
+	case EEditField::PitchDelta:     S.PitchDeltaDegrees = static_cast<float>(V); break;
+	case EEditField::PitchEase:      break;   // a choice, cycled in ClickSegmentEditor
 	case EEditField::RollStart:      S.RollStartDegrees = static_cast<float>(V); break;
 	case EEditField::Roll:           S.RollEndDegrees = static_cast<float>(V); break;
 	case EEditField::ZoneSpeed:      S.ZoneSpeed = static_cast<float>(V); break;
@@ -3435,6 +3453,14 @@ void ATUCoasterRide::EditorAction(int32 Action, bool bShift)
 					// whatever the kind, so a radius survives a trip through Helix.
 					S.Kind = NextAuthorableKind(S.Kind);
 				}
+				else if (F == EEditField::PitchEase)
+				{
+					// Ease in -> ease out -> constant -> ease in. A crest is the
+					// first two in a row; a vertical arc between them is the third.
+					S.PitchEase = S.PitchEase == ETUPitchEase::EaseIn ? ETUPitchEase::EaseOut
+								: S.PitchEase == ETUPitchEase::EaseOut ? ETUPitchEase::Constant
+																	  : ETUPitchEase::EaseIn;
+				}
 				else if (F == EEditField::StartsNewDevice)
 				{
 					S.bStartsNewDevice = !S.bStartsNewDevice;
@@ -3469,6 +3495,7 @@ void ATUCoasterRide::EditorAction(int32 Action, bool bShift)
 
 const TCHAR* ATUCoasterRide::KindNameOf(ETUSegmentKind K) { return SegmentKindName(K); }
 const TCHAR* ATUCoasterRide::ZoneNameOf(ETUSegmentZone Z) { return ZoneKindName(Z); }
+const TCHAR* ATUCoasterRide::PitchEaseNameOf(ETUPitchEase E) { return PitchEaseName(E); }
 
 void ATUCoasterRide::KeyBackspace()
 {
@@ -6336,6 +6363,45 @@ bool ATUCoasterRide::RunDocumentSmokeTest()
 				TEXT("%.1f m turning %.1f deg, banked %.0f to %.0f, and raw is never cycled into"),
 				Track.TotalLength(), TurnedDeg,
 				ReadField(S0, EEditField::RollStart), ReadField(S0, EEditField::Roll));
+		}
+
+		// AND A HILL, which until 2026-08-26 no path but a preset could author:
+		// cycle the piece to Pitch, type a climb of 25 degrees at R 30 easing
+		// in, and the track has to actually CLIMB -- the tangent pitched up by
+		// what was typed, the end above the start.
+		int32 Guard2 = 0;
+		while (S0.Kind != ETUSegmentKind::Pitch && Guard2++ < 8)
+		{
+			S0.Kind = NextAuthorableKind(S0.Kind);
+		}
+		WriteField(S0, EEditField::PitchDelta, 25.0);
+		WriteField(S0, EEditField::Radius, 30.0);
+		S0.PitchEase = ETUPitchEase::EaseIn;
+		WriteField(S0, EEditField::RollStart, 0.0);
+		WriteField(S0, EEditField::Roll, 0.0);
+		RebuildFromSegments();
+		double ClimbDeg = 0.0, Rise = 0.0;
+		if (Track.TotalLength() > 1.0)
+		{
+			const FTrackFrame A = Track.EvaluateAt(0.0);
+			const FTrackFrame B = Track.EvaluateAt(Track.TotalLength());
+			ClimbDeg = FMath::RadiansToDegrees(FMath::Asin(FMath::Clamp(B.Tangent.Z, -1.0, 1.0)));
+			Rise = B.Position.Z - A.Position.Z;
+		}
+		if (S0.Kind != ETUSegmentKind::Pitch || FMath::Abs(ClimbDeg - 25.0) > 0.05 || Rise < 3.0
+			|| FMath::Abs(Track.TotalLength() - 2.0 * 30.0 * FMath::DegreesToRadians(25.0)) > 0.01)
+		{
+			UE_LOG(LogTUEvents, Error,
+				TEXT("smoke: the shipping editor cannot author a hill (pitch %d, climbs %.2f deg, rises %.2f m, %.2f m long)"),
+				S0.Kind == ETUSegmentKind::Pitch, ClimbDeg, Rise, Track.TotalLength());
+			Failures.Add(TEXT("authoring-pitch"));
+		}
+		else
+		{
+			UE_LOG(LogTUEvents, Log,
+				TEXT("smoke: and the kind row gives a real hill -- ease in 25 deg at R 30: %.1f m long, ")
+				TEXT("climbing %.2f deg and %.2f m up at the end"),
+				Track.TotalLength(), ClimbDeg, Rise);
 		}
 	}
 

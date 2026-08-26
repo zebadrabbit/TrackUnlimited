@@ -637,6 +637,7 @@ static bool SameAuthored(const FAuthoredSegment& A, const FAuthoredSegment& B)
     return A.Kind == B.Kind && A.Length == B.Length && A.Radius == B.Radius
            && A.CurvatureStart == B.CurvatureStart && A.CurvatureEnd == B.CurvatureEnd
            && A.ClimbAngleDegrees == B.ClimbAngleDegrees && A.Turns == B.Turns
+           && A.PitchDeltaDegrees == B.PitchDeltaDegrees && A.PitchEase == B.PitchEase
            && A.RollStartDegrees == B.RollStartDegrees && A.RollEndDegrees == B.RollEndDegrees
            && A.RollMode == B.RollMode && A.Zone == B.Zone && A.ZoneSpeed == B.ZoneSpeed
            && A.ZoneAccel == B.ZoneAccel && A.ZoneDecel == B.ZoneDecel
@@ -780,7 +781,7 @@ static void TestDeviceLayerSurvivesTheFile()
     // In the test rather than the header on purpose — a padding difference on some
     // future compiler should annoy whoever runs the suite, never break the build
     // of the game.
-    static_assert(sizeof(FAuthoredSegment) == sizeof(FTrackSegment) + 120,
+    static_assert(sizeof(FAuthoredSegment) == sizeof(FTrackSegment) + 136,
                   "FAuthoredSegment changed size, which means a field was added or removed. "
                   "Add it to WriteTrackJson, to ParseTrackJson, to SameAuthored and to "
                   "EveryFieldSet, or it will not survive a save.");
@@ -2185,6 +2186,77 @@ static void TestTorsionRatioMakesAnEasedLoopAGeneralisedHelix()
                 Bad.ClosestApproach, Length(S1.Tangent - S0.Tangent), Twist * 180.0 / Pi, WorstLean);
 }
 
+// ------------------------------------------------------- the pitch kind
+
+static void TestThePitchKindIsTheHillThePresetsAlwaysBuilt()
+{
+    // Until 2026-08-26 no hill had been authored outside a preset: every crest
+    // was two Raw segments with pitch curvature, and Raw is not a kind the
+    // runtime editor cycles into. The Pitch kind is those two Raw segments as
+    // what somebody would TYPE -- pitch change, tightest radius, ease in or
+    // out -- and it must build the same geometry, to the bit.
+    const double Delta = -59.0, K = 0.05;                  // the reference's crest
+    const double L = std::fabs(Delta * AuthoredDegreesToRadians) / K;
+    FTrackSegment In, Tail;
+    In.Length = L;   In.PitchCurvatureEnd = -K;
+    Tail.Length = L; Tail.PitchCurvatureStart = -K;
+
+    FTrackDocument Raw, Typed;
+    Raw.Segments = {AuthorStraight(20.0), AuthorRaw(In), AuthorRaw(Tail), AuthorStraight(20.0)};
+    Typed.Segments = {AuthorStraight(20.0),
+                      AuthorPitch(Delta * 0.5, 1.0 / K, EPitchEase::EaseIn),
+                      AuthorPitch(Delta * 0.5, 1.0 / K, EPitchEase::EaseOut),
+                      AuthorStraight(20.0)};
+    const FTrack A = BuildTrack(Raw), B = BuildTrack(Typed);
+    assert(std::fabs(A.TotalLength() - B.TotalLength()) < 1e-9);
+    const FTrackFrame EA = A.EvaluateAt(A.TotalLength()), EB = B.EvaluateAt(B.TotalLength());
+    assert(Length(EA.Position - EB.Position) < 1e-9);
+    assert(Length(EA.Tangent - EB.Tangent) < 1e-12);
+    assert(B.IsCurvatureContinuous());
+    // And it turned by what was typed: the tangent has pitched 59 degrees down.
+    const FTrackFrame S0 = B.EvaluateAt(0.0);
+    const double Turned = std::acos(Dot(S0.Tangent, EB.Tangent)) * RadiansToAuthoredDegrees;
+    assert(std::fabs(Turned - 59.0) < 1e-6 && EB.Tangent.Z < 0.0);
+
+    // A constant one is a vertical arc: R*delta long, curvature held throughout.
+    const FTrackSegment Arc = BuildSegment(AuthorPitch(30.0, 40.0, EPitchEase::Constant));
+    assert(std::fabs(Arc.Length - 40.0 * 30.0 * AuthoredDegreesToRadians) < 1e-12);
+    assert(Arc.PitchCurvatureStart == 0.025 && Arc.PitchCurvatureEnd == 0.025);
+    // The radius' sign is ignored: down is said by the delta, not by the radius.
+    const FTrackSegment Neg = BuildSegment(AuthorPitch(-30.0, -40.0, EPitchEase::EaseIn));
+    assert(Neg.PitchCurvatureStart == 0.0 && Neg.PitchCurvatureEnd == -0.025);
+
+    // The file stores what was typed, and refuses what it cannot read.
+    std::string Text, Err;
+    assert(WriteTrackJson(Typed, Text, Err));
+    assert(Text.find("\"kind\": \"pitch\"") != std::string::npos);
+    assert(Text.find("\"pitchDeg\": -29.5") != std::string::npos);
+    assert(Text.find("\"pitchEase\": \"in\"") != std::string::npos);
+    assert(Text.find("\"pitchEase\": \"out\"") != std::string::npos);
+    assert(Text.find("\"length\"") != std::string::npos);            // the straights
+    FTrackDocument Back;
+    assert(ParseTrackJson(Text, Back, Err));
+    assert(Back.Segments[1].Kind == ESegmentKind::Pitch);
+    assert(Back.Segments[1].PitchDeltaDegrees == -29.5 && Back.Segments[1].PitchEase == EPitchEase::EaseIn);
+    assert(Back.Segments[2].PitchEase == EPitchEase::EaseOut && Back.Segments[2].Radius == 20.0);
+    std::string Again;
+    assert(WriteTrackJson(Back, Again, Err) && Again == Text);
+    {
+        std::string Broken = Text;
+        const std::size_t At = Broken.find("\"pitchEase\": \"in\"");
+        Broken.replace(At, std::string("\"pitchEase\": \"in\"").size(), "\"pitchEase\": \"sideways\"");
+        FTrackDocument Nope;
+        assert(!ParseTrackJson(Broken, Nope, Err));
+        assert(Err.find("sideways") != std::string::npos);
+        std::string Missing = Text;
+        Missing.replace(Missing.find(", \"pitchEase\": \"in\""), std::string(", \"pitchEase\": \"in\"").size(), "");
+        assert(!ParseTrackJson(Missing, Nope, Err));
+        assert(Err.find("pitchEase") != std::string::npos);
+    }
+    std::printf("  pitch kind: ease in/out -29.5 deg at R 20 rebuilds the Raw crest to %.1e m, "
+                "turns %.3f deg, and survives the file\n", Length(EA.Position - EB.Position), Turned);
+}
+
 int main()
 {
     TestValidationCatchesTheNaNThatGeometryCannot();
@@ -2238,6 +2310,7 @@ int main()
     TestAdvanceFromAgreesWithEvaluateAt();
     TestEvaluateClampsAndSpansSegments();
     TestTorsionRatioMakesAnEasedLoopAGeneralisedHelix();
+    TestThePitchKindIsTheHillThePresetsAlwaysBuilt();
     std::printf("All track spline tests passed.\n");
     return 0;
 }
