@@ -696,6 +696,21 @@ private:
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Mesh")
 	bool bBuildStations = true;
 	int32 StationTriangles = 0;
+	/**
+	 * AIRGATES THAT MOVE. The station is built once per rebuild from a walk of
+	 * the track; these keep that walk, the spans and the settings so the gates
+	 * can be re-swept each frame WITHOUT walking again -- a walk is O(track
+	 * length) and the O(n^2) trap this project keeps unlearning. UpdateAirgates
+	 * reads every platform's gate bank (FCommandedBank::GroupPosition), and only
+	 * when a position changed re-sweeps the STEEL buffer and updates its
+	 * vertices in place, exactly as the train does. The mesh subscribes; it
+	 * never commands.
+	 */
+	std::vector<FTrackFrame> StationFrames;
+	std::vector<FStationSpan> StationSpans;
+	FStationSettings StationSettings;
+	std::vector<double> LastGatePositions;
+	void UpdateAirgates();
 
 	/**
 	 * WHERE THE GROUND IS, for the support placer: the level's Landscape,

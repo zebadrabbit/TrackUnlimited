@@ -8,6 +8,7 @@
 #include "StationProcess.h"
 
 #include <cassert>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 
@@ -397,6 +398,38 @@ void TestARestraintIsCOMMANDEDAndCONFIRMED()
     assert(Stuck.GroupsConfirmed() == 3);
     assert(!Stuck.IsClosedAndLocked());
     assert(Stuck.IsInTransit());
+
+    // WHERE EACH GROUP PHYSICALLY IS, for the airgates that draw it. Linear over
+    // the travel time; a re-command mid-swing starts from where it was; a group
+    // that jams holds the position the jam caught it at while the rest arrive.
+    {
+        FCommandedBank P;
+        P.TravelSeconds = 2.0;
+        P.Groups = 3;
+        assert(P.GroupPosition(0) == 0.0);                       // built open
+        P.Command(true);
+        for (int i = 0; i < 240; ++i) { P.Tick(Dt); }           // 1 s of 2
+        assert(std::fabs(P.GroupPosition(0) - 0.5) < 1e-6);
+        assert(std::fabs(P.GroupPosition(2) - 0.5) < 1e-6);
+        P.Command(false);                                        // reverse mid-swing
+        for (int i = 0; i < 120; ++i) { P.Tick(Dt); }           // 0.5 s back
+        assert(std::fabs(P.GroupPosition(1) - 0.25) < 1e-6);   // from 0.5, not from 1
+        for (int i = 0; i < 240 * 3; ++i) { P.Tick(Dt); }
+        assert(P.GroupPosition(1) == 0.0);
+
+        // Jammed from the first scan: the others close, it never leaves open.
+        assert(Stuck.GroupPosition(0) == 1.0 && Stuck.GroupPosition(2) == 0.0);
+        // Jammed a quarter of the way: it holds a quarter while the rest arrive.
+        FCommandedBank Late;
+        Late.TravelSeconds = 2.0;
+        Late.Groups = 2;
+        Late.Command(true);
+        for (int i = 0; i < 120; ++i) { Late.Tick(Dt); }
+        for (int i = 0; i < 240 * 3; ++i) { Late.Tick(Dt, 1); }
+        assert(Late.GroupPosition(0) == 1.0);
+        assert(std::fabs(Late.GroupPosition(1) - 0.25) < 1e-6);
+        assert(Late.GroupState(1) == FCommandedBank::EGroupState::Stuck);
+    }
 }
 
 void TestAStuckRestraintHoldsTheDispatchForEver()
@@ -436,6 +469,68 @@ void TestAStuckRestraintHoldsTheDispatchForEver()
         Crew.Serve(S, In, Dt);
     }
     assert(S.IsReadyToDispatch());
+}
+
+void TestTheHarnessesStayLockedUntilTheGatesHaveOpened()
+{
+    // THE DEVELOPER'S RULE FROM THE PLATFORM (2026-08-26): the airgates swing
+    // TOWARD the train because the strip between gate and train is controlled
+    // space, and it is controlled because nobody can leave a seat until the
+    // gates are fully open. The crew used to throw both switches in the same
+    // scan. Now the bars hold their last command until the gates report open.
+    FStationProcess S(EStationRole::Combined);
+    FAutoStationCrew Crew;
+    Crew.UnloadSeconds = 1.0;
+    Crew.LoadSeconds = 1.0;
+    Crew.SecureSeconds = 1.0;
+    Crew.Restraints.TravelSeconds = 1.0;
+    Crew.Gates.TravelSeconds = 2.0;
+
+    FStationInputs In;
+    In.bTrainPresent = true;
+    In.bTrainInPosition = true;
+    for (int i = 0; i < 240 * 20 && !S.IsReadyToDispatch(); ++i)
+    {
+        S.Update(In);
+        Crew.Serve(S, In, Dt);
+    }
+    assert(S.IsReadyToDispatch());
+    assert(Crew.Restraints.IsClosedAndLocked() && Crew.Gates.IsClosedAndLocked());
+
+    // It leaves, and the next train arrives locked, as every train does.
+    In.bTrainPresent = false;
+    In.bTrainInPosition = false;
+    for (int i = 0; i < 240 * 3; ++i) { S.Update(In); Crew.Serve(S, In, Dt); }
+    In.bTrainPresent = true;
+    In.bTrainInPosition = true;
+
+    // Scan by scan: the moment the gates are commanded open the bars are still
+    // commanded closed, and the bars are commanded open only in a scan where
+    // the gates already report fully open -- two seconds later, not the same one.
+    bool bSawGatesOpening = false, bSawBarsRelease = false;
+    double GatesOpenedAt = -1.0, BarsReleasedAt = -1.0;
+    for (int i = 0; i < 240 * 10; ++i)
+    {
+        S.Update(In);
+        Crew.Serve(S, In, Dt);
+        const double T = (i + 1) * Dt;
+        if (!bSawGatesOpening && !Crew.Gates.IsCommandedClosed())
+        {
+            bSawGatesOpening = true;
+            GatesOpenedAt = T;
+            assert(Crew.Restraints.IsCommandedClosed());    // still locked
+        }
+        if (bSawGatesOpening && !bSawBarsRelease && !Crew.Restraints.IsCommandedClosed())
+        {
+            bSawBarsRelease = true;
+            BarsReleasedAt = T;
+            assert(Crew.Gates.IsFullyOpen());               // and only now
+        }
+    }
+    assert(bSawGatesOpening && bSawBarsRelease);
+    assert(BarsReleasedAt - GatesOpenedAt >= 2.0 - 2.0 * Dt);
+    std::printf("  gates commanded open at %.2f s, bars released at %.2f s: locked through the swing\n",
+                GatesOpenedAt, BarsReleasedAt);
 }
 
 void TestAStuckGATEHoldsItToo()
@@ -549,6 +644,11 @@ void TestATrainDepartsSECURED()
         if (S.GetPhase() == EStationPhase::Unloading) { break; }
     }
     assert(S.GetPhase() == EStationPhase::Unloading);
+    // ...and not before the gates have opened (2026-08-26): the bars are still
+    // commanded closed while the gates travel, and release once they report.
+    assert(Crew.Restraints.IsCommandedClosed());
+    for (int i = 0; i < 240 * 5 && !Crew.Gates.IsFullyOpen(); ++i) { S.Update(In); Crew.Serve(S, In, Dt); }
+    S.Update(In); Crew.Serve(S, In, Dt);
     assert(!Crew.Restraints.IsCommandedClosed());
 }
 
@@ -662,6 +762,7 @@ int main()
     TestATiedDownDispatchButtonDispatchesNothing();
     TestARestraintIsCOMMANDEDAndCONFIRMED();
     TestAStuckRestraintHoldsTheDispatchForEver();
+    TestTheHarnessesStayLockedUntilTheGatesHaveOpened();
     TestAStuckGATEHoldsItToo();
     TestATrainDepartsSECURED();
     TestAnUnloadPlatformDoesNotCLOSETheBarsEither();

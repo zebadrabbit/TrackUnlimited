@@ -338,6 +338,7 @@ struct FCommandedBank
     {
         if (bClose != bCommandedClosed)
         {
+            From = MovingPosition();   // a re-command mid-swing starts from here
             bCommandedClosed = bClose;
             Elapsed = 0.0;
         }
@@ -350,6 +351,12 @@ struct FCommandedBank
         if (!(DeltaSeconds > 0.0))
         {
             return;
+        }
+        // A group that jams mid-swing stops WHERE THE JAM CAUGHT IT — frozen at
+        // the moving position of that instant, before this scan advances it.
+        if (bStuckGroup >= 0 && bStuckGroup != Stuck)
+        {
+            StuckPos = MovingPosition();
         }
         Elapsed += DeltaSeconds;
         Stuck = bStuckGroup;    // remembered, so WHICH one can be asked afterwards
@@ -407,11 +414,37 @@ struct FCommandedBank
     // one way and not all groups there: either still travelling, or stuck.
     bool IsInTransit() const { return Confirmed < Groups; }
 
+    // WHERE A GROUP PHYSICALLY IS, 0 = open, 1 = closed — for the mesh that
+    // draws it, which subscribes and never commands. Travel is linear over
+    // TravelSeconds from wherever the last command found it. A stuck group holds
+    // the position the jam caught it at, so on the platform the others close and
+    // it visibly stays — the first time that fault has been anything but a line
+    // on the maintenance panel.
+    double GroupPosition(int g) const
+    {
+        return (g >= 0 && g == Stuck) ? StuckPos : MovingPosition();
+    }
+
 private:
+    double MovingPosition() const
+    {
+        // ONE RATE, the full swing in TravelSeconds, from wherever the command
+        // found it — so a gate reversed at half-way is back in half the time.
+        // (The sensors still confirm at TravelSeconds, which is conservative.)
+        const double Target = bCommandedClosed ? 1.0 : 0.0;
+        const double Dist = Target - From;
+        const double Span = Dist < 0.0 ? -Dist : Dist;
+        double Step = TravelSeconds > 0.0 ? Elapsed / TravelSeconds : Span;
+        if (Step > Span) { Step = Span; }
+        return From + (Dist < 0.0 ? -Step : Step);
+    }
+
     bool bCommandedClosed = false;
     int Confirmed = 0;
     int Stuck = -1;
     double Elapsed = 0.0;
+    double From = 0.0;      // where the last command found the moving groups
+    double StuckPos = 0.0;  // where the jam caught the stuck one
 };
 
 // THE PART THAT GOES AWAY WHEN THERE ARE RIDERS.
@@ -539,20 +572,35 @@ struct FAutoStationCrew
         // an empty train, and Z1 opened them for boarding. The process was
         // already right — it never WAITED for them — but the crew was throwing a
         // switch nobody had asked it to throw.
-        Restraints.Command(bAlreadyLoaded || (bSecured && Station.NeedsRestraints()));
-        Restraints.Tick(DeltaSeconds, StuckGroup);
-
         // GATES OPEN WHILE RIDERS ARE MOVING and shut from the securing step until
         // the train has gone. Same device, different job: they are what keeps
         // somebody off the track while a train is being dispatched, so they must
         // still be shut while it actually departs -- which is exactly the window
         // the old rule opened them in.
         //
-        // NOT gated on the role, unlike the bars above. A gate protects the people
+        // NOT gated on the role, unlike the bars below. A gate protects the people
         // ON THE PLATFORM from a train that is about to move, and that is true
         // whether or not anybody is sitting in it.
         Gates.Command(bAlreadyLoaded || bSecured);
         Gates.Tick(DeltaSeconds, StuckGate);
+
+        // THE HARNESSES STAY LOCKED UNTIL THE GATES HAVE OPENED (2026-08-26,
+        // the developer's rule from the platform). The airgates swing TOWARD
+        // the train, into the operator's strip, because that strip is
+        // controlled space -- and it is controlled precisely because nobody
+        // can leave a seat until the gates are fully open. Until then the bars
+        // HOLD whatever they were last commanded: an arriving train's stay
+        // locked, an empty train's (unload sent it with the bars open) stay
+        // open rather than being thrown shut for a second and reopened.
+        if (bAlreadyLoaded || (bSecured && Station.NeedsRestraints()))
+        {
+            Restraints.Command(true);
+        }
+        else if (Gates.IsFullyOpen())
+        {
+            Restraints.Command(false);
+        }
+        Restraints.Tick(DeltaSeconds, StuckGroup);
 
         switch (P)
         {

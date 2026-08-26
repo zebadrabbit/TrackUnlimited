@@ -35,6 +35,15 @@ struct FStationSpan
     // four of these spans and one console; the caller marks the span the
     // console belongs to, which is the dispatch end of the contiguous run.
     bool bCabinet = true;
+    // WHERE EACH AIRGATE IS, 0 = open, 1 = closed, one per gate along the span
+    // in travel order — FCommandedBank::GroupPosition, read by the caller. Empty
+    // means closed, which is the fixed panel this drew before gates moved. A
+    // gate not listed is closed too. The mesh SUBSCRIBES; nothing here commands.
+    std::vector<double> GatePositions;
+    // Where the parked train's NOSE is — the zone's stop mark — so the gates
+    // are laid back from it one per row and face the seats. Negative: unknown,
+    // and the rows are centred in the span instead.
+    double NoseS = -1.0;
 };
 
 struct FStationSettings
@@ -43,7 +52,10 @@ struct FStationSettings
     // clear the widest train; the top sits PlatformBelowHeartM under the
     // heartline, which puts it about at a car's floor.
     double InboardM = 0.95;
-    double WidthM = 2.50;
+    // Wide enough for an OPERATOR'S STRIP between the stripe and the fence
+    // line (GateSetbackM) and queue bays behind the fence. 2.5 m put the fence
+    // a third of a metre off the stripe, with nowhere for anyone to stand.
+    double WidthM = 4.00;
     double PlatformBelowHeartM = 0.75;
     double SlabDepthM = 1.00;
 
@@ -51,20 +63,103 @@ struct FStationSettings
     double StripeWidthM = 0.15;
     double StripeThickM = 0.012;
 
-    // Airgates: one per GatePitchM (a car), GateHeightM tall, set back from the
-    // edge so a gate can be stood behind.
-    double GatePitchM = 3.0;
+    // AIRGATES AND THE FENCE BETWEEN THEM. From the reference shots
+    // (W:\screenshots, 2026-08-25 2047xx, not committed): the platform edge is
+    // a FIXED fence of posts, two rails and vertical bars along its whole
+    // length, and an airgate is a NARROW gate in it — one per seat row, about
+    // 0.9 m, hinged on a post and swinging into the queue bay behind it. The
+    // first version drew one whole fence section per car and swung THAT, 2.7 m
+    // of it, off the far edge of a 2.5 m platform.
+    //
+    // Rows are laid back from the PARKED train's nose (FStationSpan::NoseS,
+    // the stop mark) at GatePitchM / RowsPerCar, so a gate faces the seat it
+    // serves; without a nose the rows are centred in the span. One row per
+    // car is the seat model's own default (Seat.h).
+    double GatePitchM = 3.0;        // a car
+    int RowsPerCar = 1;
+    double GateWidthM = 0.90;
     double GateHeightM = 1.10;
-    double GateSetbackM = 0.35;
+    // THE FENCE LINE, back from the stripe: the operator's strip. From the
+    // reference shots, about a metre and a half of platform between the stripe
+    // and the gates, which is where the crew walks the train and where an open
+    // gate swings INTO.
+    double GateSetbackM = 1.60;
     double PostDiameterM = 0.05;
     double RailDiameterM = 0.04;
+    double BarDiameterM = 0.02;
+    double BarSpacingM = 0.15;
     int Sides = 6;
+    // A gate is hinged on its upstream post and swings TOWARD THE TRAIN, away
+    // from the guests: an automated gate does not swing into a queue of
+    // people, and the strip between gate and train is CONTROLLED space — the
+    // harnesses stay locked until the gates have opened, so nobody is in it.
+    // (The first version swung onto the platform, into the queue.) Fully open
+    // is this many degrees off the fence line.
+    double GateSwingDeg = 90.0;
 
     // The cabinet, at the dispatch end, against the outboard edge.
     double CabinetLengthM = 1.20;
     double CabinetWidthM = 0.60;
     double CabinetHeightM = 1.30;
 };
+
+// THE GATE LAYOUT, one answer for the mesher and for whoever maps gates onto a
+// bank's sensed sections: gate centres along the span, in travel order. A row
+// is GatePitchM / RowsPerCar; from a known nose the rows are laid back from it
+// and only those wholly inside the span are gates; otherwise as many rows as
+// fit are centred in the span.
+inline std::vector<double> StationGateCentres(const FStationSpan& Span, const FStationSettings& St)
+{
+    std::vector<double> Out;
+    const int Rows = St.RowsPerCar < 1 ? 1 : St.RowsPerCar;
+    const double Pitch = St.GatePitchM / Rows;
+    const double Len = Span.EndS - Span.StartS;
+    if (!(Pitch > 0.0) || Len < St.GateWidthM) { return Out; }
+    if (Span.NoseS >= 0.0)
+    {
+        for (int k = 0; k < 1000; ++k)
+        {
+            const double C = Span.NoseS - (k + 0.5) * Pitch;
+            if (C - St.GateWidthM * 0.5 < Span.StartS) { break; }
+            if (C + St.GateWidthM * 0.5 <= Span.EndS) { Out.insert(Out.begin(), C); }
+        }
+        return Out;
+    }
+    const int N = static_cast<int>(std::floor(Len / Pitch));
+    const double Start = Span.StartS + (Len - N * Pitch) * 0.5;
+    for (int g = 0; g < N; ++g) { Out.push_back(Start + (g + 0.5) * Pitch); }
+    return Out;
+}
+
+inline int StationGateCount(const FStationSpan& Span, const FStationSettings& St)
+{
+    return static_cast<int>(StationGateCentres(Span, St).size());
+}
+
+// A GATE OPENS ONLY ONTO A CAR. A gate whose row has nothing parked at it is
+// an open door onto the track, whatever the bank was commanded -- the
+// developer's platform rule (2026-08-26), found on the small-batch preset:
+// a 6 m train on a 10 m position has three gates and two cars, and the third
+// gate swung open onto nothing. True whether a train never reaches the row or
+// parks short of it. The row is served when its centre lies within a train's
+// span, measured the short way round on a circuit. Stands in for the
+// car-in-position sensor a real gate section has; the caller supplies the
+// spans, this decides nothing about the bank.
+inline bool StationGateServed(double CentreS, double RearS, double FrontS,
+                              bool bCircuit, double TotalLength)
+{
+    if (!bCircuit || !(TotalLength > 0.0))
+    {
+        return CentreS >= RearS - 1e-9 && CentreS <= FrontS + 1e-9;
+    }
+    auto Wrap = [TotalLength](double S)
+    {
+        S = std::fmod(S, TotalLength);
+        return S < 0.0 ? S + TotalLength : S;
+    };
+    const double Len = Wrap(FrontS - RearS);
+    return Wrap(CentreS - RearS) <= Len + 1e-9;
+}
 
 struct FStationMesh
 {
@@ -119,28 +214,83 @@ inline FStationMesh BuildStations(const std::vector<FTrackFrame>& Frames,
         SweepRect(Out.Concrete, Slab, St.WidthM * 0.5, St.SlabDepthM * 0.5);
         SweepRect(Out.Stripe, Stripe, St.StripeWidthM * 0.5, St.StripeThickM * 0.5);
 
-        // ---- THE AIRGATES: one per car, a panel of two posts and two rails
-        // along the edge, with a gap between panels where the gate swings.
-        const int N = static_cast<int>(std::floor(Len / St.GatePitchM));
-        const double Start = Span.StartS + (Len - N * St.GatePitchM) * 0.5;
-        for (int g = 0; g < N; ++g)
+        // ---- THE FENCE AND THE AIRGATES IN IT. Along the whole edge line, a
+        // fixed fence: a post at each end and at each gate opening, a top and a
+        // mid rail between posts, vertical bars every BarSpacingM. In each
+        // opening, one NARROW gate per seat row — the same posts, rails and bars
+        // as a fence panel, GateWidthM wide — hinged on the opening's upstream
+        // post and swinging TOWARD THE TRAIN, into the operator's strip, by
+        // (1 - position) of the full swing. Closed, it closes the fence line;
+        // open, it lies across the strip and stays clear of the train; jammed,
+        // it stays wherever its bank says.
+        //
+        // Same struts in the same order whatever the angles, which is what
+        // lets the caller UPDATE the steel buffer's vertices in place each
+        // frame rather than recreate the section.
+        auto EdgeFoot = [&](double At)
         {
-            const double A = Start + g * St.GatePitchM + 0.15;
-            const double B = Start + (g + 1) * St.GatePitchM - 0.15;
-            const FTrackFrame Fa = FrameAt(Frames, S, A);
-            const FTrackFrame Fb = FrameAt(Frames, S, B);
-            auto Foot = [&](const FTrackFrame& F)
+            const FTrackFrame F = FrameAt(Frames, S, At);
+            return F.Position - DeckUp() * St.PlatformBelowHeartM
+                + FlatOutward(F, true) * (Side * (St.InboardM + St.GateSetbackM));
+        };
+        const FVec3 Rise = DeckUp() * St.GateHeightM;
+        const FTrackFrame F0 = FrameAt(Frames, S, Span.StartS);
+        const FVec3 TowardTrain = FlatOutward(F0, true) * (-Side);
+        // A panel between two feet, in a given direction for its free end: post
+        // at the far end only (the near post belongs to whoever came before),
+        // two rails, and bars from the deck to the top rail.
+        auto Panel = [&](const FVec3& From, const FVec3& To, bool bFarPost, double PostR)
+        {
+            if (bFarPost)
             {
-                return F.Position - DeckUp() * St.PlatformBelowHeartM
-                    + FlatOutward(F, true) * (Side * (St.InboardM + St.GateSetbackM));
-            };
-            const FVec3 Pa = Foot(Fa), Pb = Foot(Fb);
-            const FVec3 Rise = DeckUp() * St.GateHeightM;
-            SweepStrut(Out.Steel, Pa, Pa + Rise, Fa.Tangent, St.PostDiameterM * 0.5, St.Sides);
-            SweepStrut(Out.Steel, Pb, Pb + Rise, Fb.Tangent, St.PostDiameterM * 0.5, St.Sides);
-            SweepStrut(Out.Steel, Pa + Rise, Pb + Rise, DeckUp(), St.RailDiameterM * 0.5, St.Sides);
-            SweepStrut(Out.Steel, Pa + Rise * 0.5, Pb + Rise * 0.5, DeckUp(), St.RailDiameterM * 0.5, St.Sides);
+                SweepStrut(Out.Steel, To, To + Rise, F0.Tangent, PostR, St.Sides);
+            }
+            const FVec3 Run = To - From;
+            const double RunLen = Length(Run);
+            if (RunLen <= 2.0 * PostR) { return; }
+            // Rails end on the posts' FACES, not their axes: two rails meeting
+            // on a post with identical end rings weld into one open tube, and
+            // the signed-volume check says so. It is also where rails end.
+            const FVec3 Dir = Run * (1.0 / RunLen);
+            const FVec3 A = From + Dir * PostR;
+            const FVec3 B = To - Dir * PostR;
+            SweepStrut(Out.Steel, A + Rise, B + Rise, DeckUp(), St.RailDiameterM * 0.5, St.Sides);
+            SweepStrut(Out.Steel, A + Rise * 0.5, B + Rise * 0.5, DeckUp(), St.RailDiameterM * 0.5, St.Sides);
+            for (int b = 1; b * St.BarSpacingM < RunLen - PostR; ++b)
+            {
+                const FVec3 P = From + Dir * (b * St.BarSpacingM);
+                SweepStrut(Out.Steel, P, P + Rise, F0.Tangent, St.BarDiameterM * 0.5, St.Sides);
+            }
+        };
+
+        const std::vector<double> Centres = StationGateCentres(Span, St);
+        const double Hw = St.GateWidthM * 0.5;
+        double At = Span.StartS;
+        SweepStrut(Out.Steel, EdgeFoot(At), EdgeFoot(At) + Rise, F0.Tangent, St.PostDiameterM * 0.5, St.Sides);
+        for (std::size_t g = 0; g < Centres.size(); ++g)
+        {
+            const double HingeS = Centres[g] - Hw;
+            const double LatchS = Centres[g] + Hw;
+            // The fence up to this opening, ending on the hinge post.
+            Panel(EdgeFoot(At), EdgeFoot(HingeS), true, St.PostDiameterM * 0.5);
+
+            // THE GATE, hinged on that post. Its closed line runs to the latch
+            // post less a gap; its swing goes onto the platform.
+            const double Position = g < Span.GatePositions.size() ? Span.GatePositions[g] : 1.0;
+            const double Open = Position < 0.0 ? 1.0 : Position > 1.0 ? 0.0 : 1.0 - Position;
+            const double Theta = Open * St.GateSwingDeg * 3.14159265358979323846 / 180.0;
+            const FVec3 Hinge = EdgeFoot(HingeS);
+            FVec3 Along = EdgeFoot(LatchS - 0.06) - Hinge;
+            Along = Along - DeckUp() * Dot(Along, DeckUp());
+            const FVec3 Free = Hinge + Along * std::cos(Theta) + TowardTrain * (std::sin(Theta) * Length(Along));
+            Panel(Hinge, Free, true, St.PostDiameterM * 0.5);
+
+            // And the latch post, where the fence resumes.
+            SweepStrut(Out.Steel, EdgeFoot(LatchS), EdgeFoot(LatchS) + Rise, F0.Tangent, St.PostDiameterM * 0.5, St.Sides);
+            At = LatchS;
         }
+        // The fence from the last opening to the end of the span.
+        Panel(EdgeFoot(At), EdgeFoot(Span.EndS), true, St.PostDiameterM * 0.5);
 
         // ---- THE CABINET, at the dispatch end: the operator stands where the
         // train leaves. Against the outboard edge, so it is not in the gates.

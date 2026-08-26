@@ -6026,6 +6026,111 @@ bool ATUCoasterRide::RunDocumentSmokeTest()
 				StationTriangles);
 		}
 
+		// AND THE GATES MOVE. Open the first platform's bank, then shut it with
+		// section 0 jammed: the jammed gate stays where it was while the rest
+		// travel, and the steel section keeps its vertex count throughout -- it
+		// is UPDATED, never recreated. Read off LastGatePositions, which is what
+		// the mesh was actually swept from, not off the bank.
+		if (StationTriangles > 0 && Platforms.Num() > 0 && StationSteelMesh)
+		{
+			FTUPlatform& P = Platforms[0];
+			auto SteelVerts = [this]() -> int32
+			{
+				const FProcMeshSection* S = StationSteelMesh->GetProcMeshSection(0);
+				return S ? S->ProcVertexBuffer.Num() : 0;
+			};
+			const int32 Verts = SteelVerts();
+			const int32 SavedStuck = P.Crew.StuckGate;
+			const double Dt = 1.0 / 240.0;
+			// Which gates have a car at them, off the same spans UpdateAirgates
+			// reads: a gate nobody is sitting at must stay SHUT throughout.
+			std::vector<bool> Served;
+			{
+				const FStationSpan* Sp = nullptr;
+				for (const FStationSpan& S : StationSpans)
+				{
+					if (ZoneSpans.IsValidIndex(P.Zone) && FMath::Abs(ZoneSpans[P.Zone].StartS - S.StartS) < 1e-6) { Sp = &S; }
+				}
+				if (Sp)
+				{
+					for (double C : StationGateCentres(*Sp, StationSettings))
+					{
+						bool b = false;
+						for (const TUniquePtr<FTrain>& T : Trains)
+						{
+							b = b || StationGateServed(C, T->GetRearS(), T->GetFrontS(), bTrackIsCircuit, Track.TotalLength());
+						}
+						Served.push_back(b);
+					}
+				}
+			}
+			const int32 N = static_cast<int32>(Served.size());
+			const int32 Groups = FMath::Max(1, P.Crew.Gates.Groups);
+			auto GroupOf = [&](int32 g) { return (g * Groups) / FMath::Max(1, N); };
+			// The check needs a served gate in section 0 (the one to jam) and a
+			// served gate in another section (the ones that close).
+			int32 ServedJammed = -1, ServedMoving = -1;
+			for (int32 g = 0; g < N; ++g)
+			{
+				if (!Served[g]) { continue; }
+				if (GroupOf(g) == 0) { ServedJammed = g; }
+				else { ServedMoving = g; }
+			}
+			// A snapshot is consistent when every gate reads: unserved -> shut;
+			// served in section 0 -> Jammed; served elsewhere -> Moving (within tolerance).
+			auto Consistent = [&](const std::vector<double>& Pos, double Jammed, double Moving, double Tol)
+			{
+				if (static_cast<int32>(Pos.size()) != N) { return false; }
+				for (int32 g = 0; g < N; ++g)
+				{
+					const double Want = !Served[g] ? 1.0 : (GroupOf(g) == 0 ? Jammed : Moving);
+					if (FMath::Abs(Pos[g] - Want) > Tol) { return false; }
+				}
+				return true;
+			};
+			P.Crew.StuckGate = -1;
+			P.Crew.Gates.Command(false);
+			for (int32 i = 0; i < 240 * 5; ++i) { P.Crew.Gates.Tick(Dt, -1); }
+			UpdateAirgates();
+			const bool bAllOpen = Consistent(LastGatePositions, 0.0, 0.0, 0.0);
+			P.Crew.StuckGate = 0;
+			P.Crew.Gates.Command(true);
+			for (int32 i = 0; i < static_cast<int32>(120.0 * P.Crew.Gates.TravelSeconds); ++i)
+			{
+				P.Crew.Gates.Tick(Dt, 0);
+			}
+			UpdateAirgates();
+			const std::vector<double> Mid = LastGatePositions;
+			for (int32 i = 0; i < 240 * 5; ++i) { P.Crew.Gates.Tick(Dt, 0); }
+			UpdateAirgates();
+			const std::vector<double> End = LastGatePositions;
+			const bool bMidway = Consistent(Mid, 0.0, 0.5, 0.2);
+			const bool bJammedStays = Consistent(End, 0.0, 1.0, 0.0);
+			int32 Unserved = 0;
+			for (bool b : Served) { if (!b) { ++Unserved; } }
+			if (ServedJammed < 0 || ServedMoving < 0 || !bAllOpen || !bMidway || !bJammedStays
+				|| Verts == 0 || SteelVerts() != Verts)
+			{
+				UE_LOG(LogTUEvents, Error,
+					TEXT("smoke: the airgates do not move as the bank says (gates %d, served in section 0: %d, ")
+					TEXT("served elsewhere: %d, open %d, midway %d, jammed stays %d, vertices %d -> %d)"),
+					N, ServedJammed, ServedMoving, bAllOpen, bMidway, bJammedStays, Verts, SteelVerts());
+				Failures.Add(TEXT("airgates"));
+			}
+			else
+			{
+				UE_LOG(LogTUEvents, Log,
+					TEXT("smoke: the airgates move -- %d gates (%d with no car at them, kept shut), jammed section 0 ")
+					TEXT("stays open while the rest close (midway %.2f), %d steel vertices updated in place"),
+					N, Unserved, Mid[ServedMoving], Verts);
+			}
+			// Hand the bank back to the crew as it was.
+			P.Crew.StuckGate = SavedStuck;
+			P.Crew.Gates.Command(false);
+			for (int32 i = 0; i < 240 * 5; ++i) { P.Crew.Gates.Tick(Dt, SavedStuck); }
+			UpdateAirgates();
+		}
+
 		// ===================== AND NONE AUTHORS NOTHING =====================
 		//
 		// The branch worth checking, because the other settings differ only in
@@ -6334,6 +6439,17 @@ bool ATUCoasterRide::RunDocumentSmokeTest()
 			CarCount = 5; CarLengthM = 3.f;
 			RebuildFromSegments();
 			StartFromTemplate(3);
+			// A GATE OPENS ONLY ONTO A CAR, on the ride that showed the hole: a
+			// 6 m train on 10 m positions has three gates a position and two
+			// cars. At boot the banks are open; a gate with a car reads open,
+			// the one with nothing at it must read SHUT.
+			UpdateAirgates();
+			int32 GatesShutForNoCar = 0, GatesOpenOntoCars = 0;
+			for (double Pos : LastGatePositions)
+			{
+				if (Pos == 1.0) { ++GatesShutForNoCar; }
+				else if (Pos == 0.0) { ++GatesOpenOntoCars; }
+			}
 			int32 MarksPastEnd = 0;
 			for (int32 z = 0; StopMarks && z < ZoneSpans.Num() && z < static_cast<int32>(StopMarks->Num()); ++z)
 			{
@@ -6359,13 +6475,15 @@ bool ATUCoasterRide::RunDocumentSmokeTest()
 			const bool bTripped = (Drives && Drives->IsEmergencyStopped())
 				|| bEmergencyStop || TrainWrecked.Contains(true);
 			if (LastClearance.ClosestApproach < CollisionCorridorM || DeviceErrors != 0
-				|| Moving == 0 || bTripped || MarksPastEnd != 0)
+				|| Moving == 0 || bTripped || MarksPastEnd != 0
+				|| GatesShutForNoCar == 0 || GatesOpenOntoCars == 0)
 			{
 				UE_LOG(LogTUEvents, Error,
 					TEXT("smoke: the showcase is out of spec (clearance %.2f m against %.1f, ")
-					TEXT("%d device error(s), %d stop mark(s) past their device, %d of %d trains moving at boot, tripped %d -- %s)"),
+					TEXT("%d device error(s), %d stop mark(s) past their device, %d of %d trains moving at boot, ")
+					TEXT("gates shut for no car %d, open onto cars %d, tripped %d -- %s)"),
 					LastClearance.ClosestApproach, CollisionCorridorM, DeviceErrors, MarksPastEnd,
-					Moving, Trains.Num(), bTripped,
+					Moving, Trains.Num(), GatesShutForNoCar, GatesOpenOntoCars, bTripped,
 					Drives ? UTF8_TO_TCHAR(Drives->EmergencyStopReason()) : TEXT("no drives"));
 				Failures.Add(TEXT("showcase-spec"));
 			}
@@ -6373,8 +6491,9 @@ bool ATUCoasterRide::RunDocumentSmokeTest()
 			{
 				UE_LOG(LogTUEvents, Log,
 					TEXT("smoke: the showcase is in spec -- clearance %.2f m, no device errors, every stop mark inside its device, ")
-					TEXT("%d of %d trains staged moving, %.0f s live with no trip and no wreck"),
-					LastClearance.ClosestApproach, Moving, Trains.Num(), LiveS);
+					TEXT("%d of %d trains staged moving, %d gate(s) shut for want of a car and %d open onto one, ")
+					TEXT("%.0f s live with no trip and no wreck"),
+					LastClearance.ClosestApproach, Moving, Trains.Num(), GatesShutForNoCar, GatesOpenOntoCars, LiveS);
 			}
 			RebuildFromSegments();
 		}
@@ -9398,6 +9517,80 @@ void ATUCoasterRide::PushOrUpdateMeshSection(UProceduralMeshComponent* Target,
 		TArray<FLinearColor>(), TArray<FProcMeshTangent>(), /*bCreateCollision*/ false);
 }
 
+// ===================== THE AIRGATES, EVERY FRAME =====================
+//
+// THE GATES SUBSCRIBE. Each platform position's bank (FCommandedBank, the same
+// device the console's GATES selector commands and the dispatch permissive
+// reads) says where every section physically is; the mesh reads that and never
+// commands -- Show is read-only, and a mesh is show. Only the steel buffer
+// moves, and only when a position changed: a bank in transit re-sweeps and
+// updates its vertices in place for its two seconds, a bank at rest costs a
+// comparison. A jammed section stays visibly open while the others close --
+// the first time that fault has been anything but a line on the maintenance
+// panel.
+void ATUCoasterRide::UpdateAirgates()
+{
+	if (!bBuildStations || StationSpans.empty() || StationFrames.size() < 2)
+	{
+		return;
+	}
+	std::vector<double> Now;
+	for (FStationSpan& Sp : StationSpans)
+	{
+		Sp.GatePositions.clear();
+		// The platform this span IS: Platforms carry a zone index, and Zones and
+		// ZoneSpans are built side by side in the same walk.
+		const FTUPlatform* At = nullptr;
+		for (const FTUPlatform& P : Platforms)
+		{
+			if (ZoneSpans.IsValidIndex(P.Zone)
+				&& FMath::Abs(ZoneSpans[P.Zone].StartS - Sp.StartS) < 1e-6)
+			{
+				At = &P;
+				break;
+			}
+		}
+		// The mesher's own layout, so the count cannot disagree with the gates drawn.
+		const std::vector<double> Centres = StationGateCentres(Sp, StationSettings);
+		const int32 N = static_cast<int32>(Centres.size());
+		for (int32 g = 0; g < N; ++g)
+		{
+			// A GATE OPENS ONLY ONTO A CAR (StationGateServed): a row with no
+			// car parked at it stays shut whatever the bank says, or it is an
+			// open door onto the track. The train's span stands in for the
+			// car-in-position sensor a real gate section has.
+			bool bServed = false;
+			for (const TUniquePtr<FTrain>& T : Trains)
+			{
+				if (StationGateServed(Centres[static_cast<std::size_t>(g)], T->GetRearS(), T->GetFrontS(),
+					bTrackIsCircuit, Track.TotalLength()))
+				{
+					bServed = true;
+					break;
+				}
+			}
+			// A bank has GROUPS (sensed sections); a platform has one gate a
+			// row. Gates map onto sections proportionally, so a four-section
+			// bank on a six-gate platform jams a pair when a section jams.
+			double Pos = 1.0;
+			if (At != nullptr && bServed)
+			{
+				const int32 Groups = FMath::Max(1, At->Crew.Gates.Groups);
+				Pos = At->Crew.Gates.GroupPosition((g * Groups) / FMath::Max(1, N));
+			}
+			Sp.GatePositions.push_back(Pos);
+			Now.push_back(Pos);
+		}
+	}
+	if (Now == LastGatePositions)
+	{
+		return;
+	}
+	LastGatePositions = Now;
+	const FStationMesh Stn = BuildStations(StationFrames, StationSpans, StationSettings);
+	PushOrUpdateMeshSection(StationSteelMesh, Stn.Steel);
+}
+
 // ===================== THE TRAIN, EVERY FRAME =====================
 //
 // Nine engine cubes until today, one per PHYSICS SAMPLE POINT - which is a
@@ -10038,14 +10231,22 @@ void ATUCoasterRide::RebuildTrackMesh()
 	if (bBuildStations)
 	{
 		std::vector<FStationSpan> StSpans;
-		for (const FTUZoneSpan& Z : ZoneSpans)
+		for (int32 z = 0; z < ZoneSpans.Num(); ++z)
 		{
+			const FTUZoneSpan& Z = ZoneSpans[z];
 			if (Z.Kind != ETUSegmentZone::Station && Z.Kind != ETUSegmentZone::StationLoad
 				&& Z.Kind != ETUSegmentZone::StationUnload) { continue; }
 			FStationSpan P;
 			P.StartS = Z.StartS;
 			P.EndS = Z.EndS;
 			P.bLeft = PresetWalkwaySide != ETUWalkway::Right;
+			// The gates face the SEATS of the parked train: rows are laid back
+			// from the stop mark, which is where the nose parks. Zones and
+			// their stop marks are built side by side, same index.
+			if (StopMarks && static_cast<std::size_t>(z) < StopMarks->Num())
+			{
+				P.NoseS = StopMarks->PositionOf(static_cast<std::size_t>(z));
+			}
 			// THE CABINET GOES ON THE LAST POSITION OF A CONTIGUOUS PLATFORM:
 			// a span whose end is the next station span's start is not the end
 			// of the platform, and a console per position is four consoles.
@@ -10059,7 +10260,13 @@ void ATUCoasterRide::RebuildTrackMesh()
 		{
 			FStationSettings St;
 			if (CarLengthM > 0.5f) { St.GatePitchM = CarLengthM; }
-			const FStationMesh Stn = BuildStations(WalkTrack(Track, Settings.SampleSpacing), StSpans, St);
+			// Kept for UpdateAirgates: the walk, the spans and the settings. The
+			// gates are built CLOSED here; the first frame reads the banks.
+			StationFrames = WalkTrack(Track, Settings.SampleSpacing);
+			StationSpans = StSpans;
+			StationSettings = St;
+			LastGatePositions.clear();
+			const FStationMesh Stn = BuildStations(StationFrames, StationSpans, StationSettings);
 			PushMeshSection(StationConcreteMesh, Stn.Concrete);
 			PushMeshSection(StationSteelMesh, Stn.Steel);
 			PushMeshSection(StationStripeMesh, Stn.Stripe);
@@ -10070,6 +10277,9 @@ void ATUCoasterRide::RebuildTrackMesh()
 	}
 	if (StationTriangles == 0)
 	{
+		StationFrames.clear();
+		StationSpans.clear();
+		LastGatePositions.clear();
 		if (StationConcreteMesh) { StationConcreteMesh->ClearAllMeshSections(); }
 		if (StationSteelMesh) { StationSteelMesh->ClearAllMeshSections(); }
 		if (StationStripeMesh) { StationStripeMesh->ClearAllMeshSections(); }
@@ -11163,6 +11373,7 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 	// the boxes back. The physics is untouched either way - the sample points go on
 	// doing exactly what they always did, which is the whole point of the split.
 	RebuildTrainMesh();
+	UpdateAirgates();
 	if (Cars && Cars->IsVisible() == bBuildTrainMesh)
 	{
 		Cars->SetVisibility(!bBuildTrainMesh);
