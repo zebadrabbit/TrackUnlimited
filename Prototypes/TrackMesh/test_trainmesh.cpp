@@ -183,7 +183,8 @@ void TestEveryPartIsCLOSEDAndENCLOSESVolume()
     const FTrainMesh C = BuildCarMesh(S, 1.1, P);
 
     struct FPart { const FMeshBuffer* M; const char* Name; };
-    const FPart Parts[] = {{&C.Body, "body"}, {&C.Chassis, "chassis"}, {&C.Wheels, "wheels"}};
+    const FPart Parts[] = {{&C.Body, "body"}, {&C.Chassis, "chassis"}, {&C.Wheels, "wheels"},
+                           {&C.Seats, "seats"}};
 
     for (const FPart& Part : Parts)
     {
@@ -356,7 +357,35 @@ void TestTheBodyLeavesTheHEARTLINEInTheOpen()
     std::printf("  body spans %.3f to %.3f m about the heartline (rails at %.3f)\n",
                 Bottom, Top, -H);
     assert(std::fabs(Bottom - (-H)) < 1e-9 && "the floor sits on the rail plane");
-    assert(Top < 0.0 && "the roof must stay below the heartline the camera sits at");
+    assert(Top < 0.0 && "the rim must stay below the heartline the camera sits at");
+
+    // ---- AND IT IS A TUB, NOT A BOX. The first lap bars closed into a roofed
+    // shell and vanished. A point just under the rim on the centreline is OPEN
+    // AIR; a point in the wall is shell. Point-in-polygon on the section.
+    const std::vector<FVec2> Sec = CarBodySection(S, ShellKeepOut(S, P));
+    auto Inside = [&](FVec2 Q)
+    {
+        bool bIn = false;
+        for (std::size_t i = 0, j = Sec.size() - 1; i < Sec.size(); j = i++)
+        {
+            const FVec2& A = Sec[i];
+            const FVec2& B = Sec[j];
+            if ((A.V > Q.V) != (B.V > Q.V)
+                && Q.U < (B.U - A.U) * (Q.V - A.V) / (B.V - A.V) + A.U)
+            {
+                bIn = !bIn;
+            }
+        }
+        return bIn;
+    };
+    const double Hh = S.BodyHeightM * 0.5;
+    assert(!Inside({0.0, Hh - 0.01}) && "open on top: the cabin is air, not shell");
+    assert(Inside({S.BodyWidthM * 0.5 - 0.02, Hh - S.BodyCornerRadiusM - 0.05}) && "the wall is shell");
+    const double CabinZ = -H + CabinFloorHeight(S, ShellKeepOut(S, P));
+    assert(!Inside({0.0, CabinZ - (-H) - Hh + 0.01}) && "air just above the cabin floor");
+    assert(Inside({0.0, CabinZ - (-H) - Hh - 0.01}) && "shell just below it");
+    std::printf("  open on top: cabin floor %.2f m above the rails, rim at %.2f\n",
+                CabinZ - (-H), S.BodyHeightM);
 
     // ---- SILENT ON AN ORDINARY TRAIN. The checks that matter are the ones that
     // say nothing about the normal case; one that complained about every vehicle
@@ -848,7 +877,10 @@ void TestTheLapBarsSwingWithTheBankAndStayClosed()
     // where a real lap bar is; the second is what makes an open bar readable
     // from the platform, which is the whole point of drawing it.
     const double RimZ = Cars[0].Frame.Position.Z - Heartline + S.BodyHeightM;
+    const double SeatTopZ = Cars[0].Frame.Position.Z - Heartline
+        + CabinFloorHeight(S, ShellKeepOut(S, P)) + S.SeatHeightM;
     assert(MaxZ(Closed.Restraints) < RimZ);
+    assert(MaxZ(Closed.Restraints) > SeatTopZ && "closed, the bar is over the lap, not the floor");
     assert(MaxZ(Open.Restraints) > RimZ);
     std::printf("  %d bars: closed tops out %.2f m under the rim, raised %.2f m over it\n",
                 Rows, RimZ - MaxZ(Closed.Restraints), MaxZ(Open.Restraints) - RimZ);

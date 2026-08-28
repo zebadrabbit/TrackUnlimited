@@ -143,6 +143,7 @@ ATUCoasterRide::ATUCoasterRide()
 	TrainWheelMesh = MakeTrackMesh(TEXT("TrainWheelMesh"));
 	TrainCouplerMesh = MakeTrackMesh(TEXT("TrainCouplerMesh"));
 	TrainRestraintMesh = MakeTrackMesh(TEXT("TrainRestraintMesh"));
+	TrainSeatMesh = MakeTrackMesh(TEXT("TrainSeatMesh"));
 
 	// Seeded so a freshly placed actor has a ride in it. Everything about that
 	// ride is data in the Details panel rather than code, which is the whole
@@ -10305,6 +10306,7 @@ void ATUCoasterRide::RebuildTrainMesh()
 		if (TrainWheelMesh) { TrainWheelMesh->ClearAllMeshSections(); }
 		if (TrainCouplerMesh) { TrainCouplerMesh->ClearAllMeshSections(); }
 		if (TrainRestraintMesh) { TrainRestraintMesh->ClearAllMeshSections(); }
+		if (TrainSeatMesh) { TrainSeatMesh->ClearAllMeshSections(); }
 		return;
 	}
 
@@ -10337,12 +10339,13 @@ void ATUCoasterRide::RebuildTrainMesh()
 			TrainPathTotal, NoseS, S, bTrackIsCircuit);
 		// THE BARS FOLLOW THE HARNESS BANK: the position SampleRestraints took
 		// off the platform this train is at, held while it is away from one.
-		const FTrainMesh One = BuildTrainMesh(Placed, Car, S, Heartline, RestraintPositions(t));
+		const FTrainMesh One = BuildTrainMesh(Placed, Car, S, Heartline, RestraintPositions(t), Profile);
 		AppendBuffer(All.Body, One.Body);
 		AppendBuffer(All.Chassis, One.Chassis);
 		AppendBuffer(All.Wheels, One.Wheels);
 		AppendBuffer(All.Couplers, One.Couplers);
 		AppendBuffer(All.Restraints, One.Restraints);
+		AppendBuffer(All.Seats, One.Seats);
 	}
 
 	PushOrUpdateMeshSection(TrainBodyMesh, All.Body);
@@ -10350,6 +10353,7 @@ void ATUCoasterRide::RebuildTrainMesh()
 	PushOrUpdateMeshSection(TrainWheelMesh, All.Wheels);
 	PushOrUpdateMeshSection(TrainCouplerMesh, All.Couplers);
 	PushOrUpdateMeshSection(TrainRestraintMesh, All.Restraints);
+	PushOrUpdateMeshSection(TrainSeatMesh, All.Seats);
 	// The train is built after the track, so its sections did not exist when
 	// the style was applied. Cheap: the instances are cached.
 	ApplyTrackStyle();
@@ -10578,6 +10582,7 @@ void ATUCoasterRide::ApplyTrackStyle()
 	Paint(TrainWheelMaterial, TrainWheelMesh, FLinearColor(0.05f, 0.05f, 0.05f), 0.75f, 0.f);  // polyurethane
 	Paint(TrainCouplerMaterial, TrainCouplerMesh, FLinearColor(0.28f, 0.29f, 0.30f), 0.45f, 0.80f);
 	Paint(TrainRestraintMaterial, TrainRestraintMesh, FLinearColor(0.02f, 0.02f, 0.025f), 0.55f, 0.f);  // padded bar
+	Paint(TrainSeatMaterial, TrainSeatMesh, FLinearColor(0.04f, 0.04f, 0.05f), 0.85f, 0.f);              // upholstery
 }
 
 void ATUCoasterRide::LoadBrakeSounds()

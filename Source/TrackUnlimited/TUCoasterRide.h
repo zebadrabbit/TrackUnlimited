@@ -775,6 +775,9 @@ private:
 	 *  airgates are by theirs. The mesh subscribes and never commands. */
 	UPROPERTY(VisibleAnywhere, Category = "TrackUnlimited|Mesh")
 	TObjectPtr<class UProceduralMeshComponent> TrainRestraintMesh;
+	/** The seats: a sixth, because upholstery is not gelcoat. */
+	UPROPERTY(VisibleAnywhere, Category = "TrackUnlimited|Mesh")
+	TObjectPtr<class UProceduralMeshComponent> TrainSeatMesh;
 
 	/** Off puts the old instanced cubes back, which is what every screenshot
 	 *  before today was taken with. One click, and the physics is untouched
@@ -952,6 +955,8 @@ private:
 	TObjectPtr<class UMaterialInstanceDynamic> TrainCouplerMaterial;
 	UPROPERTY(Transient)
 	TObjectPtr<class UMaterialInstanceDynamic> TrainRestraintMaterial;
+	UPROPERTY(Transient)
+	TObjectPtr<class UMaterialInstanceDynamic> TrainSeatMaterial;
 
 	/** Metres between rings. THE quality/cost knob, and a distance rather than a
 	 *  count so a long track does not come out coarser than a short one. */

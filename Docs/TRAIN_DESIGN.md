@@ -92,6 +92,18 @@ what the body and the bogies both attach to, so articulation has somewhere to ha
 Lofted: one cross-section swept along the car with `SweepTube`, the same call the rails and
 the handrails already use. 1.4 m wide, 0.9 m tall, seated into the chassis.
 
+**A TUB, NOT A BOX (2026-08-27).** The first section had a roof, and the first lap bars
+closed into it and vanished, then poked through it when raised — reported from a screenshot
+within the hour. The section now goes up the outer flank, over a rolled rim, DOWN the inner
+wall and across a cabin floor: open on top because riders sit in it. The cabin floor sits
+just above the shoulder where the flank first reaches full width, so the cavity cannot poke
+out through the taper over the wheels — the rider sits on the wheel wells, as on a real
+car. Non-convex, so the end caps are ear-clipped rather than fanned; the bulkheads close
+the cavity and the tub is still watertight and outward-wound (1.377 m³ of shell, where the
+box enclosed 2.669). Two seats a row — squab and backrest, their own buffer because
+upholstery is not gelcoat — and the lap bar's hinge is DERIVED from the squab, since a bar
+hinged at an authored height swings over nobody.
+
 **This is the only part with taste in it**, and the only part a later art pass would
 replace. Keep it a single function returning a cross-section, so replacing it is one edit.
 
@@ -186,7 +198,7 @@ articulation are engineering; only the shell is taste.
 
 ## Explicitly out of scope
 
-Riders and seat geometry; restraint animation; a second train style; per-seat lateral offset
+Riders; a second train style; per-seat lateral offset
 (that is the wing-coaster work, and `CarCount`'s own comment already notes *"a car is not a
 seat row yet"*); wheel spin; suspension travel; a train interior for rider-mode look-around
 (recorded as blocked on art in the Phase 2 camera card — this unblocks it, it does not

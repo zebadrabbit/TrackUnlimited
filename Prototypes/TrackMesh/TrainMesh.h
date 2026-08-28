@@ -92,16 +92,23 @@ struct FTrainMesh
     // the train that moves relative to the car — so it is built per PLACEMENT
     // from the bank's position rather than once per car. See AddRestraintBar.
     FMeshBuffer Restraints;
+    // And a sixth: the seats. Built with the car and stamped like the shell, in
+    // their own buffer because upholstery is not gelcoat — and because a bar
+    // over an empty red tub reads as nothing, where a bar over a seat reads as
+    // a lap bar.
+    FMeshBuffer Seats;
 
     std::size_t NumVertices() const
     {
         return Body.NumVertices() + Chassis.NumVertices()
-             + Wheels.NumVertices() + Couplers.NumVertices() + Restraints.NumVertices();
+             + Wheels.NumVertices() + Couplers.NumVertices() + Restraints.NumVertices()
+             + Seats.NumVertices();
     }
     std::size_t NumTriangles() const
     {
         return Body.NumTriangles() + Chassis.NumTriangles()
-             + Wheels.NumTriangles() + Couplers.NumTriangles() + Restraints.NumTriangles();
+             + Wheels.NumTriangles() + Couplers.NumTriangles() + Restraints.NumTriangles()
+             + Seats.NumTriangles();
     }
 };
 
@@ -120,8 +127,22 @@ struct FTrainSettings
     double BodyHeightM = 0.90;        // LOAD-BEARING — see BodySwallowsHeartline
     double BodyFloorWidthM = 0.52;    // at the floor, and it must clear the WHEELS
     double BodyTaperFraction = 0.45;  // how far up the flank reaches full width
-    double BodyCornerRadiusM = 0.15;
+    double BodyCornerRadiusM = 0.15;  // the rolled rim, and the WALL THICKNESS below it
     double BodyGapM = 0.30;           // pitch minus shell, so cars do not weld
+
+    // ---- The cabin. THE SHELL IS A TUB, NOT A BOX (2026-08-27). It had a roof,
+    // and the first lap bars closed into a closed box and vanished, then poked
+    // through the roof when raised — reported from a screenshot within the
+    // hour. A car body is open on top because riders sit in it; the cabin floor
+    // sits just above the shoulder, where the shell first reaches full width,
+    // so the cavity cannot poke out through the tapered flank.
+    double CabinFloorClearM = 0.06;   // cabin floor above the shoulder knee
+    double SeatWidthM = 0.45;
+    double SeatDepthM = 0.45;
+    double SeatHeightM = 0.30;        // squab, above the cabin floor
+    double SeatBackHeightM = 0.60;    // backrest, above the squab
+    double SeatBackDepthM = 0.08;
+    double SeatPitchM = 0.60;         // between the two seats of a row
 
     // ---- The chassis: what the body and the bogies both attach to, so
     // articulation has somewhere to happen.
@@ -164,7 +185,7 @@ struct FTrainSettings
     // allowed to disagree about how many rows a car has.
     int RowsPerCar = 1;
     double BarDiameterM = 0.06;
-    double BarHingeHeightM = 0.55;    // above the floor: hip height, seated
+    double BarHingeUpM = 0.05;        // above the squab: the hip, seated. DERIVED from the seat
     double BarHingeBackM = 0.15;      // behind the row centre, so it swings over the lap
     double BarArmLengthM = 0.45;
     double BarInsetM = 0.12;          // arms this far in from the shell's full width
@@ -196,6 +217,16 @@ inline double BogieOffset(const FTrainSettings& S)
     return std::max(0.10, S.CarLengthM * 0.5 - S.BogieInsetM);
 }
 
+// Where row j of a car sits along the shell, front row first — the same order
+// the station lays its gates in, so gate g and bar g face each other.
+inline double RowCentreX(const FTrainSettings& S, int Row)
+{
+    const int Rows = std::max(1, S.RowsPerCar);
+    const double ShellHalf = std::max(0.05, (S.CarLengthM - S.BodyGapM) * 0.5);
+    const double Pitch = 2.0 * ShellHalf / Rows;
+    return ShellHalf - (static_cast<double>(Row) + 0.5) * Pitch;
+}
+
 // SHORTER THAN HALF THE PITCH, ALWAYS. Two chassis that meet leave nowhere for
 // the coupler between them, and SweepStrut builds NOTHING from a zero-length
 // strut — so the failure is not an ugly coupler, it is no coupler and no
@@ -222,6 +253,72 @@ inline double ChassisHalfLength(const FTrainSettings& S)
 inline bool BodySwallowsHeartline(const FTrainSettings& S, double HeartlineHeight)
 {
     return S.BodyHeightM > HeartlineHeight;
+}
+
+// ===================== A CAP THAT SURVIVES A REFLEX CORNER =====================
+//
+// A fan from the centroid caps a convex section and nothing else: on a tub the
+// centroid lies in the cavity, and every fan triangle across the inner wall
+// comes out reversed — watertight, and inside out where it shows most. Ear
+// clipping triangulates any simple polygon, and the section is one by
+// construction. Returned in the section's own winding.
+inline std::vector<std::size_t> TriangulateSection(const std::vector<FVec2>& P)
+{
+    std::vector<std::size_t> Tri;
+    const std::size_t N = P.size();
+    if (N < 3) { return Tri; }
+    std::vector<std::size_t> Idx(N);
+    for (std::size_t i = 0; i < N; ++i) { Idx[i] = i; }
+
+    double Area2 = 0.0;
+    for (std::size_t i = 0; i < N; ++i)
+    {
+        const FVec2& A = P[i];
+        const FVec2& B = P[(i + 1) % N];
+        Area2 += A.U * B.V - B.U * A.V;
+    }
+    const bool bReversed = Area2 < 0.0;
+    if (bReversed) { std::reverse(Idx.begin(), Idx.end()); }
+
+    auto Cross2 = [&](std::size_t a, std::size_t b, std::size_t c)
+    {
+        return (P[b].U - P[a].U) * (P[c].V - P[a].V) - (P[b].V - P[a].V) * (P[c].U - P[a].U);
+    };
+    const double Eps = 1e-12;
+    auto Emit = [&](std::size_t a, std::size_t b, std::size_t c)
+    {
+        // Back in the caller's winding, so the flip test downstream still applies.
+        if (bReversed) { Tri.push_back(a); Tri.push_back(c); Tri.push_back(b); }
+        else           { Tri.push_back(a); Tri.push_back(b); Tri.push_back(c); }
+    };
+
+    while (Idx.size() > 3)
+    {
+        bool bFound = false;
+        const std::size_t M = Idx.size();
+        for (std::size_t i = 0; i < M && !bFound; ++i)
+        {
+            const std::size_t a = Idx[(i + M - 1) % M], b = Idx[i], c = Idx[(i + 1) % M];
+            if (Cross2(a, b, c) <= Eps) { continue; }   // reflex or flat: not an ear
+            bool bEar = true;
+            for (std::size_t k = 0; k < M && bEar; ++k)
+            {
+                const std::size_t q = Idx[k];
+                if (q == a || q == b || q == c) { continue; }
+                if (Cross2(a, b, q) >= -Eps && Cross2(b, c, q) >= -Eps && Cross2(c, a, q) >= -Eps)
+                {
+                    bEar = false;
+                }
+            }
+            if (!bEar) { continue; }
+            Emit(a, b, c);
+            Idx.erase(Idx.begin() + static_cast<std::ptrdiff_t>(i));
+            bFound = true;
+        }
+        if (!bFound) { break; }   // degenerate remainder: fan what is left, below
+    }
+    for (std::size_t i = 1; i + 1 < Idx.size(); ++i) { Emit(Idx[0], Idx[i], Idx[i + 1]); }
+    return Tri;
 }
 
 // ===================== A SECTION SWEEP, WHICH SweepTube IS NOT =====================
@@ -311,22 +408,16 @@ inline void SweepSection(FMeshBuffer& Out, const std::vector<FTubeRing>& Rings,
         }
     }
 
-    // Caps as a fan from the section's centroid. A car body has two free ends by
-    // definition, so an uncapped one is a length of open box — the same thing
-    // that made every tie a piece of open pipe before the ties were capped.
+    // Caps by ear clipping, so a tub's bulkheads close the cavity as well as
+    // the walls. A car body has two free ends by definition, so an uncapped one
+    // is a length of open box — the same thing that made every tie a piece of
+    // open pipe before the ties were capped.
+    const std::vector<std::size_t> CapTris = TriangulateSection(Section);
     auto Cap = [&](const FTubeRing& R, const FVec3& Outward)
     {
         if (Length(Outward) < 1e-12) { return; }
 
-        FVec2 C{0.0, 0.0};
-        for (const FVec2& P : Section) { C.U += P.U; C.V += P.V; }
-        C.U /= static_cast<double>(N);
-        C.V /= static_cast<double>(N);
-
-        const std::uint32_t Centre = static_cast<std::uint32_t>(Out.Position.size());
-        Out.Position.push_back(At(R, C));
-        Out.Normal.push_back(Outward);
-        Out.UV.push_back({0.5, 0.5});
+        const std::uint32_t Base = static_cast<std::uint32_t>(Out.Position.size());
         for (const FVec2& P : Section)
         {
             Out.Position.push_back(At(R, P));
@@ -337,13 +428,14 @@ inline void SweepSection(FMeshBuffer& Out, const std::vector<FTubeRing>& Rings,
         // The same test CapRing uses rather than an assumption about the basis:
         // a caller's AxisA/AxisB need not be right-handed with the sweep.
         const bool bFlip = Dot(Cross(R.AxisA, R.AxisB), Outward) < 0.0;
-        for (std::size_t j = 0; j < N; ++j)
+        for (std::size_t t = 0; t + 2 < CapTris.size(); t += 3)
         {
-            const std::uint32_t A = Centre + 1 + static_cast<std::uint32_t>(j);
-            const std::uint32_t B = Centre + 1 + static_cast<std::uint32_t>((j + 1) % N);
-            Out.Index.push_back(Centre);
-            if (bFlip) { Out.Index.push_back(B); Out.Index.push_back(A); }
-            else       { Out.Index.push_back(A); Out.Index.push_back(B); }
+            const std::uint32_t A = Base + static_cast<std::uint32_t>(CapTris[t]);
+            const std::uint32_t B = Base + static_cast<std::uint32_t>(CapTris[t + 1]);
+            const std::uint32_t C = Base + static_cast<std::uint32_t>(CapTris[t + 2]);
+            Out.Index.push_back(A);
+            if (bFlip) { Out.Index.push_back(C); Out.Index.push_back(B); }
+            else       { Out.Index.push_back(B); Out.Index.push_back(C); }
         }
     };
 
@@ -422,8 +514,35 @@ inline FShellKeepOut ShellKeepOut(const FTrainSettings& S, const FTrackProfile& 
     return K;
 }
 
+// Where the flank first reaches full width, above the floor. FULL WIDTH CANNOT
+// ARRIVE BEFORE THE WHEELS ARE PAST: the authored taper is taste and is honoured
+// wherever it is legal; below the running wheels it is not, so the taper gets
+// pushed UP rather than the shell being pushed OUT.
+inline double ShellShoulderHeight(const FTrainSettings& S, const FShellKeepOut& K)
+{
+    const double W = S.BodyWidthM * 0.5;
+    const double H = S.BodyHeightM * 0.5;
+    const double R = std::min(S.BodyCornerRadiusM, std::min(W, H) * 0.9);
+    const double Shoulder = S.BodyHeightM - R;
+    const double hAuthored = std::max(0.0, std::min(1.0, S.BodyTaperFraction)) * S.BodyHeightM;
+    return std::max(std::min(hAuthored, Shoulder), std::min(K.RunTopM + 0.02, Shoulder));
+}
+
+// The cabin floor, above the shell's floor line: just over the shoulder, so the
+// cavity sits inside the full-width part of the shell and never pokes out
+// through the tapered flank over the wheels. The rider sits on the wheel wells,
+// which is where a real one sits too.
+inline double CabinFloorHeight(const FTrainSettings& S, const FShellKeepOut& K)
+{
+    return std::min(ShellShoulderHeight(S, K) + S.CabinFloorClearM, S.BodyHeightM * 0.9);
+}
+
 // Returned counter-clockwise in (AxisA = rider's left, AxisB = up), relative to
 // the BODY CENTRE, which is the winding SweepSection wants.
+//
+// A TUB: up the outer flank, over the rolled rim, DOWN the inner wall, across
+// the cabin floor, and back the same way on the other side. Non-convex, which
+// is why the caps are ear-clipped.
 inline std::vector<FVec2> CarBodySection(const FTrainSettings& S,
                                         const FShellKeepOut& K)
 {
@@ -438,13 +557,9 @@ inline std::vector<FVec2> CarBodySection(const FTrainSettings& S,
     const double Wf = std::min(std::min(S.BodyFloorWidthM * 0.5, K.FloorHalfWidth), W);
     const double Wm = std::min(std::max(Wf, K.MidHalfWidth), W);
 
-    // FULL WIDTH CANNOT ARRIVE BEFORE THE WHEELS ARE PAST. The authored taper is
-    // taste and is honoured wherever it is legal; below the running wheels it is
-    // not, so the taper gets pushed UP rather than the shell being pushed OUT.
-    const double Shoulder = S.BodyHeightM - R;
-    const double hAuthored = std::max(0.0, std::min(1.0, S.BodyTaperFraction)) * S.BodyHeightM;
-    const double hFull = std::max(std::min(hAuthored, Shoulder),
-                                  std::min(K.RunTopM + 0.02, Shoulder));
+    const double hFull = ShellShoulderHeight(S, K);
+    const double Wi = W - R;                            // the inner wall
+    const double Vf = -H + CabinFloorHeight(S, K);      // the cabin floor
 
     const double Quarter = TrackMeshTwoPi * 0.25;
     const int ArcSteps = 3;
@@ -467,9 +582,12 @@ inline std::vector<FVec2> CarBodySection(const FTrainSettings& S,
         Out.push_back({W - R + R * std::cos(A), H - R + R * std::sin(A)});
     }
 
-    // Across the roof, then the mirror of all of that back down the right flank.
-    Out.push_back({W - R, H});
-    Out.push_back({-(W - R), H});
+    // NO ROOF. Down the inner wall, across the cabin floor, up the other inner
+    // wall, then the mirror of the flank back down the right-hand side.
+    Out.push_back({Wi, H});
+    Out.push_back({Wi, Vf});
+    Out.push_back({-Wi, Vf});
+    Out.push_back({-Wi, H});
     for (int k = ArcSteps; k >= 1; --k)
     {
         const double A = Quarter * (static_cast<double>(k) / (ArcSteps + 1.0));
@@ -537,6 +655,42 @@ inline FTrainMesh BuildCarMesh(const FTrainSettings& S, double HeartlineHeight,
         Rings[1] = {FVec3{ ShellHalf, 0.0, BodyCentreZ}, Across, Vertical, S.CarLengthM};
         SweepSection(M.Body, Rings, CarBodySection(S, ShellKeepOut(S, Profile)),
                      S.TextureMetres, true, true);
+    }
+
+    // ---- The seats: two a row on the cabin floor, a squab and a backrest each,
+    // so the lap bar has a lap to come down over. Boxes, swept along the car
+    // exactly as the shell is.
+    {
+        const FShellKeepOut K = ShellKeepOut(S, Profile);
+        const double FloorZ = RailZ + CabinFloorHeight(S, K);
+        auto Box = [&](double X0, double X1, double Y, double Z0, double Z1, double HalfW)
+        {
+            if (!(X1 > X0) || !(Z1 > Z0) || !(HalfW > 0.0)) { return; }
+            const double Zc = (Z0 + Z1) * 0.5, Hh = (Z1 - Z0) * 0.5;
+            const std::vector<FVec2> Rect = {{HalfW, -Hh}, {HalfW, Hh}, {-HalfW, Hh}, {-HalfW, -Hh}};
+            std::vector<FTubeRing> Rings(2);
+            Rings[0] = {FVec3{X0, Y, Zc}, Across, Vertical, 0.0};
+            Rings[1] = {FVec3{X1, Y, Zc}, Across, Vertical, X1 - X0};
+            SweepSection(M.Seats, Rings, Rect, S.TextureMetres, true, true);
+        };
+        const int Rows = std::max(1, S.RowsPerCar);
+        for (int r = 0; r < Rows; ++r)
+        {
+            const double RowX = RowCentreX(S, r);
+            for (int Side = 0; Side < 2; ++Side)
+            {
+                const double Y = (Side == 0 ? 1.0 : -1.0) * S.SeatPitchM * 0.5;
+                // The squab sits with its front third ahead of the row centre, and
+                // the backrest rises behind it, above the rim if it must — a
+                // headrest over the shell is what a real train has.
+                Box(RowX - S.SeatDepthM * 0.65, RowX + S.SeatDepthM * 0.35, Y,
+                    FloorZ, FloorZ + S.SeatHeightM, S.SeatWidthM * 0.5);
+                // 5 mm behind the squab rather than touching it: two boxes sharing a
+                // face are one mesh with a doubled edge, and the watertight check says so.
+                Box(RowX - S.SeatDepthM * 0.65 - S.SeatBackDepthM - 0.005, RowX - S.SeatDepthM * 0.65 - 0.005, Y,
+                    FloorZ, FloorZ + S.SeatHeightM + S.SeatBackHeightM, S.SeatWidthM * 0.5);
+            }
+        }
     }
 
     // ---- The chassis: a beam between the bogies, hung just under the rail plane
@@ -757,10 +911,15 @@ inline void AppendCarBuffer(FMeshBuffer& Out, const FMeshBuffer& Car, const FTra
 //
 // The hinge sits behind the row centre and the arm points forward when closed,
 // so the crossbar comes down over the lap rather than onto the hip.
-inline void AddRestraintBar(FMeshBuffer& Out, const FTrainSettings& S, double RailZ,
+inline void AddRestraintBar(FMeshBuffer& Out, const FTrainSettings& S,
+                            const FTrackProfile& Profile, double RailZ,
                             double RowX, double Position)
 {
     const double P = std::max(0.0, std::min(1.0, Position));
+    // THE HINGE IS ON THE SEAT, not at an authored height: the hip is where the
+    // squab puts it, and a bar hinged anywhere else swings over nobody.
+    const double HingeZ = RailZ + CabinFloorHeight(S, ShellKeepOut(S, Profile))
+                        + S.SeatHeightM + S.BarHingeUpM;
     const double Swing = (1.0 - P) * S.BarRaisedDeg * (TrackMeshTwoPi / 360.0);
     const FVec3 Dir{std::cos(Swing), 0.0, std::sin(Swing)};
     const double HalfY = std::max(0.05, S.BodyWidthM * 0.5 - S.BarInsetM);
@@ -773,21 +932,11 @@ inline void AddRestraintBar(FMeshBuffer& Out, const FTrainSettings& S, double Ra
     for (int Side = 0; Side < 2; ++Side)
     {
         const double Y = Side == 0 ? HalfY : -HalfY;
-        const FVec3 Hinge{RowX - S.BarHingeBackM, Y, RailZ + S.BarHingeHeightM};
+        const FVec3 Hinge{RowX - S.BarHingeBackM, Y, HingeZ};
         Tip[Side] = Hinge + Dir * S.BarArmLengthM;
         SweepStrut(Out, Hinge, Tip[Side], Across, R, S.StrutSides);
     }
     SweepStrut(Out, Tip[0], Tip[1], Vertical, R, S.StrutSides);
-}
-
-// Where row j of a car sits along the shell, front row first — the same order
-// the station lays its gates in, so gate g and bar g face each other.
-inline double RowCentreX(const FTrainSettings& S, int Row)
-{
-    const int Rows = std::max(1, S.RowsPerCar);
-    const double ShellHalf = std::max(0.05, (S.CarLengthM - S.BodyGapM) * 0.5);
-    const double Pitch = 2.0 * ShellHalf / Rows;
-    return ShellHalf - (static_cast<double>(Row) + 0.5) * Pitch;
 }
 
 // ===================== THE WHOLE TRAIN, IN WORLD SPACE =====================
@@ -814,7 +963,8 @@ inline double RowCentreX(const FTrainSettings& S, int Row)
 inline FTrainMesh BuildTrainMesh(const std::vector<FCarPlacement>& Cars,
                                  const FTrainMesh& Car, const FTrainSettings& S,
                                  double HeartlineHeight,
-                                 const std::vector<double>& RowPositions = {})
+                                 const std::vector<double>& RowPositions = {},
+                                 const FTrackProfile& Profile = FTrackProfile())
 {
     FTrainMesh Out;
     const int Rows = std::max(1, S.RowsPerCar);
@@ -825,6 +975,7 @@ inline FTrainMesh BuildTrainMesh(const std::vector<FCarPlacement>& Cars,
         AppendCarBuffer(Out.Body, Car.Body, P.Frame);
         AppendCarBuffer(Out.Chassis, Car.Chassis, P.Frame);
         AppendCarBuffer(Out.Wheels, Car.Wheels, P.Frame);
+        AppendCarBuffer(Out.Seats, Car.Seats, P.Frame);
 
         // The bars are the one part built here rather than stamped: their
         // angle is per row, so a car's bars are not the same geometry as the
@@ -834,7 +985,7 @@ inline FTrainMesh BuildTrainMesh(const std::vector<FCarPlacement>& Cars,
         {
             const std::size_t i = c * static_cast<std::size_t>(Rows) + static_cast<std::size_t>(r);
             const double Pos = i < RowPositions.size() ? RowPositions[i] : 1.0;
-            AddRestraintBar(Bars, S, RailZ, RowCentreX(S, r), Pos);
+            AddRestraintBar(Bars, S, Profile, RailZ, RowCentreX(S, r), Pos);
         }
         AppendCarBuffer(Out.Restraints, Bars, P.Frame);
     }
