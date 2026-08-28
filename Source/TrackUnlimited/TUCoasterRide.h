@@ -769,6 +769,12 @@ private:
 
 	UPROPERTY(VisibleAnywhere, Category = "TrackUnlimited|Mesh")
 	TObjectPtr<class UProceduralMeshComponent> TrainCouplerMesh;
+	/** THE LAP BARS (2026-08-27). A fifth section because a fifth material, and
+	 *  the one part of the train that moves relative to its car: one bar per
+	 *  seat row, swung by the harness bank's physical position exactly as the
+	 *  airgates are by theirs. The mesh subscribes and never commands. */
+	UPROPERTY(VisibleAnywhere, Category = "TrackUnlimited|Mesh")
+	TObjectPtr<class UProceduralMeshComponent> TrainRestraintMesh;
 
 	/** Off puts the old instanced cubes back, which is what every screenshot
 	 *  before today was taken with. One click, and the physics is untouched
@@ -944,6 +950,8 @@ private:
 	TObjectPtr<class UMaterialInstanceDynamic> TrainWheelMaterial;
 	UPROPERTY(Transient)
 	TObjectPtr<class UMaterialInstanceDynamic> TrainCouplerMaterial;
+	UPROPERTY(Transient)
+	TObjectPtr<class UMaterialInstanceDynamic> TrainRestraintMaterial;
 
 	/** Metres between rings. THE quality/cost knob, and a distance rather than a
 	 *  count so a long track does not come out coarser than a short one. */
@@ -1092,9 +1100,23 @@ private:
 	 */
 	TArray<uint8> TrainGroupState;   // FCommandedBank::EGroupState per group, per train
 	TArray<bool> TrainGroupClosed;   // was the bank COMMANDED closed when sampled
+	/** Where each group's bar physically IS (FCommandedBank::GroupPosition, 0
+	 *  open, 1 closed), snapshotted and held on the same terms as the state
+	 *  above. A train never sampled reads CLOSED: it is out on the course
+	 *  carrying riders, and a bar defaulting open there is a fault the ride
+	 *  does not have. */
+	TArray<double> TrainGroupPos;
+	/** One position per seat row of one train, car 0 row 0 first, mapped onto
+	 *  the bank's groups the way UpdateAirgates maps gates onto sections. What
+	 *  RebuildTrainMesh draws, and what the smoke test reads. */
+	std::vector<double> RestraintPositions(int32 Train) const;
 
+	/** The debug boxes that carried harness state before the bars were drawn.
+	 *  Off since the mesh shows it: a box over a bar is two answers, and the
+	 *  bar is the honest one. Still worth switching on for the COLOUR — a
+	 *  stuck group is red here and merely motionless on the mesh. */
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Signalling")
-	bool bShowRestraints = true;
+	bool bShowRestraints = false;
 
 	void SampleRestraints();
 	void DrawRestraints() const;

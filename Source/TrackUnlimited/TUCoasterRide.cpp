@@ -134,7 +134,7 @@ ATUCoasterRide::ATUCoasterRide()
 	StationSteelMesh = MakeTrackMesh(TEXT("StationSteelMesh"));
 	StationStripeMesh = MakeTrackMesh(TEXT("StationStripeMesh"));
 
-	// AND THE TRAIN. Four more, for the same reason and on the same terms: four
+	// AND THE TRAIN. Five more, for the same reason and on the same terms: five
 	// materials, no collision. These are the only ones that move every frame,
 	// which is why RebuildTrainMesh updates their vertices in place rather than
 	// recreating the sections.
@@ -142,6 +142,7 @@ ATUCoasterRide::ATUCoasterRide()
 	TrainChassisMesh = MakeTrackMesh(TEXT("TrainChassisMesh"));
 	TrainWheelMesh = MakeTrackMesh(TEXT("TrainWheelMesh"));
 	TrainCouplerMesh = MakeTrackMesh(TEXT("TrainCouplerMesh"));
+	TrainRestraintMesh = MakeTrackMesh(TEXT("TrainRestraintMesh"));
 
 	// Seeded so a freshly placed actor has a ride in it. Everything about that
 	// ride is data in the Details panel rather than code, which is the whole
@@ -6346,6 +6347,79 @@ bool ATUCoasterRide::RunDocumentSmokeTest()
 			P.Crew.Gates.Command(false);
 			for (int32 i = 0; i < 240 * 5; ++i) { P.Crew.Gates.Tick(Dt, SavedStuck); }
 			UpdateAirgates();
+
+			// ===================== AND THE LAP BARS FOLLOW THE HARNESS BANK =====================
+			//
+			// The same shape as the gates, on the other bank: release it, tick the
+			// hardware, and the train standing at this platform draws every row
+			// raised; jam group 0 and lock, and that group's rows stay raised while
+			// the rest come down -- the fault a walk-round exists to find, visible
+			// on the train for the first time. The section is updated in place.
+			{
+				int32 AtTrain = -1;
+				for (int32 t = 0; t < Trains.Num(); ++t)
+				{
+					const double S = Trains[t]->GetDistance();
+					if (ZoneSpans.IsValidIndex(P.Zone) && S >= ZoneSpans[P.Zone].StartS - 0.01
+						&& S < ZoneSpans[P.Zone].EndS)
+					{
+						AtTrain = t;
+					}
+				}
+				auto BarVerts = [&]()
+				{
+					const FProcMeshSection* S = TrainRestraintMesh ? TrainRestraintMesh->GetProcMeshSection(0) : nullptr;
+					return S ? S->ProcVertexBuffer.Num() : 0;
+				};
+				const int32 SavedStuckGroup = P.Crew.StuckGroup;
+				const bool bWasClosed = P.Crew.Restraints.IsCommandedClosed();
+				P.Crew.StuckGroup = -1;
+				P.Crew.Restraints.Command(false);
+				for (int32 i = 0; i < 240 * 5; ++i) { P.Crew.Restraints.Tick(Dt, -1); }
+				SampleRestraints();
+				RebuildTrainMesh();
+				const int32 V0 = BarVerts();
+				const std::vector<double> Released = AtTrain >= 0 ? RestraintPositions(AtTrain) : std::vector<double>();
+				P.Crew.StuckGroup = 0;
+				P.Crew.Restraints.Command(true);
+				for (int32 i = 0; i < 240 * 5; ++i) { P.Crew.Restraints.Tick(Dt, 0); }
+				SampleRestraints();
+				RebuildTrainMesh();
+				const std::vector<double> Jammed = AtTrain >= 0 ? RestraintPositions(AtTrain) : std::vector<double>();
+				const int32 BarGroups = FMath::Max(1, P.Crew.Restraints.Groups);
+				const int32 RowsN = static_cast<int32>(Jammed.size());
+				bool bReleasedOk = AtTrain >= 0 && RowsN > 0 && Released.size() == Jammed.size();
+				bool bJammedOk = bReleasedOk;
+				int32 StillRaised = 0;
+				for (int32 r = 0; r < RowsN && bReleasedOk; ++r)
+				{
+					bReleasedOk = bReleasedOk && FMath::Abs(Released[r]) < 1e-9;
+					const double Want = ((r * BarGroups) / RowsN) == 0 ? 0.0 : 1.0;
+					bJammedOk = bJammedOk && FMath::Abs(Jammed[r] - Want) < 1e-9;
+					if (Jammed[r] < 0.5) { ++StillRaised; }
+				}
+				if (!bReleasedOk || !bJammedOk || StillRaised == 0 || StillRaised == RowsN
+					|| V0 == 0 || BarVerts() != V0)
+				{
+					UE_LOG(LogTUEvents, Error,
+						TEXT("smoke: the lap bars do not follow the harness bank (train %d, rows %d, released %d, ")
+						TEXT("jammed %d, still raised %d, vertices %d -> %d)"),
+						AtTrain, RowsN, bReleasedOk, bJammedOk, StillRaised, V0, BarVerts());
+					Failures.Add(TEXT("restraints"));
+				}
+				else
+				{
+					UE_LOG(LogTUEvents, Log,
+						TEXT("smoke: the lap bars follow the harness bank -- train %d, %d rows all raised on release; ")
+						TEXT("locking with group 0 jammed leaves %d raised while the rest come down; %d vertices updated in place"),
+						AtTrain, RowsN, StillRaised, V0);
+				}
+				P.Crew.StuckGroup = SavedStuckGroup;
+				P.Crew.Restraints.Command(bWasClosed);
+				for (int32 i = 0; i < 240 * 5; ++i) { P.Crew.Restraints.Tick(Dt, SavedStuckGroup); }
+				SampleRestraints();
+				RebuildTrainMesh();
+			}
 		}
 
 		// ===================== AND NONE AUTHORS NOTHING =====================
@@ -9248,12 +9322,40 @@ void ATUCoasterRide::SampleRestraints()
 		{
 			TrainGroupState.SetNum(Base + G);
 		}
+		if (TrainGroupPos.Num() < Base + G)
+		{
+			// New entries CLOSED, not zero: zero is fully open, and a train
+			// this loop has not reached yet is out on the course with riders.
+			const int32 Old = TrainGroupPos.Num();
+			TrainGroupPos.SetNum(Base + G);
+			for (int32 i = Old; i < Base + G; ++i) { TrainGroupPos[i] = 1.0; }
+		}
 		for (int32 g = 0; g < G; ++g)
 		{
 			TrainGroupState[Base + g] = static_cast<uint8>(B.GroupState(g));
+			TrainGroupPos[Base + g] = B.GroupPosition(g);
 		}
 		TrainGroupClosed[t] = B.IsCommandedClosed();
 	}
+}
+
+std::vector<double> ATUCoasterRide::RestraintPositions(int32 t) const
+{
+	const FTrainSettings S = TrainMeshSettings();
+	const int32 Rows = FMath::Max(1, S.CarCount) * FMath::Max(1, S.RowsPerCar);
+	std::vector<double> Out(static_cast<std::size_t>(Rows), 1.0);
+	if (Platforms.Num() == 0) { return Out; }
+	// Group count comes from the banks, which all carry the same authored number.
+	const int32 G = FMath::Max(1, Platforms[0].Crew.Restraints.Groups);
+	const int32 Base = t * G;
+	if (!TrainGroupPos.IsValidIndex(Base + G - 1)) { return Out; }
+	// Rows map onto sensed groups proportionally, the same rule the gates use,
+	// so a jammed section raises the same rows the platform's gates serve.
+	for (int32 r = 0; r < Rows; ++r)
+	{
+		Out[static_cast<std::size_t>(r)] = TrainGroupPos[Base + (r * G) / Rows];
+	}
+	return Out;
 }
 
 void ATUCoasterRide::BuildBlockMarks()
@@ -10202,6 +10304,7 @@ void ATUCoasterRide::RebuildTrainMesh()
 		if (TrainChassisMesh) { TrainChassisMesh->ClearAllMeshSections(); }
 		if (TrainWheelMesh) { TrainWheelMesh->ClearAllMeshSections(); }
 		if (TrainCouplerMesh) { TrainCouplerMesh->ClearAllMeshSections(); }
+		if (TrainRestraintMesh) { TrainRestraintMesh->ClearAllMeshSections(); }
 		return;
 	}
 
@@ -10232,17 +10335,21 @@ void ATUCoasterRide::RebuildTrainMesh()
 		// compiler caught it; the two would have been readable and wrong.
 		const std::vector<FCarPlacement> Placed = PlaceCars(TrainPath, TrainPathSpacing,
 			TrainPathTotal, NoseS, S, bTrackIsCircuit);
-		const FTrainMesh One = BuildTrainMesh(Placed, Car, S, Heartline);
+		// THE BARS FOLLOW THE HARNESS BANK: the position SampleRestraints took
+		// off the platform this train is at, held while it is away from one.
+		const FTrainMesh One = BuildTrainMesh(Placed, Car, S, Heartline, RestraintPositions(t));
 		AppendBuffer(All.Body, One.Body);
 		AppendBuffer(All.Chassis, One.Chassis);
 		AppendBuffer(All.Wheels, One.Wheels);
 		AppendBuffer(All.Couplers, One.Couplers);
+		AppendBuffer(All.Restraints, One.Restraints);
 	}
 
 	PushOrUpdateMeshSection(TrainBodyMesh, All.Body);
 	PushOrUpdateMeshSection(TrainChassisMesh, All.Chassis);
 	PushOrUpdateMeshSection(TrainWheelMesh, All.Wheels);
 	PushOrUpdateMeshSection(TrainCouplerMesh, All.Couplers);
+	PushOrUpdateMeshSection(TrainRestraintMesh, All.Restraints);
 	// The train is built after the track, so its sections did not exist when
 	// the style was applied. Cheap: the instances are cached.
 	ApplyTrackStyle();
@@ -10470,6 +10577,7 @@ void ATUCoasterRide::ApplyTrackStyle()
 	Paint(TrainChassisMaterial, TrainChassisMesh, FLinearColor(0.10f, 0.11f, 0.12f), 0.60f, 0.60f);
 	Paint(TrainWheelMaterial, TrainWheelMesh, FLinearColor(0.05f, 0.05f, 0.05f), 0.75f, 0.f);  // polyurethane
 	Paint(TrainCouplerMaterial, TrainCouplerMesh, FLinearColor(0.28f, 0.29f, 0.30f), 0.45f, 0.80f);
+	Paint(TrainRestraintMaterial, TrainRestraintMesh, FLinearColor(0.02f, 0.02f, 0.025f), 0.55f, 0.f);  // padded bar
 }
 
 void ATUCoasterRide::LoadBrakeSounds()
@@ -10858,6 +10966,8 @@ void ATUCoasterRide::RebuildTrackMesh()
 		{
 			FStationSettings St;
 			if (CarLengthM > 0.5f) { St.GatePitchM = CarLengthM; }
+			// ONE NUMBER for rows a car has: the gate per row faces the bar per row.
+			St.RowsPerCar = TrainMeshSettings().RowsPerCar;
 			// Kept for UpdateAirgates: the walk, the spans and the settings. The
 			// gates are built CLOSED here; the first frame reads the banks.
 			StationFrames = WalkTrack(Track, Settings.SampleSpacing);

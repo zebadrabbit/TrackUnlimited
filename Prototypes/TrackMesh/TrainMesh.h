@@ -88,16 +88,20 @@ struct FTrainMesh
     FMeshBuffer Chassis;
     FMeshBuffer Wheels;
     FMeshBuffer Couplers;
+    // A FIFTH, since 2026-08-27: the lap bars. Padded steel, and the one part of
+    // the train that moves relative to the car — so it is built per PLACEMENT
+    // from the bank's position rather than once per car. See AddRestraintBar.
+    FMeshBuffer Restraints;
 
     std::size_t NumVertices() const
     {
         return Body.NumVertices() + Chassis.NumVertices()
-             + Wheels.NumVertices() + Couplers.NumVertices();
+             + Wheels.NumVertices() + Couplers.NumVertices() + Restraints.NumVertices();
     }
     std::size_t NumTriangles() const
     {
         return Body.NumTriangles() + Chassis.NumTriangles()
-             + Wheels.NumTriangles() + Couplers.NumTriangles();
+             + Wheels.NumTriangles() + Couplers.NumTriangles() + Restraints.NumTriangles();
     }
 };
 
@@ -147,6 +151,24 @@ struct FTrainSettings
     double ChassisOverhangM = 0.20;
 
     double CouplerDiameterM = 0.07;
+
+    // ---- The restraint: ONE LAP BAR PER SEAT ROW, hinged at the hip either side
+    // of the seat and swung by the bank's position (FCommandedBank::GroupPosition,
+    // 0 open, 1 closed). Closed it lies forward across the lap, INSIDE the shell
+    // — which is where a real one is, and why a closed bar is invisible from the
+    // platform. Raised it stands above the rim, which is the state that means
+    // something: a bar you can see is a train that is not ready.
+    //
+    // RowsPerCar is the train's number and the station reads it — the gate per
+    // seat row on the platform faces the bar it serves, so the two cannot be
+    // allowed to disagree about how many rows a car has.
+    int RowsPerCar = 1;
+    double BarDiameterM = 0.06;
+    double BarHingeHeightM = 0.55;    // above the floor: hip height, seated
+    double BarHingeBackM = 0.15;      // behind the row centre, so it swings over the lap
+    double BarArmLengthM = 0.45;
+    double BarInsetM = 0.12;          // arms this far in from the shell's full width
+    double BarRaisedDeg = 80.0;       // fully open: swung up out of the seat
 
     // ---- Tessellation. Coarser than the rails DELIBERATELY, the same argument
     // the support columns get eight sides on: a wheel is 300 mm across and there
@@ -725,6 +747,49 @@ inline void AppendCarBuffer(FMeshBuffer& Out, const FMeshBuffer& Car, const FTra
     for (std::uint32_t I : Car.Index) { Out.Index.push_back(Base + I); }
 }
 
+// ===================== ONE LAP BAR, IN THE CAR'S SPACE =====================
+//
+// Two arms from the hinges and a crossbar between their tips: three struts,
+// which SweepStrut already caps, so the bar is closed geometry at every
+// position. `Position` is the bank's — 0 fully open, 1 fully closed — and it
+// moves only the angle, never the topology, which is what lets the actor update
+// vertices in place as the bars come down instead of recreating a section.
+//
+// The hinge sits behind the row centre and the arm points forward when closed,
+// so the crossbar comes down over the lap rather than onto the hip.
+inline void AddRestraintBar(FMeshBuffer& Out, const FTrainSettings& S, double RailZ,
+                            double RowX, double Position)
+{
+    const double P = std::max(0.0, std::min(1.0, Position));
+    const double Swing = (1.0 - P) * S.BarRaisedDeg * (TrackMeshTwoPi / 360.0);
+    const FVec3 Dir{std::cos(Swing), 0.0, std::sin(Swing)};
+    const double HalfY = std::max(0.05, S.BodyWidthM * 0.5 - S.BarInsetM);
+    const double R = S.BarDiameterM * 0.5;
+    if (!(R > 0.0) || !(S.BarArmLengthM > 0.0)) { return; }
+
+    const FVec3 Across{0.0, 1.0, 0.0};
+    const FVec3 Vertical{0.0, 0.0, 1.0};
+    FVec3 Tip[2];
+    for (int Side = 0; Side < 2; ++Side)
+    {
+        const double Y = Side == 0 ? HalfY : -HalfY;
+        const FVec3 Hinge{RowX - S.BarHingeBackM, Y, RailZ + S.BarHingeHeightM};
+        Tip[Side] = Hinge + Dir * S.BarArmLengthM;
+        SweepStrut(Out, Hinge, Tip[Side], Across, R, S.StrutSides);
+    }
+    SweepStrut(Out, Tip[0], Tip[1], Vertical, R, S.StrutSides);
+}
+
+// Where row j of a car sits along the shell, front row first — the same order
+// the station lays its gates in, so gate g and bar g face each other.
+inline double RowCentreX(const FTrainSettings& S, int Row)
+{
+    const int Rows = std::max(1, S.RowsPerCar);
+    const double ShellHalf = std::max(0.05, (S.CarLengthM - S.BodyGapM) * 0.5);
+    const double Pitch = 2.0 * ShellHalf / Rows;
+    return ShellHalf - (static_cast<double>(Row) + 0.5) * Pitch;
+}
+
 // ===================== THE WHOLE TRAIN, IN WORLD SPACE =====================
 //
 // One car built once and stamped at each placement, plus the couplers — the only
@@ -741,16 +806,37 @@ inline void AppendCarBuffer(FMeshBuffer& Out, const FMeshBuffer& Car, const FTra
 // BuildCarMesh does not take a track. This exists so the geometry can be
 // asserted as one closed thing, and so a caller with no per-car component
 // support still has something to draw.
+//
+// `RowPositions` is one bank position per seat row over the whole train, car 0
+// row 0 first. A row it does not cover is drawn CLOSED: a train out on the course
+// with no bank in reach of it is carrying riders, and a bar that defaulted open
+// there would read as a fault the ride does not have.
 inline FTrainMesh BuildTrainMesh(const std::vector<FCarPlacement>& Cars,
                                  const FTrainMesh& Car, const FTrainSettings& S,
-                                 double HeartlineHeight)
+                                 double HeartlineHeight,
+                                 const std::vector<double>& RowPositions = {})
 {
     FTrainMesh Out;
-    for (const FCarPlacement& P : Cars)
+    const int Rows = std::max(1, S.RowsPerCar);
+    const double RailZ = -HeartlineHeight;
+    for (std::size_t c = 0; c < Cars.size(); ++c)
     {
+        const FCarPlacement& P = Cars[c];
         AppendCarBuffer(Out.Body, Car.Body, P.Frame);
         AppendCarBuffer(Out.Chassis, Car.Chassis, P.Frame);
         AppendCarBuffer(Out.Wheels, Car.Wheels, P.Frame);
+
+        // The bars are the one part built here rather than stamped: their
+        // angle is per row, so a car's bars are not the same geometry as the
+        // next car's.
+        FMeshBuffer Bars;
+        for (int r = 0; r < Rows; ++r)
+        {
+            const std::size_t i = c * static_cast<std::size_t>(Rows) + static_cast<std::size_t>(r);
+            const double Pos = i < RowPositions.size() ? RowPositions[i] : 1.0;
+            AddRestraintBar(Bars, S, RailZ, RowCentreX(S, r), Pos);
+        }
+        AppendCarBuffer(Out.Restraints, Bars, P.Frame);
     }
 
     const double ChassisZ = -HeartlineHeight - S.ChassisDropM;
@@ -824,12 +910,12 @@ inline std::vector<FMeshFinding> AuditTrain(const FTrainSettings& S,
     return Out;
 }
 
-// ponytail: no nose on the leading car, no restraint geometry, no wheel spin, no
-// suspension travel, and one train style rather than several. Each is named as
-// out of scope in TRAIN_DESIGN.md, and none of them changes an interface here —
-// a nose is another section function, a restraint hangs off FCommandedBank which
-// already models the state, and wheel spin is a per-wheel angle this already has
-// the axis for. One credible vehicle is the gate.
+// ponytail: no nose on the leading car, no wheel spin, no suspension travel, and
+// one train style rather than several. Each is named as out of scope in
+// TRAIN_DESIGN.md, and none of them changes an interface here — a nose is
+// another section function, and wheel spin is a per-wheel angle this already has
+// the axis for. One credible vehicle is the gate. (The restraint came off this
+// list on 2026-08-27: a lap bar per row, swung by the bank, in AddRestraintBar.)
 //
 // ponytail: no FSeat here either, deliberately. The design sheet specifies it and
 // three cards want it, but its consumers are the ride camera, the wing-coaster

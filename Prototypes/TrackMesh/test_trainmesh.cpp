@@ -784,6 +784,109 @@ void TestADegenerateTrainBuildsNOTHINGRatherThanSomethingBroken()
     std::printf("  %s\n", F[0].What.c_str());
 }
 
+// ===================== THE LAP BARS SWING WITH THE BANK =====================
+//
+// Three things a screenshot would accept and a bank would not. The bars must
+// be CLOSED GEOMETRY at every angle (a strut is capped, so an open rim is a
+// pipe); the topology must not change with the angle, or the actor's in-place
+// vertex update silently recreates a section every frame the bars move; and a
+// row's bar must move ONLY when its own group does, because a stuck group is
+// exactly the fault a walk-round exists to find, and it is only findable if
+// the other bars come down around it.
+void TestTheLapBarsSwingWithTheBankAndStayClosed()
+{
+    std::printf("The lap bars swing with the bank, and are closed geometry at every angle\n");
+
+    const FTrackProfile P;
+    FTrainSettings S;
+    S.RowsPerCar = 2;
+    const double Spacing = 0.5;
+    const double Heartline = 1.1;
+    const FTrack T = Straight(60.0);
+    const std::vector<FTrackFrame> Path = WalkTrack(T, Spacing);
+    const std::vector<FCarPlacement> Cars =
+        PlaceCars(Path, Spacing, T.TotalLength(), 40.0, S, false);
+    const FTrainMesh Car = BuildCarMesh(S, Heartline, P);
+    const int Rows = S.CarCount * S.RowsPerCar;
+
+    auto MaxZ = [](const FMeshBuffer& M)
+    {
+        double Z = -1e9;
+        for (const FVec3& V : M.Position) { Z = std::max(Z, V.Z); }
+        return Z;
+    };
+
+    const FTrainMesh Closed =
+        BuildTrainMesh(Cars, Car, S, Heartline, std::vector<double>(Rows, 1.0));
+    const FTrainMesh Open =
+        BuildTrainMesh(Cars, Car, S, Heartline, std::vector<double>(Rows, 0.0));
+    const FTrainMesh Default = BuildTrainMesh(Cars, Car, S, Heartline);
+
+    for (const FTrainMesh* M : {&Closed, &Open})
+    {
+        CheckIndicesInRange(M->Restraints);
+        CheckWindingAgreesWithNormals(M->Restraints, "restraints");
+        assert(BoundaryEdges(M->Restraints) == 0);
+        assert(SignedVolume(M->Restraints) > 0.0);
+    }
+    assert(Closed.Restraints.NumTriangles() > 0);
+
+    // ---- SAME TOPOLOGY AT EVERY ANGLE: the angle moves vertices and nothing
+    // else, which is what the actor's UpdateMeshSection path depends on.
+    assert(Closed.Restraints.NumVertices() == Open.Restraints.NumVertices());
+    assert(Closed.Restraints.Index == Open.Restraints.Index);
+
+    // ---- NO POSITIONS MEANS CLOSED. A train out on the course is carrying
+    // riders; a bar defaulting open there is a fault the ride does not have.
+    assert(Default.Restraints.NumVertices() == Closed.Restraints.NumVertices());
+    for (std::size_t v = 0; v < Default.Restraints.Position.size(); ++v)
+    {
+        assert(Length(Default.Restraints.Position[v] - Closed.Restraints.Position[v]) < 1e-12);
+    }
+
+    // ---- CLOSED IS INSIDE THE SHELL, RAISED IS ABOVE THE RIM. The first is
+    // where a real lap bar is; the second is what makes an open bar readable
+    // from the platform, which is the whole point of drawing it.
+    const double RimZ = Cars[0].Frame.Position.Z - Heartline + S.BodyHeightM;
+    assert(MaxZ(Closed.Restraints) < RimZ);
+    assert(MaxZ(Open.Restraints) > RimZ);
+    std::printf("  %d bars: closed tops out %.2f m under the rim, raised %.2f m over it\n",
+                Rows, RimZ - MaxZ(Closed.Restraints), MaxZ(Open.Restraints) - RimZ);
+
+    // ---- ONE ROW RAISED MOVES ONE BAR. Bars are appended in row order, car by
+    // car, so each bar is a contiguous run of the same vertex count.
+    std::vector<double> One(Rows, 1.0);
+    One[3] = 0.0;
+    const FTrainMesh Mixed = BuildTrainMesh(Cars, Car, S, Heartline, One);
+    const std::size_t PerBar = Mixed.Restraints.NumVertices() / static_cast<std::size_t>(Rows);
+    assert(PerBar * static_cast<std::size_t>(Rows) == Mixed.Restraints.NumVertices());
+    for (int r = 0; r < Rows; ++r)
+    {
+        double Moved = 0.0;
+        for (std::size_t v = r * PerBar; v < (r + 1) * PerBar; ++v)
+        {
+            Moved = std::max(Moved,
+                Length(Mixed.Restraints.Position[v] - Closed.Restraints.Position[v]));
+        }
+        if (r == 3) { assert(Moved > 0.3); }
+        else        { assert(Moved < 1e-12); }
+    }
+    std::printf("  raising row 3 alone moves row 3 alone\n");
+
+    // ---- HALF WAY IS BETWEEN, so a bank in transit reads as one.
+    const FTrainMesh Half =
+        BuildTrainMesh(Cars, Car, S, Heartline, std::vector<double>(Rows, 0.5));
+    assert(MaxZ(Half.Restraints) > MaxZ(Closed.Restraints));
+    assert(MaxZ(Half.Restraints) < MaxZ(Open.Restraints));
+
+    // ---- ROWS RUN FRONT TO BACK INSIDE THE SHELL, the order the station lays
+    // its gates in, so bar g and gate g face each other.
+    const double ShellHalf = (S.CarLengthM - S.BodyGapM) * 0.5;
+    assert(RowCentreX(S, 0) > RowCentreX(S, 1));
+    assert(std::fabs(RowCentreX(S, 0)) < ShellHalf);
+    assert(std::fabs(RowCentreX(S, 1)) < ShellHalf);
+}
+
 } // namespace
 
 int main()
@@ -807,6 +910,7 @@ int main()
     TestFrameAtDistanceLANDSOnItsOwnSamplesAndStaysOrthonormal();
     TestATrainStraddlingTheSEAMWrapsRatherThanPilingUp();
     TestADegenerateTrainBuildsNOTHINGRatherThanSomethingBroken();
+    TestTheLapBarsSwingWithTheBankAndStayClosed();
 
     std::printf("\ntest_trainmesh: all assertions passed.\n");
     return 0;
