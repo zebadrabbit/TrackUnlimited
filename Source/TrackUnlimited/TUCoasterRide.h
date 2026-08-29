@@ -67,6 +67,16 @@ public:
 
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type Reason) override;
+
+	/**
+	 * THE WINDOW MODE IS A SETTING AND IT WAS NOT BEING APPLIED. A standalone
+	 * launch carries -windowed on its command line and nothing here ever applied
+	 * the saved settings afterwards, so the override won and was then written
+	 * over the person's choice. Reverts an UNCONFIRMED mode to the last one a
+	 * person confirmed, then applies with command-line overrides off. Game
+	 * worlds only; in PIE the window is the editor's.
+	 */
+	void ApplySavedVideoMode();
 	virtual void Tick(float DeltaSeconds) override;
 
 	/** Runs on place, load, move and property change — so the preview is live without pressing play. */

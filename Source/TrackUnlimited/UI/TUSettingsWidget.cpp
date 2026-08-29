@@ -518,6 +518,16 @@ void UTUSettingsWidget::WriteValue(const FSettingEntry& Entry, const FString& Va
 		// is a screen where somebody changes four things, closes it, and loses
 		// them — and UE persists these itself, so there is nothing for us to own.
 		G->ApplySettings(false);
+
+		// AND A PERSON CHOOSING IT IS WHAT CONFIRMED MEANS. UGameUserSettings
+		// keeps a confirm/revert pair so a mode that arrived some other way --
+		// a -windowed on the launch command line, most of all -- can be told
+		// apart from one somebody picked. Nothing here had ever called either
+		// half, so an override that sneaked in became permanent and the next
+		// startup came up windowed. This is the half that says "they meant it";
+		// ApplySavedVideoMode is the half that acts on it.
+		if (Entry.Key == "video.windowMode") { G->ConfirmVideoMode(); }
+
 		G->SaveSettings();
 		return;
 	}

@@ -40,6 +40,7 @@
 #endif
 #include "Misc/App.h"
 #include "GameFramework/PlayerInput.h"
+#include "GameFramework/GameUserSettings.h"
 #include "Kismet/GameplayStatics.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
@@ -7584,9 +7585,75 @@ void ATUCoasterRide::CheckBindingsAgainstInput(const UInputComponent* Input) con
 	}
 }
 
+// ===================== AN UNCONFIRMED VIDEO MODE IS NOT A CHOICE =====================
+//
+// Windowed Fullscreen was being picked in the settings and the application came
+// up WINDOWED, at exactly the desktop resolution -- which is the worst of both:
+// it looks nearly full screen, the taskbar is still there, and the title bar is
+// off the top so the window cannot even be dragged.
+//
+// The mode was not being lost, it was being OVERRIDDEN. A standalone launch
+// carries -windowed on its command line, and nothing here ever applied the saved
+// settings afterwards, so the override won every time and then got saved over
+// the person's choice on the next write. The ini said it plainly:
+// FullscreenMode=2 with LastConfirmedFullscreenMode=1.
+//
+// THAT DISAGREEMENT IS THE ENGINE'S OWN SIGNAL AND IT WAS BEING IGNORED.
+// UGameUserSettings carries a confirm/revert pair for exactly this: a mode a
+// PERSON chose is confirmed, and one that arrived any other way is not, so an
+// unconfirmed mode at startup is by definition something nobody asked for.
+// Nothing in this project had ever called either half, so an override that
+// sneaked in became permanent.
+//
+// So: revert to the last mode a person confirmed, then apply it with command
+// line overrides OFF -- which is what the `false` is, and the whole fix.
+//
+// GAME WORLDS ONLY. In PIE the window belongs to the editor and taking it full
+// screen would be the F-key lesson again; there is nothing to apply there.
+void ATUCoasterRide::ApplySavedVideoMode()
+{
+	if (!GetWorld() || GetWorld()->WorldType != EWorldType::Game) { return; }
+
+	// AND NOT WHEN THERE IS NO SCREEN. -TUSmokeTest runs -game -nullrhi, which
+	// is a game world by every other test -- and ApplySettings ends in
+	// SaveSettings, so a headless run would write a headless window mode over
+	// the person's own. The smoke test is not allowed to change the settings of
+	// the machine it runs on.
+	if (!FApp::CanEverRender()) { return; }
+
+	UGameUserSettings* G = UGameUserSettings::GetGameUserSettings();
+	if (!G) { return; }
+
+	auto ModeName = [](EWindowMode::Type M)
+	{
+		return M == EWindowMode::Fullscreen ? TEXT("fullscreen")
+			: (M == EWindowMode::WindowedFullscreen ? TEXT("windowed fullscreen") : TEXT("windowed"));
+	};
+
+	// From DISC, not from whatever the launch left in memory.
+	G->LoadSettings(true);
+	const EWindowMode::Type OnDisc = G->GetFullscreenMode();
+	const EWindowMode::Type Confirmed = G->GetLastConfirmedFullscreenMode();
+	if (OnDisc != Confirmed)
+	{
+		UE_LOG(LogTUEvents, Log,
+			TEXT("video: the saved mode is %s and the last one anybody confirmed is %s, "
+				 "so the saved one was an override rather than a choice -- reverting"),
+			ModeName(OnDisc), ModeName(Confirmed));
+		G->RevertVideoMode();
+	}
+	G->ApplySettings(false);
+
+	UE_LOG(LogTUEvents, Log, TEXT("video: %s at %dx%d"),
+		ModeName(G->GetFullscreenMode()),
+		G->GetScreenResolution().X, G->GetScreenResolution().Y);
+}
+
 void ATUCoasterRide::BeginPlay()
 {
 	Super::BeginPlay();
+
+	ApplySavedVideoMode();
 
 	// BEFORE ANYTHING ELSE READS ONE. The scan rate is restart-flagged, and this
 	// is the only moment it can be applied — RebuildFromSegments and the first
