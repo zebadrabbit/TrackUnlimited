@@ -36,7 +36,9 @@
 // error in the one configuration nobody compiles until release day.
 #include "DesktopPlatformModule.h"
 #include "Framework/Application/SlateApplication.h"
+#include "Framework/Application/IInputProcessor.h"
 #include "IDesktopPlatform.h"
+#include "Widgets/SViewport.h"
 #endif
 #include "Misc/App.h"
 #include "Kismet/GameplayStatics.h"
@@ -3240,18 +3242,12 @@ void ATUCoasterRide::WriteKeyBindings() const
 
 bool ATUCoasterRide::RebindKey(const FString& Action, const FString& KeyName, bool bPersist)
 {
-	// F1-F12 ARE THE EDITOR'S and their bindings are live in PIE -- the lesson
-	// that moved Settings off F1. They were REFUSED here until 2026-08-26, when
-	// the developer decided function keys are fine because the shipping path is
-	// standalone, where the editor is not listening. Allowed now, with the one
-	// caveat said out loud: in PIE the editor's viewport view modes still fire
-	// on the same press, so the world changes rendering as the UI does.
-	if (KeyName.Len() >= 2 && KeyName[0] == TEXT('F') && FChar::IsDigit(KeyName[1]))
-	{
-		UE_LOG(LogTUEvents, Warning,
-			TEXT("controls: [%s] is bound; in PIE the editor answers to it as well (fine in standalone)"),
-			*KeyName);
-	}
+	// F1-F12 WERE THE EDITOR'S, and are not any more. They were REFUSED here
+	// until 2026-08-26 (function keys are fine because the shipping path is
+	// standalone), then allowed with a warning that in PIE the editor's viewport
+	// view modes fired on the same press. That warning is gone with 2026-08-29's
+	// FTUEditorKeyGrab, which consumes a function key we are bound to before the
+	// editor's command list ever sees it -- so a rebind onto one needs no caveat.
 	const TArray<int32>* Idx = ActionBindingIndex.Find(Action);
 	if (!Idx || !InputComponent)
 	{
@@ -7388,9 +7384,120 @@ void ATUCoasterRide::CheckBindingsAgainstInput(const UInputComponent* Input) con
 	}
 }
 
+#if WITH_EDITOR
+// ===================== TAKING F1-F12 BACK FROM THE EDITOR =====================
+//
+// The function keys are OURS now (F1 settings, F2 overlays, F3 diagnostics, F4
+// the console, F5/F6 the graph) and in PIE the editor answered first: F1 flipped
+// the viewport to wireframe while the settings screen opened over it. That was
+// filed as "run standalone", and it is not good enough -- PIE is where the
+// developer works.
+//
+// A SLATE INPUT PREPROCESSOR, because it is the only thing that runs BEFORE the
+// editor's viewport command list. Everything else -- focusing the game viewport,
+// consuming the key in the player input -- happens downstream of where the
+// editor has already claimed it.
+//
+// NOT BY REBINDING THE EDITOR'S COMMANDS. FUICommandInfo::SetActiveChord writes
+// through to the person's saved keyboard shortcuts, so clearing F1 to win an
+// argument in PIE would leave their editor changed after the game shut down --
+// and after a crash, permanently. Consuming an event we were going to handle
+// anyway leaves nothing behind.
+//
+// WE ONLY TAKE WHAT WE ACTUALLY USE. A function key nothing here is bound to
+// passes straight through and the editor keeps it, so F7, F8 (eject) and F11
+// (immersive) still work while playing. And the key has to be aimed at the game
+// viewport: pressing F2 in the Content Browser is a rename, and a preprocessor
+// that stole it would be a far worse bug than the one it fixed.
+class FTUEditorKeyGrab : public IInputProcessor
+{
+public:
+	explicit FTUEditorKeyGrab(ATUCoasterRide* In) : Ride(In) {}
+
+	virtual void Tick(const float, FSlateApplication&, TSharedRef<ICursor>) override {}
+
+	virtual bool HandleKeyDownEvent(FSlateApplication&, const FKeyEvent& E) override
+	{
+		return Ride.IsValid() && Ride->GrabKeyFromTheEditor(E.GetKey(), true, E.IsRepeat());
+	}
+	virtual bool HandleKeyUpEvent(FSlateApplication&, const FKeyEvent& E) override
+	{
+		return Ride.IsValid() && Ride->GrabKeyFromTheEditor(E.GetKey(), false, false);
+	}
+	virtual const TCHAR* GetDebugName() const override { return TEXT("TUEditorKeyGrab"); }
+
+private:
+	TWeakObjectPtr<ATUCoasterRide> Ride;
+};
+
+// Is the keypress aimed at the game? The focused widget is usually the viewport
+// itself, but every UMG panel this project adds is a child of it, so the answer
+// is "the game viewport is somewhere up the focus chain" rather than "the
+// viewport IS focused" -- which would be false the moment somebody clicked a row.
+static bool GameViewportOwnsTheFocus()
+{
+	if (!FSlateApplication::IsInitialized() || !GEngine || !GEngine->GameViewport)
+	{
+		return false;
+	}
+	const TSharedPtr<SViewport> Game = GEngine->GameViewport->GetGameViewportWidget();
+	if (!Game.IsValid()) { return false; }
+
+	TSharedPtr<SWidget> W = FSlateApplication::Get().GetUserFocusedWidget(0);
+	while (W.IsValid())
+	{
+		if (W == Game) { return true; }
+		W = W->GetParentWidget();
+	}
+	return false;
+}
+
+bool ATUCoasterRide::GrabKeyFromTheEditor(const FKey& Key, bool bDown, bool bRepeat)
+{
+	if (!InputComponent || !GameViewportOwnsTheFocus()) { return false; }
+
+	// Modifiers must match exactly. Every binding here is unmodified, so
+	// Ctrl+F2 is not ours and the editor is welcome to it.
+	const FModifierKeysState Mods = FSlateApplication::Get().GetModifierKeys();
+	const EInputEvent Event = bDown ? IE_Pressed : IE_Released;
+
+	bool bFired = false;
+	for (const FInputKeyBinding& B : InputComponent->KeyBindings)
+	{
+		if (B.KeyEvent != Event || B.Chord.Key != Key) { continue; }
+		if (B.Chord.bShift != Mods.IsShiftDown()
+			|| B.Chord.bCtrl != Mods.IsControlDown()
+			|| B.Chord.bAlt != Mods.IsAltDown())
+		{
+			continue;
+		}
+		// SWALLOWED BUT NOT RUN on a repeat: holding F4 must not cycle the panel
+		// forty times a second, and the ordinary input path already filters
+		// repeats for us -- this is the one place that has to do it itself.
+		if (!bRepeat) { B.KeyDelegate.Execute(Key); }
+		bFired = true;
+	}
+	return bFired;
+}
+#endif
+
 void ATUCoasterRide::BeginPlay()
 {
 	Super::BeginPlay();
+
+#if WITH_EDITOR
+	// PIE ONLY. Standalone and a packaged build have no editor to argue with, and
+	// registering there would put a preprocessor in front of every keypress in
+	// the shipping path to fix a problem that does not exist in it.
+	if (GetWorld() && GetWorld()->WorldType == EWorldType::PIE)
+	{
+		EditorKeyGrab = MakeShared<FTUEditorKeyGrab>(this);
+		if (FSlateApplication::IsInitialized())
+		{
+			FSlateApplication::Get().RegisterInputPreProcessor(EditorKeyGrab, 0);
+		}
+	}
+#endif
 
 	// BEFORE ANYTHING ELSE READS ONE. The scan rate is restart-flagged, and this
 	// is the only moment it can be applied — RebuildFromSegments and the first
@@ -7622,6 +7729,19 @@ void ATUCoasterRide::BeginPlay()
 
 void ATUCoasterRide::EndPlay(const EEndPlayReason::Type Reason)
 {
+#if WITH_EDITOR
+	// THE EDITOR OUTLIVES THE GAME, so this comes off explicitly. A preprocessor
+	// left registered holds a weak pointer to a dead actor and swallows every
+	// function key in the editor for the rest of the session.
+	if (EditorKeyGrab.IsValid())
+	{
+		if (FSlateApplication::IsInitialized())
+		{
+			FSlateApplication::Get().UnregisterInputPreProcessor(EditorKeyGrab);
+		}
+		EditorKeyGrab.Reset();
+	}
+#endif
 	// Unregistered explicitly: the service holds the delegate, and a stale one
 	// fires into a destroyed actor.
 	if (PanelDrawHandle.IsValid())

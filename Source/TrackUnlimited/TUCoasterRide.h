@@ -67,6 +67,26 @@ public:
 
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type Reason) override;
+
+#if WITH_EDITOR
+	/**
+	 * F1-F12 ARE OURS IN PIE, AND THE EDITOR DOES NOT GET FIRST REFUSAL.
+	 *
+	 * The editor binds F1-F8 to viewport view modes and its bindings are live
+	 * while you are playing in it, so F1 flipped the world to wireframe at the
+	 * same moment the settings screen opened over it. A Slate input preprocessor
+	 * is the only thing that runs BEFORE the editor's command list; this is what
+	 * it calls. Returns true when the key was ours, which consumes it.
+	 *
+	 * Public because the preprocessor is a plain Slate object rather than a
+	 * UObject, so it cannot be a friend of anything.
+	 */
+	bool GrabKeyFromTheEditor(const FKey& Key, bool bDown, bool bRepeat);
+
+private:
+	TSharedPtr<class FTUEditorKeyGrab> EditorKeyGrab;
+public:
+#endif
 	virtual void Tick(float DeltaSeconds) override;
 
 	/** Runs on place, load, move and property change — so the preview is live without pressing play. */
