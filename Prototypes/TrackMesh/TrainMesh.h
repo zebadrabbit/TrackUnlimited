@@ -215,9 +215,17 @@ struct FTrainSettings
     // pitch is the shell's and not a second authored number.
     int RowsPerCar = 2;
     double BarDiameterM = 0.06;
+    // AND THE PIVOT IS AT THE FRONT OF THE BAY, WHICH IS DERIVED (2026-08-28).
+    // 0.30 m ahead of the row centre was still an authored guess and it put the
+    // pivot in the rider's knees on a 1.35 m row — reported from a screenshot,
+    // *"move the pivot way further forward and leave enough space to sit"*. Both
+    // numbers now come off the row's own pitch: the hinge sits at the FRONT of
+    // the bay, on the divider ahead, less a clearance; the arm is whatever
+    // reaches back from there to leave a rider's depth clear of the backrest. So
+    // a longer car, or one row instead of two, moves them without retyping.
     double BarHingeUpM = 0.06;        // above the squab: the thigh, seated. DERIVED from the seat
-    double BarHingeAheadM = 0.30;     // ahead of the row centre: the front of the squab
-    double BarArmLengthM = 0.45;      // reaches back past the row centre, over the hips
+    double BarHingeClearM = 0.12;     // hinge back from the front of the bay
+    double BarLapClearM = 0.35;       // closed, the crossbar stops this far ahead of the backrest
     double BarInsetM = 0.12;          // arms this far in from the shell's full width
     double BarRaisedDeg = 100.0;      // fully open: past vertical, leaning away from the seat
 
@@ -255,6 +263,30 @@ inline double RowCentreX(const FTrainSettings& S, int Row)
     const double ShellHalf = std::max(0.05, (S.CarLengthM - S.BodyGapM) * 0.5);
     const double Pitch = 2.0 * ShellHalf / Rows;
     return ShellHalf - (static_cast<double>(Row) + 0.5) * Pitch;
+}
+
+// How much of the shell one row gets: the seating bay, front to back.
+inline double RowPitchM(const FTrainSettings& S)
+{
+    const int Rows = std::max(1, S.RowsPerCar);
+    return 2.0 * std::max(0.05, (S.CarLengthM - S.BodyGapM) * 0.5) / Rows;
+}
+
+// The lap bar's pivot, ahead of its row's centre: at the FRONT of the bay, on
+// the divider the rider faces, less a clearance so it is mounted on it rather
+// than through it.
+inline double BarHingeAheadM(const FTrainSettings& S)
+{
+    return std::max(0.05, RowPitchM(S) * 0.5 - S.BarHingeClearM);
+}
+
+// And the arm is whatever reaches from there back over the lap, stopping a
+// rider's depth clear of the backrest — which is the space somebody sits in.
+// DERIVED, so it cannot be authored into the rider's chest.
+inline double BarArmLengthM(const FTrainSettings& S)
+{
+    const double BackrestFront = -S.SeatDepthM * 0.65;   // the squab's rear, from the row centre
+    return std::max(0.05, BarHingeAheadM(S) - (BackrestFront + S.BarLapClearM));
 }
 
 // SHORTER THAN HALF THE PITCH, ALWAYS. Two chassis that meet leave nowhere for
@@ -987,7 +1019,8 @@ inline void AddRestraintBar(FMeshBuffer& Out, const FTrainSettings& S,
     const FVec3 Dir{-std::cos(Swing), 0.0, std::sin(Swing)};
     const double HalfY = std::max(0.05, S.BodyWidthM * 0.5 - S.BarInsetM);
     const double R = S.BarDiameterM * 0.5;
-    if (!(R > 0.0) || !(S.BarArmLengthM > 0.0)) { return; }
+    const double Arm = BarArmLengthM(S);
+    if (!(R > 0.0) || !(Arm > 0.0)) { return; }
 
     const FVec3 Across{0.0, 1.0, 0.0};
     const FVec3 Vertical{0.0, 0.0, 1.0};
@@ -995,8 +1028,8 @@ inline void AddRestraintBar(FMeshBuffer& Out, const FTrainSettings& S,
     for (int Side = 0; Side < 2; ++Side)
     {
         const double Y = Side == 0 ? HalfY : -HalfY;
-        const FVec3 Hinge{RowX + S.BarHingeAheadM, Y, HingeZ};
-        Tip[Side] = Hinge + Dir * S.BarArmLengthM;
+        const FVec3 Hinge{RowX + BarHingeAheadM(S), Y, HingeZ};
+        Tip[Side] = Hinge + Dir * Arm;
         SweepStrut(Out, Hinge, Tip[Side], Across, R, S.StrutSides);
     }
     SweepStrut(Out, Tip[0], Tip[1], Vertical, R, S.StrutSides);

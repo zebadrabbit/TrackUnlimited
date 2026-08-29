@@ -107,11 +107,20 @@ nobody.
 **AND THE BAR HINGES AT THE FRONT, NOT BEHIND THE HIP (2026-08-28).** The first version
 pivoted behind the rider and swung forward over the thighs, so raised it leaned over the seat
 from behind — backwards, and only caught against a photograph of a real car. The pivot is low
-on the divider AHEAD of the rider (`BarHingeAheadM`, 0.30 m ahead of the row centre, a thigh's
-height above the squab); closed, the arm reaches BACK over the lap; open, it swings up past
-vertical (`BarRaisedDeg` 100°) so the seat is clear from above and riders step in past it.
-Asserted in car space as a span rather than by eye: closed the bar reaches behind the row
-centre, open it stands entirely ahead of it.
+on the divider AHEAD of the rider, a thigh's height above the squab; closed, the arm reaches
+BACK over the lap; open, it swings up past vertical (`BarRaisedDeg` 100°) so the seat is clear
+from above and riders step in past it.
+
+**AND BOTH THE PIVOT AND THE ARM ARE DERIVED FROM THE ROW'S PITCH.** 0.30 m ahead of the row
+centre was still a guess, and on a 1.35 m row it put the pivot in the rider's knees — reported
+from the next screenshot. `BarHingeAheadM(S)` is half a row's pitch less `BarHingeClearM`
+(0.12), so the pivot lands on the divider at the FRONT of the bay; `BarArmLengthM(S)` is
+whatever reaches from there back to `BarLapClearM` (0.35) ahead of the backrest face, which is
+the space a person sits in. A longer car, or one row instead of two, moves both without
+retyping either. Measured on the reference train: pivot **0.56 m** ahead of the row centre
+(bay front 0.68), **0.32 m** of clear seat between the backrest and the closed bar, the
+crossbar landing over the squab. Asserted as a span in car space — closed it is over the
+squab and not over the knees, open it stands entirely ahead of the seat.
 
 **TWO ROWS, AND A BULKHEAD AT EACH END (2026-08-28).** One row left half of a 2.7 m shell
 empty on screen; `RowsPerCar` is 2 now, spaced evenly along the shell by `RowCentreX` so the

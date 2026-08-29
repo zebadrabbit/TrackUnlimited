@@ -966,11 +966,27 @@ void TestTheLapBarsSwingWithTheBankAndStayClosed()
         double CMin, CMax, OMin, OMax;
         Span(1.0, CMin, CMax);
         Span(0.0, OMin, OMax);
-        assert(CMax > RowX + 0.2 && "the hinge is ahead of the row, at the knees");
-        assert(CMin < RowX && "closed, the bar reaches back over the hips");
+        // THE PIVOT IS AT THE FRONT OF THE BAY, not merely ahead of the squab:
+        // within the hinge clearance of the row's own front edge.
+        const double BayFront = RowX + RowPitchM(S) * 0.5;
+        assert(CMax > BayFront - S.BarHingeClearM - 0.02 && "the pivot is at the front of the bay");
+        assert(CMax < BayFront && "and inside it, on the divider rather than through it");
         assert(OMin > RowX && "open, the bar stands clear ahead of the seat");
-        std::printf("  hinged %.2f m ahead of the row: closed reaches %.2f m behind it, open stands %.2f m ahead\n",
-                    S.BarHingeAheadM, RowX - CMin, OMin - RowX);
+
+        // CLOSED, IT COMES DOWN OVER THE SQUAB — which is the lap. The row
+        // CENTRE is not: the squab sits back from it, so a bar landing on the
+        // centre line would be over the knees.
+        const double SquabBack = RowX - S.SeatDepthM * 0.65;
+        const double SquabFront = RowX + S.SeatDepthM * 0.35;
+        assert(CMin > SquabBack && CMin < SquabFront && "closed, the bar is over the squab");
+
+        // AND THERE IS ROOM TO SIT. The gap between the crossbar and the face of
+        // the backrest is where a person goes: an arm length authored a hand's
+        // width too long puts the bar in their chest, and nothing else says so.
+        const double Room = CMin - SquabBack;
+        assert(Room > 0.30 && "a rider has to fit between the backrest and the bar");
+        std::printf("  pivot %.2f m ahead of the row (bay front %.2f), %.2f m of seat between backrest and closed bar\n",
+                    BarHingeAheadM(S), RowPitchM(S) * 0.5, Room);
     }
 
     // ---- ONE ROW RAISED MOVES ONE BAR. Bars are appended in row order, car by
