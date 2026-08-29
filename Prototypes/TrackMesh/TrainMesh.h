@@ -192,12 +192,20 @@ struct FTrainSettings
 
     double CouplerDiameterM = 0.07;
 
-    // ---- The restraint: ONE LAP BAR PER SEAT ROW, hinged at the hip either side
-    // of the seat and swung by the bank's position (FCommandedBank::GroupPosition,
-    // 0 open, 1 closed). Closed it lies forward across the lap, INSIDE the shell
-    // — which is where a real one is, and why a closed bar is invisible from the
-    // platform. Raised it stands above the rim, which is the state that means
-    // something: a bar you can see is a train that is not ready.
+    // ---- The restraint: ONE LAP BAR PER SEAT ROW, swung by the bank's position
+    // (FCommandedBank::GroupPosition, 0 open, 1 closed). Closed it lies back
+    // across the lap, INSIDE the shell — which is where a real one is, and why
+    // a closed bar is invisible from the platform. Raised it stands above the
+    // rim, which is the state that means something: a bar you can see is a
+    // train that is not ready.
+    //
+    // HINGED AT THE FRONT OF THE SEAT, NOT BEHIND THE HIP (2026-08-28). The
+    // first version pivoted behind the rider and swung forward over the thighs,
+    // so raised it leaned over the seat from behind — backwards, from a
+    // photograph of a real car: the pivot is low on the divider AHEAD of the
+    // rider, about knee height, the bar comes down and BACK over the lap, and
+    // open it stands past vertical so the seat is clear from above and riders
+    // step in past it.
     //
     // RowsPerCar is the train's number and the station reads it — the gate per
     // seat row on the platform faces the bar it serves, so the two cannot be
@@ -207,11 +215,11 @@ struct FTrainSettings
     // pitch is the shell's and not a second authored number.
     int RowsPerCar = 2;
     double BarDiameterM = 0.06;
-    double BarHingeUpM = 0.05;        // above the squab: the hip, seated. DERIVED from the seat
-    double BarHingeBackM = 0.15;      // behind the row centre, so it swings over the lap
-    double BarArmLengthM = 0.45;
+    double BarHingeUpM = 0.06;        // above the squab: the thigh, seated. DERIVED from the seat
+    double BarHingeAheadM = 0.30;     // ahead of the row centre: the front of the squab
+    double BarArmLengthM = 0.45;      // reaches back past the row centre, over the hips
     double BarInsetM = 0.12;          // arms this far in from the shell's full width
-    double BarRaisedDeg = 80.0;       // fully open: swung up out of the seat
+    double BarRaisedDeg = 100.0;      // fully open: past vertical, leaning away from the seat
 
     // ---- Tessellation. Coarser than the rails DELIBERATELY, the same argument
     // the support columns get eight sides on: a wheel is 300 mm across and there
@@ -963,19 +971,20 @@ inline void AppendCarBuffer(FMeshBuffer& Out, const FMeshBuffer& Car, const FTra
 // moves only the angle, never the topology, which is what lets the actor update
 // vertices in place as the bars come down instead of recreating a section.
 //
-// The hinge sits behind the row centre and the arm points forward when closed,
-// so the crossbar comes down over the lap rather than onto the hip.
+// The hinge sits AHEAD of the row centre and the arm points BACK when closed,
+// so the crossbar comes down over the lap from the front, as a real one does;
+// raising it swings the arm up and over past vertical, clear of the seat.
 inline void AddRestraintBar(FMeshBuffer& Out, const FTrainSettings& S,
                             const FTrackProfile& Profile, double RailZ,
                             double RowX, double Position)
 {
     const double P = std::max(0.0, std::min(1.0, Position));
-    // THE HINGE IS ON THE SEAT, not at an authored height: the hip is where the
+    // THE HINGE IS ON THE SEAT, not at an authored height: the knee is where the
     // squab puts it, and a bar hinged anywhere else swings over nobody.
     const double HingeZ = RailZ + CabinFloorHeight(S, ShellKeepOut(S, Profile))
                         + S.SeatHeightM + S.BarHingeUpM;
     const double Swing = (1.0 - P) * S.BarRaisedDeg * (TrackMeshTwoPi / 360.0);
-    const FVec3 Dir{std::cos(Swing), 0.0, std::sin(Swing)};
+    const FVec3 Dir{-std::cos(Swing), 0.0, std::sin(Swing)};
     const double HalfY = std::max(0.05, S.BodyWidthM * 0.5 - S.BarInsetM);
     const double R = S.BarDiameterM * 0.5;
     if (!(R > 0.0) || !(S.BarArmLengthM > 0.0)) { return; }
@@ -986,7 +995,7 @@ inline void AddRestraintBar(FMeshBuffer& Out, const FTrainSettings& S,
     for (int Side = 0; Side < 2; ++Side)
     {
         const double Y = Side == 0 ? HalfY : -HalfY;
-        const FVec3 Hinge{RowX - S.BarHingeBackM, Y, HingeZ};
+        const FVec3 Hinge{RowX + S.BarHingeAheadM, Y, HingeZ};
         Tip[Side] = Hinge + Dir * S.BarArmLengthM;
         SweepStrut(Out, Hinge, Tip[Side], Across, R, S.StrutSides);
     }

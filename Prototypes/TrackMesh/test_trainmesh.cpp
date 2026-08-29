@@ -950,6 +950,29 @@ void TestTheLapBarsSwingWithTheBankAndStayClosed()
     std::printf("  %d bars: closed tops out %.2f m under the rim, raised %.2f m over it\n",
                 Rows, RimZ - MaxZ(Closed.Restraints), MaxZ(Open.Restraints) - RimZ);
 
+    // ---- HINGED AT THE FRONT, COMING DOWN BACK OVER THE LAP. One bar in car
+    // space: closed, it runs from ahead of the row centre back past it; open,
+    // it stands entirely ahead of the row centre, so the seat is clear from
+    // above. The first version had both the other way round.
+    {
+        const double RowX = RowCentreX(S, 0);
+        auto Span = [&](double Pos, double& MinX, double& MaxX)
+        {
+            FMeshBuffer B;
+            AddRestraintBar(B, S, P, -Heartline, RowX, Pos);
+            MinX = 1e9; MaxX = -1e9;
+            for (const FVec3& V : B.Position) { MinX = std::min(MinX, V.X); MaxX = std::max(MaxX, V.X); }
+        };
+        double CMin, CMax, OMin, OMax;
+        Span(1.0, CMin, CMax);
+        Span(0.0, OMin, OMax);
+        assert(CMax > RowX + 0.2 && "the hinge is ahead of the row, at the knees");
+        assert(CMin < RowX && "closed, the bar reaches back over the hips");
+        assert(OMin > RowX && "open, the bar stands clear ahead of the seat");
+        std::printf("  hinged %.2f m ahead of the row: closed reaches %.2f m behind it, open stands %.2f m ahead\n",
+                    S.BarHingeAheadM, RowX - CMin, OMin - RowX);
+    }
+
     // ---- ONE ROW RAISED MOVES ONE BAR. Bars are appended in row order, car by
     // car, so each bar is a contiguous run of the same vertex count.
     std::vector<double> One(Rows, 1.0);

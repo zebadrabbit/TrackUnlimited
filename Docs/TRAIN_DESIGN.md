@@ -104,6 +104,15 @@ row — squab and backrest, their own buffer because upholstery is not gelcoat �
 bar's hinge is DERIVED from the squab, since a bar hinged at an authored height swings over
 nobody.
 
+**AND THE BAR HINGES AT THE FRONT, NOT BEHIND THE HIP (2026-08-28).** The first version
+pivoted behind the rider and swung forward over the thighs, so raised it leaned over the seat
+from behind — backwards, and only caught against a photograph of a real car. The pivot is low
+on the divider AHEAD of the rider (`BarHingeAheadM`, 0.30 m ahead of the row centre, a thigh's
+height above the squab); closed, the arm reaches BACK over the lap; open, it swings up past
+vertical (`BarRaisedDeg` 100°) so the seat is clear from above and riders step in past it.
+Asserted in car space as a span rather than by eye: closed the bar reaches behind the row
+centre, open it stands entirely ahead of it.
+
 **TWO ROWS, AND A BULKHEAD AT EACH END (2026-08-28).** One row left half of a 2.7 m shell
 empty on screen; `RowsPerCar` is 2 now, spaced evenly along the shell by `RowCentreX` so the
 pitch is the shell's rather than a second authored number, and the station reads the same
