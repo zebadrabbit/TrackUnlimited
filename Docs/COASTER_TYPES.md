@@ -149,6 +149,33 @@ the run rather than a field on the train, precisely so a face-off train can be m
 seat offset belongs in the same place, for the same reason — **a train has several seats and the
 honest way to measure them is to run it once per seat.**
 
+## A type is a train AND the way you get into it
+
+Noted 2026-08-29, at the end of the evening the wing coaster shipped, and it is the developer's
+observation rather than a conclusion this document reached: **every style is going to have this
+process. Each train has a different station and approach.**
+
+The wing coaster found it first because it found it hardest — pods either side of the track have
+no platform, no way in over a waist-high wall, and no room for a trackside catwalk — but it is not
+a wing problem. An inverted train boards from a floor that has to *retract*. A flying coaster
+boards seated and then rotates. A stand-up has a different restraint and a different door. A
+spinning car has to be *held* still while people get in. None of that is the vehicle, and none of
+it is the layout; it is the third thing, and today there is exactly one of it: a 4 m platform down
+one side with a gate per seat row, derived from the powered runs and sized for a tub.
+
+**The question to open with, rather than to discover halfway through:** does this fork the
+decision? *A type is a PRESET, never a branch* holds because a type only ever selects values in
+fields that already exist. A station that differs per type is fine if it is more of those fields —
+a side, a height, a width, a gate placement, a retracting floor as a commanded bank like every
+other one. It is **not** fine if it becomes `if (Type == Wing)` in the station builder, which is
+the same fatal shape one level along from NL2's scripted mode.
+
+The early evidence is encouraging: `PresetWalkwaySide` already knows about sides, `FCommandedBank`
+already models a floor that moves on a timer with sensed groups, and the gates are already derived
+from `RowsPerCar` rather than typed. The wing station may be *"platforms on both sides, outboard,
+at pod-floor height"* — four values, no branch. Worth testing that claim against the inverted and
+flying cases before building any of it, because if it survives three types it is the answer.
+
 ## Genuinely new — a degree of freedom each
 
 Each of these adds a state variable to the vehicle, integrated alongside arc length and speed, with
