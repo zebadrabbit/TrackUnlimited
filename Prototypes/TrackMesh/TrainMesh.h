@@ -140,7 +140,7 @@ struct FTrainSettings
     // between the two seats of a row, and the pods are built AROUND the seats
     // rather than the seats being placed in the pods -- so the camera, the
     // felt-G offset and the shell all read the same number, and a wing coaster
-    // is "SeatPitchM 3.60 instead of 0.60" rather than a mode.
+    // is "SeatPitchM 2.80 instead of 0.60" rather than a mode.
     //
     // COASTER_TYPES.md: a type is a PRESET, never a branch. This is one field
     // in a struct that already existed; nothing downstream learns types exist.

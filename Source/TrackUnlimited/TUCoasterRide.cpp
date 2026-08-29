@@ -520,8 +520,22 @@ void ATUCoasterRide::ApplyPresetTrainSetup(ETUPresetLayout Which)
 		// one thing a vehicle swap can quietly break.
 		CarCount = 5; CarLengthM = 3.f;
 		TrainCount = 3;
-		TrainSeatPitchM = 3.60f;
-		TrainPodWidthM = 1.10f;
+		// ===================== NARROWER THAN THE FIRST TRY, FROM A SCREENSHOT =====================
+		//
+		// 3.60 and 1.10 put 4.70 m of vehicle either side of a 1.20 m gauge to
+		// carry TWO people, and it read as two thin troughs on the end of a lot
+		// of scaffolding rather than as a car. A real wing coaster is that wide
+		// because each wing carries two seats abreast; ours carries one, so it
+		// has no business being the same span.
+		//
+		// 2.80 and 1.30: 4.10 m overall, the pods 18% wider and 0.40 m closer in
+		// on each side, and the spars that much shorter with them. The pod is
+		// 1.30 across and 2.70 long for its two rows, which is a tandem pod
+		// rather than a rail. Still clear of the bogie -- the inner wall lands
+		// 0.75 m out where the wheels reach 0.65 -- and the audit says so rather
+		// than this comment being the only check.
+		TrainSeatPitchM = 2.80f;
+		TrainPodWidthM = 1.30f;
 
 		// ===================== AND IT HAS NO CATWALK, WHICH IS A REAL LIMIT =====================
 		//
@@ -7329,7 +7343,14 @@ bool ATUCoasterRide::RunDocumentSmokeTest()
 
 		// The vehicle did change, and it builds without a finding: pods wider
 		// than their seats, clear of each other and clear of the bogie.
-		const bool bWing = Cols.size() == 2 && OuterM > 1.5 && TS.PodWidthM > 0.0;
+		//
+		// THE RIDER SITS OUTSIDE THE TRACK, which is what a wing coaster IS and
+		// is a property rather than a taste number -- the first version of this
+		// line said `OuterM > 1.5` against the figure the preset happened to
+		// carry that hour, and duly failed the moment the pods were narrowed
+		// from a screenshot. A gauge is the thing that cannot drift under it.
+		const bool bWing = Cols.size() == 2 && TS.PodWidthM > 0.0
+			&& OuterM > Profile.Gauge;
 		const bool bAuditClean = AuditTrain(TS, Track.GetHeartlineHeight(), Profile,
 			Track.TotalLength()).empty();
 

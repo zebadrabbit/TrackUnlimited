@@ -97,8 +97,15 @@ face-off trains rather than for this — which is the good kind of accident.
 
 > **BUILT 2026-08-29.** `ETUPresetLayout::Wing`, and it is the Sidewinder's track byte for byte
 > with a different vehicle on it — which is this document's whole argument, shipped rather than
-> argued. The vehicle is **two numbers**: `SeatPitchM` 3.60 (the two seats of a row, 1.8 m either
-> side) and `PodWidthM` 1.10 (a shell built around each seat instead of one spanning both).
+> argued. The vehicle is **two numbers**: `SeatPitchM` 2.80 (the two seats of a row, 1.4 m either
+> side) and `PodWidthM` 1.30 (a shell built around each seat instead of one spanning both).
+>
+> **Narrowed the same evening, from a screenshot.** The first try was 3.60 and 1.10 — 4.70 m of
+> vehicle either side of a 1.20 m gauge to carry *two* people, which read as two thin troughs on the
+> end of a lot of scaffolding rather than as a car. A real wing coaster is that wide because each
+> wing carries two seats abreast; ours carries one, so it had no business being the same span.
+> 2.80 and 1.30 is 4.10 m overall, the pods 18% wider and 0.40 m closer in each side.
+>
 > Nothing downstream learned that types exist: the envelope judge already asked at
 > `SeatPitchM * 0.5`, so it picked the offset up with no change at all, and the ride camera and
 > the live telemetry followed the same number. Asserted in `-TUSmokeTest` **both ways** — the
@@ -107,7 +114,7 @@ face-off trains rather than for this — which is the good kind of accident.
 > check confused *the layout* with *the ride* and failed: a five-car wing train has a different top
 > speed to a seven-car one, which is precisely what a vehicle is allowed to change.
 >
-> **Measured:** 65 segments and 1284.8 m unchanged, pods at ±1.80 m, and the judge finds **one
+> **Measured:** 65 segments and 1284.8 m unchanged, pods at ±1.40 m, and the judge finds **one
 > thing at the wing seat against none at the heartline**. The snake is inside the bands for a rider
 > on the centreline and outside them for one on a wing — a fact about that ride nothing could see
 > before this term existed, and a row to go and look at rather than something to repair.

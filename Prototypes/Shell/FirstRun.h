@@ -310,10 +310,10 @@ inline FTemplate TemplateAt(std::size_t i)
     case 5:
         return {"Wing — the same ride, from a pod",
                 "The Sidewinder's track exactly, with a wing vehicle on it: two seats a "
-                "row, 3.6 m apart, each in its own pod beside the track with open air "
+                "row, 2.8 m apart, each in its own pod beside the track with open air "
                 "above and below. A type is a preset here, never a mode, so nothing "
                 "about the ride changed except what you are sitting in.",
-                "Change the seat spacing from 3.6 m to 0.6 and the two pods collapse "
+                "Change the seat spacing from 2.8 m to 0.6 and the two pods collapse "
                 "into one tub over the track: the whole type is that one number. Then "
                 "ride the snake and press [N] between the pods -- the telemetry reads a "
                 "different vertical G through every roll.",

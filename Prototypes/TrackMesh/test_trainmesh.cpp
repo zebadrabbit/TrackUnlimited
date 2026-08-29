@@ -1059,8 +1059,8 @@ FTrainSettings WingTrain()
     FTrainSettings S;
     S.CarCount = 4;
     S.RowsPerCar = 1;
-    S.SeatPitchM = 3.60;     // the two seats of a row: 1.8 m either side
-    S.PodWidthM = 1.10;
+    S.SeatPitchM = 2.80;     // the two seats of a row: 1.4 m either side
+    S.PodWidthM = 1.30;
     return S;
 }
 
@@ -1111,7 +1111,11 @@ void TestAWingCarIsTwoPODSAndTheSEATSPlaceThem()
         if (V.Y > 0.0) { LeftMin = std::min(LeftMin, V.Y); }
         else           { RightMax = std::max(RightMax, V.Y); }
     }
-    assert(LeftMin > 0.5 && RightMax < -0.5 && "the pods have closed over the track");
+    // OUTSIDE THE TRACK, which is what a wing coaster IS. Against the GAUGE
+    // rather than a number, so a taste adjustment to the pods cannot quietly
+    // turn this into a wide tub with the assertion still passing.
+    assert(LeftMin > P.Gauge * 0.5 && RightMax < -P.Gauge * 0.5
+           && "the pods have closed over the track");
 
     // AND CLEAR OF THE BOGIE SIDEWAYS, which the shell keep-out cannot see: that
     // machinery watches a flank passing ABOVE a wheel, and a pod meets the same
