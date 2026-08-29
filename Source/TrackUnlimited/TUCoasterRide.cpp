@@ -374,6 +374,11 @@ TArray<FTUTrackSegment> ATUCoasterRide::PresetLayout(ETUPresetLayout Which)
 	case ETUPresetLayout::SmallBatch:      return SmallBatchLayout();
 	case ETUPresetLayout::Showcase:        return ShowcaseLayout();
 	case ETUPresetLayout::Sidewinder:      return SidewinderLayout();
+	// BYTE-IDENTICAL TO THE SIDEWINDER, and that is the point rather than a
+	// shortcut: a wing coaster is a VEHICLE, so the honest way to ship one is to
+	// change the vehicle and leave the ride alone. Closure, every device and
+	// every published figure come along untouched.
+	case ETUPresetLayout::Wing:            return SidewinderLayout();
 	default:                               return ReferenceLayout();
 	}
 }
@@ -451,6 +456,15 @@ void ATUCoasterRide::ApplyPresetTrainSetup(ETUPresetLayout Which)
 	//
 	// So the train comes with the layout. Only on an explicit preset load, never
 	// on a rebuild — an author who has since chosen a different train keeps it.
+	//
+	// THE DEFAULT VEHICLE FIRST, THEN THE EXCEPTIONS. Only the Wing case sets the
+	// seat spacing, the pod width or the walkway side, so without this the
+	// preset loaded AFTER it would inherit a wing car and no evacuation route —
+	// a preset that leaves state behind is not a worked example, it is a mode.
+	TrainSeatPitchM = 0.60f;
+	TrainPodWidthM = 0.f;
+	PresetWalkwaySide = ETUWalkway::Right;
+
 	switch (Which)
 	{
 	case ETUPresetLayout::SmallBatch:
@@ -489,6 +503,42 @@ void ATUCoasterRide::ApplyPresetTrainSetup(ETUPresetLayout Which)
 		// three trains: the extra places are flow slack, not capacity.
 		CarCount = 7; CarLengthM = 3.f;
 		TrainCount = 3;
+		break;
+	case ETUPresetLayout::Wing:
+		// ===================== A TYPE IS A VEHICLE =====================
+		//
+		// The Sidewinder's track and the Sidewinder's fleet, with a WING car on
+		// it: two seats a row 3.6 m apart, each in a 1.1 m pod out beside the
+		// track with open air above and below. Nothing else about the ride
+		// changes, which is COASTER_TYPES.md's decision made visible -- no
+		// ECoasterType is read anywhere, because there is no such thing to read.
+		//
+		// SHORTER CARS THAN THE SIDEWINDER'S SEVEN. A wing train is wide rather
+		// than long and the pods are what somebody looks at; five cars keeps the
+		// train inside the same holding devices with room to spare, which is the
+		// one thing a vehicle swap can quietly break.
+		CarCount = 5; CarLengthM = 3.f;
+		TrainCount = 3;
+		TrainSeatPitchM = 3.60f;
+		TrainPodWidthM = 1.10f;
+
+		// ===================== AND IT HAS NO CATWALK, WHICH IS A REAL LIMIT =====================
+		//
+		// Stated rather than hidden, because "a preset catwalks its devices" has
+		// been true of every ride here since 2026-08-08 and this one breaks it.
+		// A trackside deck starts 0.85 m out and its handrail tops out 0.30 m
+		// under the heartline -- which is inside the space these pods occupy,
+		// laterally AND vertically. Drawn, a wing train would run through its own
+		// evacuation route every lap.
+		//
+		// A real wing coaster solves this with a deck slung lower or further out;
+		// `FCatwalkSettings::DeckDropM` is already a knob and says so. Doing it
+		// properly means the audit learning about the wayside, which is a
+		// separate piece of work and not this preset's to smuggle in. Until then
+		// the honest answer is NONE -- and `ApplyPresetWalkways` returns early on
+		// it rather than authoring spans that draw nothing, so the evacuation
+		// model is told there is no route instead of being shown a fake one.
+		PresetWalkwaySide = ETUWalkway::None;
 		break;
 	default:
 		CarCount = 5; CarLengthM = 3.f;   // 15 m, exactly as before
@@ -4150,6 +4200,7 @@ bool ATUCoasterRide::PresetForTemplate(ETemplatePreset T, ETUPresetLayout& Out)
 	case ETemplatePreset::SmallBatch:      Out = ETUPresetLayout::SmallBatch; return true;
 	case ETemplatePreset::Showcase:        Out = ETUPresetLayout::Showcase; return true;
 	case ETemplatePreset::Sidewinder:      Out = ETUPresetLayout::Sidewinder; return true;
+	case ETemplatePreset::Wing:            Out = ETUPresetLayout::Wing; return true;
 	case ETemplatePreset::Blank:           return false;
 	default:                               Out = ETUPresetLayout::Reference; return true;
 	}
@@ -7242,6 +7293,94 @@ bool ATUCoasterRide::RunDocumentSmokeTest()
 		else { Files.Delete(*KeyBindingsPath(), false, true, true); }
 	}
 
+	// ===================== AND A TYPE IS A PRESET, NEVER A BRANCH =====================
+	//
+	// The wing coaster: the Sidewinder's track with a different VEHICLE on it.
+	// What is asserted is exactly the claim COASTER_TYPES.md makes -- the layout
+	// is untouched and the ride is measurably different, because a rider 1.8 m
+	// off the heartline feels alpha*y of vertical snap and omega^2*y of lateral
+	// pull through every roll that the centre seat never does.
+	//
+	// THE SAMENESS IS HALF THE TEST. If the layout ever stops matching, a type
+	// has begun forking behaviour, which is the one thing that decision forbids
+	// and the failure that costs N times on every later feature.
+	{
+		StartFromTemplate(4);                       // the Sidewinder
+		const int32 BaseSegments = Segments.Num();
+		const double BaseLength = Track.TotalLength();
+		// THE DOCUMENT IS THE IDENTITY, which is already this project's rule for
+		// undo and for dirty. Comparing the saved text is the strongest form of
+		// "the layout did not move" available, and it is free.
+		const FString BaseDoc = SerialiseDocument();
+
+		StartFromTemplate(5);                       // the same track, from a pod
+		const FTrainSettings TS = TrainMeshSettings();
+		const std::vector<FCarColumn> Cols = CarColumns(TS);
+		const double OuterM = TS.SeatPitchM * 0.5;
+
+		// THE LAYOUT, NOT THE RIDE. The ride is allowed to differ and must: a
+		// wing train is five cars where the Sidewinder runs seven, so the top
+		// speed moves with the vehicle exactly as it should. What may not move
+		// is the track, and the first version of this check confused the two.
+		const bool bSameRide = Segments.Num() == BaseSegments
+			&& FMath::IsNearlyEqual(Track.TotalLength(), BaseLength, 1e-6)
+			&& SerialiseDocument() == BaseDoc;
+
+		// The vehicle did change, and it builds without a finding: pods wider
+		// than their seats, clear of each other and clear of the bogie.
+		const bool bWing = Cols.size() == 2 && OuterM > 1.5 && TS.PodWidthM > 0.0;
+		const bool bAuditClean = AuditTrain(TS, Track.GetHeartlineHeight(), Profile,
+			Track.TotalLength()).empty();
+
+		// NO EVACUATION ROUTE, and it is asserted rather than merely commented:
+		// a wing train occupies the space a trackside catwalk needs, so this
+		// preset authors none. An empty list is the honest way to say so.
+		const bool bNoWalkway = Walkways.Num() == 0;
+
+		// AND THE SEAT READS DIFFERENTLY. The judge already asks at
+		// SeatPitchM * 0.5, so it picked the wing offset up with no change at
+		// all -- which is the thesis working rather than a coincidence.
+		const FRideProfile Off = OffsetProfile(Profile_, OuterM);
+		const FGVerdict Pod = JudgeRideProfile(Off);
+		// THE CONTRAST IS THE RESULT, so both are counted. A ride within the
+		// envelope at the heartline and outside it at a wing seat is precisely
+		// what the type costs, and it is invisible without the offset term.
+		const FGVerdict Centre = JudgeRideProfile(Profile_);
+		double Snap = 0.0, Pull = 0.0;
+		const std::size_t N = FMath::Min(Off.Samples.size(), Profile_.Samples.size());
+		for (std::size_t i = 0; i < N; ++i)
+		{
+			Snap = FMath::Max(Snap, FMath::Abs(Off.Samples[i].VerticalG - Profile_.Samples[i].VerticalG));
+			Pull = FMath::Max(Pull, FMath::Abs(Off.Samples[i].LateralG - Profile_.Samples[i].LateralG));
+		}
+
+		// UNFILTERED, and said so. Alpha is a per-sample finite difference and
+		// the judge's 5 Hz pass is what turns it into a measurement; this is a
+		// "did the seat move" check rather than a figure to quote at anybody.
+		if (!bSameRide || !bWing || !bAuditClean || !bNoWalkway
+			|| Pod.SamplesJudged == 0 || Snap < 0.05 || Pull < 0.05)
+		{
+			UE_LOG(LogTUEvents, Error,
+				TEXT("smoke: the wing preset is not one (same ride %d, two pods %d, audit clean %d, ")
+				TEXT("no walkway %d, judged %d, snap %.3f g, pull %.3f g)"),
+				bSameRide, bWing, bAuditClean, bNoWalkway,
+				static_cast<int32>(Pod.SamplesJudged), Snap, Pull);
+			Failures.Add(TEXT("wing"));
+		}
+		else
+		{
+			UE_LOG(LogTUEvents, Log,
+				TEXT("smoke: a type is a preset -- the wing rides the Sidewinder's %d segments and %.1f m ")
+				TEXT("unchanged, on pods at +/-%.2f m: the outer seat sees %+.2f g of unfiltered snap and ")
+				TEXT("%+.2f g of pull the centre never does, and the judge finds %d thing(s) there ")
+				TEXT("against %d at the heartline"),
+				Segments.Num(), Track.TotalLength(), OuterM, Snap, Pull,
+				static_cast<int32>(Pod.Findings.size()),
+				static_cast<int32>(Centre.Findings.size()));
+		}
+		StartFromTemplate(4);   // leave the Sidewinder loaded, as this block found it
+	}
+
 	// ===================== NOTHING ELSE ANSWERS TO F1-F5 =====================
 	//
 	// Config/DefaultInput.ini removes the five DebugExecBindings that ran
@@ -7289,7 +7428,7 @@ bool ATUCoasterRide::RunDocumentSmokeTest()
 
 	if (Failures.Num() > 0)
 	{
-		UE_LOG(LogTUEvents, Error, TEXT("smoke: %d of 12 checks failed: %s"),
+		UE_LOG(LogTUEvents, Error, TEXT("smoke: %d of 13 checks failed: %s"),
 			Failures.Num(), *FString::Join(Failures, TEXT(", ")));
 	}
 	return Failures.Num() == 0;
@@ -10226,6 +10365,10 @@ FTrainSettings ATUCoasterRide::TrainMeshSettings() const
 	S.CarCount = FMath::Max(1, CarCount);
 	S.CarLengthM = FMath::Max(0.5f, CarLengthM);
 	S.WheelSides = FMath::Clamp(TrainWheelSides, 5, 24);
+	// The wing vehicle, and it is two numbers rather than a type. Defaults are
+	// the shipped train exactly, so every measured figure is unmoved.
+	S.SeatPitchM = FMath::Max(0.2f, TrainSeatPitchM);
+	S.PodWidthM = FMath::Max(0.f, TrainPodWidthM);
 	return S;
 }
 

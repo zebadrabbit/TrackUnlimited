@@ -795,6 +795,29 @@ private:
 		meta = (ClampMin = "5", ClampMax = "24", EditCondition = "bBuildTrainMesh"))
 	int32 TrainWheelSides = 10;
 
+	/**
+	 * Between the two seats of a row. 0.60 m is a pair sitting side by side in
+	 * one tub; a few metres is a WING coaster, and there is nothing in between
+	 * that is a different kind of thing.
+	 *
+	 * ONE ANSWER FOR WHERE A RIDER IS. The camera, the felt-G offset the outer
+	 * seat is judged at, and the shell the mesh draws all read this — so the
+	 * type cannot end up with the rider sitting somewhere no pod was built.
+	 */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Mesh",
+		meta = (ClampMin = "0.2", UIMax = "5.0", EditCondition = "bBuildTrainMesh"))
+	float TrainSeatPitchM = 0.60f;
+
+	/**
+	 * Zero is one shell spanning both seats, which is every ride here. Above
+	 * zero it is the width of a POD built around each seat instead — the whole
+	 * of a wing coaster, and the reason COASTER_TYPES.md says a type is a preset
+	 * rather than a branch.
+	 */
+	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Mesh",
+		meta = (ClampMin = "0.0", UIMax = "2.0", EditCondition = "bBuildTrainMesh"))
+	float TrainPodWidthM = 0.f;
+
 	/** What the mesh is built from. One answer, so the car geometry and the
 	 *  placement cannot be built from two different ideas of the same train. */
 	FTrainSettings TrainMeshSettings() const;

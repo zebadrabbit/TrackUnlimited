@@ -130,6 +130,22 @@ struct FTrainSettings
     double BodyCornerRadiusM = 0.15;  // the rolled rim, and the WALL THICKNESS below it
     double BodyGapM = 0.30;           // pitch minus shell, so cars do not weld
 
+    // ---- A WING COASTER IS A VEHICLE, NOT A LAYOUT, and this is the whole of
+    // it. Zero means what every ride here has had: ONE shell spanning both
+    // seats of a row. Above zero it is the width of a POD built around each
+    // seat instead, so the two seats of a row ride out on their own either side
+    // of the track with nothing over them and nothing under them.
+    //
+    // NO SECOND SOURCE FOR WHERE A RIDER IS. SeatPitchM is still the distance
+    // between the two seats of a row, and the pods are built AROUND the seats
+    // rather than the seats being placed in the pods -- so the camera, the
+    // felt-G offset and the shell all read the same number, and a wing coaster
+    // is "SeatPitchM 3.60 instead of 0.60" rather than a mode.
+    //
+    // COASTER_TYPES.md: a type is a PRESET, never a branch. This is one field
+    // in a struct that already existed; nothing downstream learns types exist.
+    double PodWidthM = 0.0;
+
     // ---- The cabin. THE SHELL IS A TUB, NOT A BOX (2026-08-27). It had a roof,
     // and the first lap bars closed into a closed box and vanished, then poked
     // through the roof when raised — reported from a screenshot within the
@@ -589,17 +605,52 @@ inline FShellKeepOut ShellKeepOut(const FTrainSettings& S, const FTrackProfile& 
     return K;
 }
 
+// ===================== A CAR IS ONE SHELL, OR TWO =====================
+//
+// Everything with a seat in it -- the shell, its bulkheads, the seats and the
+// lap bars -- is built per COLUMN rather than per car, so a wing coaster is the
+// same code run twice with a lateral offset instead of a second train style.
+// The chassis and the wheels are not in here: those stay on the track, which is
+// exactly what makes a wing coaster look like one.
+struct FCarColumn
+{
+    double CentreY = 0.0;       // where this shell's own centreline is
+    double HalfWidth = 0.0;
+    double SeatSpreadM = 0.0;   // seats at CentreY +/- this; ZERO means one, on the centre
+    bool bOverWheels = true;    // do the wheels constrain this shell's flank
+};
+
+inline std::vector<FCarColumn> CarColumns(const FTrainSettings& S)
+{
+    if (!(S.PodWidthM > 0.0))
+    {
+        return {{0.0, S.BodyWidthM * 0.5, S.SeatPitchM * 0.5, true}};
+    }
+    // A POD IS NOT OVER THE WHEELS, so nothing down there constrains its flank
+    // and it can be full width to its floor -- which is the visible difference
+    // between a wing car and a wide one, and it falls out rather than being
+    // drawn in.
+    const double Y = S.SeatPitchM * 0.5;
+    const double Half = S.PodWidthM * 0.5;
+    return {{ Y, Half, 0.0, false},
+            {-Y, Half, 0.0, false}};
+}
+
 // Where the flank first reaches full width, above the floor. FULL WIDTH CANNOT
 // ARRIVE BEFORE THE WHEELS ARE PAST: the authored taper is taste and is honoured
 // wherever it is legal; below the running wheels it is not, so the taper gets
 // pushed UP rather than the shell being pushed OUT.
-inline double ShellShoulderHeight(const FTrainSettings& S, const FShellKeepOut& K)
+// A POD HAS NO WHEELS UNDER IT, so the authored taste is simply honoured: there
+// is nothing down there to push it up. That is the whole of `bOverWheels` here.
+inline double ShellShoulderHeight(const FTrainSettings& S, const FShellKeepOut& K,
+                                  bool bOverWheels = true)
 {
     const double W = S.BodyWidthM * 0.5;
     const double H = S.BodyHeightM * 0.5;
     const double R = std::min(S.BodyCornerRadiusM, std::min(W, H) * 0.9);
     const double Shoulder = S.BodyHeightM - R;
     const double hAuthored = std::max(0.0, std::min(1.0, S.BodyTaperFraction)) * S.BodyHeightM;
+    if (!bOverWheels) { return std::min(hAuthored, Shoulder); }
     return std::max(std::min(hAuthored, Shoulder), std::min(K.RunTopM + 0.02, Shoulder));
 }
 
@@ -607,9 +658,11 @@ inline double ShellShoulderHeight(const FTrainSettings& S, const FShellKeepOut& 
 // cavity sits inside the full-width part of the shell and never pokes out
 // through the tapered flank over the wheels. The rider sits on the wheel wells,
 // which is where a real one sits too.
-inline double CabinFloorHeight(const FTrainSettings& S, const FShellKeepOut& K)
+inline double CabinFloorHeight(const FTrainSettings& S, const FShellKeepOut& K,
+                               bool bOverWheels = true)
 {
-    return std::min(ShellShoulderHeight(S, K) + S.CabinFloorClearM, S.BodyHeightM * 0.9);
+    return std::min(ShellShoulderHeight(S, K, bOverWheels) + S.CabinFloorClearM,
+                    S.BodyHeightM * 0.9);
 }
 
 // The rider's eye above the HEARTLINE — what FSeat::VerticalM wants — from the
@@ -617,8 +670,12 @@ inline double CabinFloorHeight(const FTrainSettings& S, const FShellKeepOut& K)
 inline double RiderEyeAboveHeartline(const FTrainSettings& S, const FTrackProfile& Profile,
                                      double HeartlineHeight)
 {
-    return CabinFloorHeight(S, ShellKeepOut(S, Profile)) + S.SeatHeightM + S.RiderEyeAboveSeatM
-         - HeartlineHeight;
+    // Off the column the seat is IN. On a wing car that is a pod, whose floor
+    // sits lower because no wheel is pushing its taper up -- so the eye follows
+    // the seat rather than the seat following an assumption about one shell.
+    const bool bOverWheels = CarColumns(S).front().bOverWheels;
+    return CabinFloorHeight(S, ShellKeepOut(S, Profile), bOverWheels)
+         + S.SeatHeightM + S.RiderEyeAboveSeatM - HeartlineHeight;
 }
 
 // Returned counter-clockwise in (AxisA = rider's left, AxisB = up), relative to
@@ -628,10 +685,12 @@ inline double RiderEyeAboveHeartline(const FTrainSettings& S, const FTrackProfil
 // the cabin floor, and back the same way on the other side. Non-convex, which
 // is why the caps are ear-clipped.
 inline std::vector<FVec2> CarBodySection(const FTrainSettings& S,
-                                        const FShellKeepOut& K)
+                                        const FShellKeepOut& K,
+                                        double HalfWidth = -1.0,
+                                        bool bOverWheels = true)
 {
     std::vector<FVec2> Out;
-    const double W = S.BodyWidthM * 0.5;
+    const double W = HalfWidth > 0.0 ? HalfWidth : S.BodyWidthM * 0.5;
     const double H = S.BodyHeightM * 0.5;
     const double R = std::min(S.BodyCornerRadiusM, std::min(W, H) * 0.9);
 
@@ -641,9 +700,9 @@ inline std::vector<FVec2> CarBodySection(const FTrainSettings& S,
     const double Wf = std::min(std::min(S.BodyFloorWidthM * 0.5, K.FloorHalfWidth), W);
     const double Wm = std::min(std::max(Wf, K.MidHalfWidth), W);
 
-    const double hFull = ShellShoulderHeight(S, K);
+    const double hFull = ShellShoulderHeight(S, K, bOverWheels);
     const double Wi = W - R;                            // the inner wall
-    const double Vf = -H + CabinFloorHeight(S, K);      // the cabin floor
+    const double Vf = -H + CabinFloorHeight(S, K, bOverWheels);   // the cabin floor
 
     const double Quarter = TrackMeshTwoPi * 0.25;
     const int ArcSteps = 3;
@@ -653,8 +712,11 @@ inline std::vector<FVec2> CarBodySection(const FTrainSettings& S,
     // width at the shoulder. That is the shape the wheel envelope forces, and it
     // is also the shape a real car has, which is not a coincidence.
     Out.push_back({Wf, -H});
-    Out.push_back({Wf, -H + K.SideTopM});
-    Out.push_back({Wm, -H + K.RunTopM});
+    if (bOverWheels)
+    {
+        Out.push_back({Wf, -H + K.SideTopM});
+        Out.push_back({Wm, -H + K.RunTopM});
+    }
     Out.push_back({W, -H + hFull});
     Out.push_back({W, H - R});
 
@@ -679,8 +741,11 @@ inline std::vector<FVec2> CarBodySection(const FTrainSettings& S,
     }
     Out.push_back({-W, H - R});
     Out.push_back({-W, -H + hFull});
-    Out.push_back({-Wm, -H + K.RunTopM});
-    Out.push_back({-Wf, -H + K.SideTopM});
+    if (bOverWheels)
+    {
+        Out.push_back({-Wm, -H + K.RunTopM});
+        Out.push_back({-Wf, -H + K.SideTopM});
+    }
     Out.push_back({-Wf, -H});
     return Out;
 }
@@ -733,11 +798,15 @@ inline FTrainMesh BuildCarMesh(const FTrainSettings& S, double HeartlineHeight,
     // placement the cube draw already had right — `Position - Up * (Heartline -
     // BodyHeight/2)` — and the one thing about it that must survive the rewrite.
     const double BodyCentreZ = RailZ + S.BodyHeightM * 0.5;
+    const std::vector<FCarColumn> Columns = CarColumns(S);
+    const FShellKeepOut Keep = ShellKeepOut(S, Profile);
+    for (const FCarColumn& C : Columns)
     {
         std::vector<FTubeRing> Rings(2);
-        Rings[0] = {FVec3{-ShellHalf, 0.0, BodyCentreZ}, Across, Vertical, 0.0};
-        Rings[1] = {FVec3{ ShellHalf, 0.0, BodyCentreZ}, Across, Vertical, S.CarLengthM};
-        SweepSection(M.Body, Rings, CarBodySection(S, ShellKeepOut(S, Profile)),
+        Rings[0] = {FVec3{-ShellHalf, C.CentreY, BodyCentreZ}, Across, Vertical, 0.0};
+        Rings[1] = {FVec3{ ShellHalf, C.CentreY, BodyCentreZ}, Across, Vertical, S.CarLengthM};
+        SweepSection(M.Body, Rings,
+                     CarBodySection(S, Keep, C.HalfWidth, C.bOverWheels),
                      S.TextureMetres, true, true);
     }
 
@@ -756,13 +825,13 @@ inline FTrainMesh BuildCarMesh(const FTrainSettings& S, double HeartlineHeight,
 
     // ---- The bulkheads: the cabin closed at both ends, floor to rim, let into
     // the walls and the floor. See EndPanelThickM.
+    for (const FCarColumn& C : Columns)
     {
-        const FShellKeepOut K = ShellKeepOut(S, Profile);
-        const double FloorZ = RailZ + CabinFloorHeight(S, K);
+        const double FloorZ = RailZ + CabinFloorHeight(S, Keep, C.bOverWheels);
         // A centimetre under the rim: the let-in strip runs under the rolled
         // corner, which is already dropping away there.
         const double RimZ = RailZ + S.BodyHeightM - 0.01;
-        const double W = S.BodyWidthM * 0.5;
+        const double W = C.HalfWidth;
         const double R = std::min(S.BodyCornerRadiusM, std::min(W, S.BodyHeightM * 0.5) * 0.9);
         const double Let = std::min(0.02, R * 0.5);
         const double T = std::min(S.EndPanelThickM, ShellHalf * 0.5);
@@ -770,23 +839,26 @@ inline FTrainMesh BuildCarMesh(const FTrainSettings& S, double HeartlineHeight,
         {
             const double X1 = ShellHalf - 0.01;
             const double X0 = X1 - T;
-            Box(M.Body, End == 0 ? X0 : -X1, End == 0 ? X1 : -X0, 0.0,
+            Box(M.Body, End == 0 ? X0 : -X1, End == 0 ? X1 : -X0, C.CentreY,
                 FloorZ - Let, RimZ, W - R + Let);
         }
     }
 
     // ---- The seats: two a row on the cabin floor, a squab and a backrest each,
     // so the lap bar has a lap to come down over.
+    for (const FCarColumn& C : Columns)
     {
-        const FShellKeepOut K = ShellKeepOut(S, Profile);
-        const double FloorZ = RailZ + CabinFloorHeight(S, K);
+        const double FloorZ = RailZ + CabinFloorHeight(S, Keep, C.bOverWheels);
         const int Rows = std::max(1, S.RowsPerCar);
+        // ONE SEAT ON THE CENTRELINE when the column IS the seat, which is what
+        // a pod is; two either side of it when one shell spans them both.
+        const int Seats = C.SeatSpreadM > 0.0 ? 2 : 1;
         for (int r = 0; r < Rows; ++r)
         {
             const double RowX = RowCentreX(S, r);
-            for (int Side = 0; Side < 2; ++Side)
+            for (int Side = 0; Side < Seats; ++Side)
             {
-                const double Y = (Side == 0 ? 1.0 : -1.0) * S.SeatPitchM * 0.5;
+                const double Y = C.CentreY + (Side == 0 ? 1.0 : -1.0) * C.SeatSpreadM;
                 // The squab sits with its front third ahead of the row centre, and
                 // the backrest rises behind it, above the rim if it must — a
                 // headrest over the shell is what a real train has.
@@ -816,6 +888,30 @@ inline FTrainMesh BuildCarMesh(const FTrainSettings& S, double HeartlineHeight,
         Rings[0] = {FVec3{-ChassisHalf, 0.0, ChassisZ}, Across, Vertical, 0.0};
         Rings[1] = {FVec3{ ChassisHalf, 0.0, ChassisZ}, Across, Vertical, S.CarLengthM};
         SweepSection(M.Chassis, Rings, Beam, S.TextureMetres, true, true);
+    }
+
+    // ---- The wing spars. EVERY POD LANDS ON SOMETHING, which is the supports'
+    // lesson one vehicle down: a shell hanging in the air beside the track with
+    // nothing reaching it is the one part of a wing coaster nobody has ever
+    // seen. One arm per pod per bogie, from the chassis out to the pod's inner
+    // wall at chassis height, so the load path is visible and the gap between
+    // the track and the seats is a structure rather than a mystery.
+    if (Columns.size() > 1)
+    {
+        for (const FCarColumn& C : Columns)
+        {
+            const double Sign = C.CentreY >= 0.0 ? 1.0 : -1.0;
+            const double Inner = C.CentreY - Sign * C.HalfWidth;
+            for (int End = 0; End < 2; ++End)
+            {
+                const double X = End == 0 ? -BogieX : BogieX;
+                const FVec3 From{X, Sign * S.ChassisWidthM * 0.5, ChassisZ};
+                const FVec3 To{X, Inner, ChassisZ};
+                if (Length(To - From) < 1e-6) { continue; }
+                SweepStrut(M.Chassis, From, To, Vertical,
+                           S.ChassisDepthM * 0.5, S.StrutSides);
+            }
+        }
     }
 
     // ---- The wheels: two assemblies per car, six wheels in each.
@@ -1021,20 +1117,27 @@ inline void AppendCarBuffer(FMeshBuffer& Out, const FMeshBuffer& Car, const FTra
 // raising it swings the arm up and over past vertical, clear of the seat.
 inline void AddRestraintBar(FMeshBuffer& Out, const FTrainSettings& S,
                             const FTrackProfile& Profile, double RailZ,
-                            double RowX, double Position)
+                            double RowX, double Position,
+                            double CentreY = 0.0, double HalfWidth = -1.0,
+                            bool bOverWheels = true)
 {
     const double P = std::max(0.0, std::min(1.0, Position));
     // THE PIVOT IS AT THE CABIN FLOOR, at the front edge of the squab: the tube
     // runs the whole way down to where the lock is, which is what makes it the
     // locking member rather than an arm swinging in from somewhere.
-    const double HingeZ = RailZ + CabinFloorHeight(S, ShellKeepOut(S, Profile)) + S.BarHingeUpM;
+    const double HingeZ = RailZ
+        + CabinFloorHeight(S, ShellKeepOut(S, Profile), bOverWheels) + S.BarHingeUpM;
     // Nearly upright either way, and the lean is what reads: closed it tips BACK
     // over the lap, open it falls FORWARD into the bay. Interpolated in angle,
     // so a bank in transit is a bar part way over.
     const double Deg = P * (-S.BarClosedLeanDeg) + (1.0 - P) * S.BarOpenLeanDeg;
     const double Lean = Deg * (TrackMeshTwoPi / 360.0);
     const FVec3 Dir{std::sin(Lean), 0.0, std::cos(Lean)};
-    const double HalfY = std::max(0.05, S.BodyWidthM * 0.5 - S.BarInsetM);
+    // ACROSS ITS OWN SHELL, not across the car: on a wing car the two seats of a
+    // row are metres apart in separate pods, and one bar spanning both would be
+    // a scaffolding pole through the empty air over the track.
+    const double Shell = HalfWidth > 0.0 ? HalfWidth : S.BodyWidthM * 0.5;
+    const double HalfY = std::max(0.05, Shell - S.BarInsetM);
     const double R = S.BarDiameterM * 0.5;
     const double Arm = BarArmLengthM(S);
     if (!(R > 0.0) || !(Arm > 0.0)) { return; }
@@ -1044,7 +1147,7 @@ inline void AddRestraintBar(FMeshBuffer& Out, const FTrainSettings& S,
     FVec3 Tip[2];
     for (int Side = 0; Side < 2; ++Side)
     {
-        const double Y = Side == 0 ? HalfY : -HalfY;
+        const double Y = CentreY + (Side == 0 ? HalfY : -HalfY);
         const FVec3 Hinge{RowX + BarHingeAheadM(S), Y, HingeZ};
         Tip[Side] = Hinge + Dir * Arm;
         SweepStrut(Out, Hinge, Tip[Side], Across, R, S.StrutSides);
@@ -1094,11 +1197,19 @@ inline FTrainMesh BuildTrainMesh(const std::vector<FCarPlacement>& Cars,
         // angle is per row, so a car's bars are not the same geometry as the
         // next car's.
         FMeshBuffer Bars;
+        const std::vector<FCarColumn> Cols = CarColumns(S);
         for (int r = 0; r < Rows; ++r)
         {
             const std::size_t i = c * static_cast<std::size_t>(Rows) + static_cast<std::size_t>(r);
             const double Pos = i < RowPositions.size() ? RowPositions[i] : 1.0;
-            AddRestraintBar(Bars, S, Profile, RailZ, RowCentreX(S, r), Pos);
+            // ONE BAR PER SHELL, and both pods of a row take the SAME position:
+            // a row is one sensed group, and two seats of one row locking at
+            // different moments would be a fault rather than a feature.
+            for (const FCarColumn& C : Cols)
+            {
+                AddRestraintBar(Bars, S, Profile, RailZ, RowCentreX(S, r), Pos,
+                                C.CentreY, C.HalfWidth, C.bOverWheels);
+            }
         }
         AppendCarBuffer(Out.Restraints, Bars, P.Frame);
     }
@@ -1161,6 +1272,52 @@ inline std::vector<FMeshFinding> AuditTrain(const FTrainSettings& S,
             "built narrow instead. Narrow the floor, or widen the gauge.",
             S.BodyFloorWidthM, K.FloorHalfWidth * 2.0);
         Out.push_back({0.0, 0.0, 0.0, Buf});
+    }
+
+    // ===================== A POD IS A SHELL WITH NOTHING UNDER IT =====================
+    //
+    // Which is what makes a wing car look like one, and what makes all three of
+    // these possible: a pod is placed by SeatPitchM rather than sized to fit
+    // inside a car, so nothing bounds it the way BodyWidthM bounds the tub.
+    if (S.PodWidthM > 0.0)
+    {
+        const double Half = S.PodWidthM * 0.5;
+        const double Centre = S.SeatPitchM * 0.5;
+
+        if (S.PodWidthM < S.SeatWidthM)
+        {
+            std::snprintf(Buf, sizeof(Buf),
+                "the wing pods are %.2f m across and the seat in each one is %.2f m, so the "
+                "rider is drawn through both walls. Widen PodWidthM, or narrow the seat.",
+                S.PodWidthM, S.SeatWidthM);
+            Out.push_back({0.0, 0.0, 0.0, Buf});
+        }
+
+        // The two pods are placed by the SEAT SPACING, so nothing stops somebody
+        // authoring seats closer together than the shells around them.
+        if (Centre < Half)
+        {
+            std::snprintf(Buf, sizeof(Buf),
+                "the wing seats are %.2f m apart and each pod is %.2f m across, so the two "
+                "shells are drawn through each other. Spread the seats past %.2f m, or "
+                "narrow the pods.", S.SeatPitchM, S.PodWidthM, S.PodWidthM);
+            Out.push_back({0.0, 0.0, 0.0, Buf});
+        }
+
+        // AND IT MUST CLEAR THE WHEELS SIDEWAYS. A pod is not over them, which is
+        // exactly why nothing in the shell's own keep-out is watching this one:
+        // that machinery constrains a flank passing ABOVE a wheel, and a pod
+        // swung too far inboard meets the same wheel from the side instead.
+        const double WheelOuter = Profile.Gauge * 0.5 + S.WheelWidthM * 0.5 + S.WheelClearanceM;
+        const double Inner = Centre - Half;
+        if (Inner < WheelOuter)
+        {
+            std::snprintf(Buf, sizeof(Buf),
+                "the inner wall of each wing pod is %.2f m out and the running wheels reach "
+                "%.2f m, so the pod is drawn through the bogie. Spread the seats, or narrow "
+                "the pods.", Inner, WheelOuter);
+            Out.push_back({0.0, 0.0, 0.0, Buf});
+        }
     }
 
     if (TotalLength > 0.0 && S.TrainLengthM() > TotalLength)

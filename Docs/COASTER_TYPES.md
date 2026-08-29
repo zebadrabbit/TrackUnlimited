@@ -95,6 +95,30 @@ face-off trains rather than for this — which is the good kind of accident.
 
 ### Wing coasters are the one worth building properly
 
+> **BUILT 2026-08-29.** `ETUPresetLayout::Wing`, and it is the Sidewinder's track byte for byte
+> with a different vehicle on it — which is this document's whole argument, shipped rather than
+> argued. The vehicle is **two numbers**: `SeatPitchM` 3.60 (the two seats of a row, 1.8 m either
+> side) and `PodWidthM` 1.10 (a shell built around each seat instead of one spanning both).
+> Nothing downstream learned that types exist: the envelope judge already asked at
+> `SeatPitchM * 0.5`, so it picked the offset up with no change at all, and the ride camera and
+> the live telemetry followed the same number. Asserted in `-TUSmokeTest` **both ways** — the
+> layout must be identical and the seat must read differently — because a type that quietly
+> changed the ride would be the failure this document exists to prevent. The first version of that
+> check confused *the layout* with *the ride* and failed: a five-car wing train has a different top
+> speed to a seven-car one, which is precisely what a vehicle is allowed to change.
+>
+> **Measured:** 65 segments and 1284.8 m unchanged, pods at ±1.80 m, and the judge finds **one
+> thing at the wing seat against none at the heartline**. The snake is inside the bands for a rider
+> on the centreline and outside them for one on a wing — a fact about that ride nothing could see
+> before this term existed, and a row to go and look at rather than something to repair.
+>
+> **One honest gap it opened:** a wing train occupies the space a trackside catwalk needs. A deck
+> starts 0.85 m out and its handrail tops out 0.30 m under the heartline, which is inside the pods
+> laterally *and* vertically, so the preset authors **no walkway** and says so rather than drawing
+> a route the train runs through every lap. A real wing coaster slings the deck lower or further
+> out; `FCatwalkSettings::DeckDropM` is already a knob. Doing it properly means the audit learning
+> about the wayside, which is its own piece of work.
+
 A wing rider sits well off the centreline, so **what they feel differs from the heartline by
 roll-rate × offset**. Through a fast roll the outboard seat gets a vertical snap the centre seat
 never sees, which is precisely why wing coasters feel the way they do.
@@ -232,7 +256,9 @@ screen later.
 Nothing here is scheduled. In rough order of value per unit of work:
 
 1. **Launch curves** — a curve where there is a constant. Small, and felt.
-2. **Lateral seat offset** — the wing coaster's requirement, and an improvement to every wide train.
+2. ~~**Lateral seat offset** — the wing coaster's requirement, and an improvement to every wide train.~~
+   **DONE.** `GEnvelope::OffsetProfile` (2026-08-22), the live cockpit readout through the same
+   `OffsetFeltG` (2026-08-29), and the `Wing` preset that instances it the same day.
 3. **Track style presets and wood roughness** — mostly Phase 4's territory anyway.
 4. **The picker itself** — cheap once 1–3 exist, because by then it is only choosing values.
 5. **Spinning cars** — the first real degree of freedom.

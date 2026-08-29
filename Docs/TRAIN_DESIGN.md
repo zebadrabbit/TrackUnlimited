@@ -252,9 +252,19 @@ articulation are engineering; only the shell is taste.
 
 ## Explicitly out of scope
 
-Riders; a second train style; per-seat lateral offset
-(that is the wing-coaster work, and `CarCount`'s own comment already notes *"a car is not a
-seat row yet"*); wheel spin; suspension travel.
+Riders; wheel spin; suspension travel.
+
+**Per-seat lateral offset came off this list on 2026-08-29**, and it did not arrive as the
+"second train style" that stood beside it — which is the part worth keeping. A wing car is
+`PodWidthM` above zero, and `CarColumns` turns that into two shells instead of one. Everything
+with a seat in it (shell, bulkheads, seats, lap bars) is built per COLUMN, so the wing vehicle is
+the same code run twice with a lateral offset rather than a parallel set of geometry to keep
+working. The seats are still placed by `SeatPitchM`, and the pods are built AROUND them, so the
+camera, the felt-G offset and the shell cannot disagree about where a rider is. A pod is not over
+the wheels, so its flank is unconstrained and it is full width to its floor — which is the visible
+difference between a wing car and a wide one, and it falls out of the keep-out rather than being
+drawn in. Spars run from the chassis at each bogie, because a pod hanging in the air with nothing
+reaching it is the supports' lesson one vehicle down.
 
 **Rider-mode look-around is no longer on this list (2026-08-29).** It stood here as blocked
 on art, and the interior it was waiting for is drawn: a tub with a rim, two rows of seats and

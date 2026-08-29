@@ -196,6 +196,22 @@ enum class ETUPresetLayout : uint8
 	// places for three trains of seven cars. Designed and SOLVED in
 	// Prototypes/TrackSpline/design_sidewinder.cpp; every number here is from it.
 	Sidewinder UMETA(DisplayName = "Sidewinder (lift, drop, snake, helix)"),
+
+	// THE SAME RIDE, RIDDEN FROM A WING SEAT — and the geometry is byte-identical
+	// to Sidewinder's on purpose, because that IS the argument. COASTER_TYPES.md
+	// settled that a type is a PRESET and never a branch: a wing coaster is a
+	// VEHICLE, so the honest way to ship one is to change the vehicle and nothing
+	// else. Two seats a row 3.6 m apart, each in its own pod out beside the track
+	// with open air above and below it.
+	//
+	// What it demonstrates is measurable rather than cosmetic: a seat 1.8 m off
+	// the heartline feels alpha*y of vertical snap and omega^2*y of lateral pull
+	// through every roll, which the centre seat never does. The snake banked both
+	// ways is where it shows. [N] steps between the two seats and the readout
+	// changes; that difference is the whole type.
+	//
+	// APPENDED, never inserted — a preset is serialised into a level.
+	Wing UMETA(DisplayName = "Wing (the Sidewinder, ridden from a pod)"),
 };
 
 // Which side of the track an evacuation catwalk runs down.

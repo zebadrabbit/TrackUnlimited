@@ -1050,6 +1050,128 @@ void TestTheLapBarsSwingWithTheBankAndStayClosed()
 
 } // namespace
 
+// ===================== A WING CAR IS TWO SHELLS =====================
+
+FTrainSettings WingTrain()
+{
+    // A wing vehicle: two seats a row, metres apart, each in its own pod out
+    // beside the track. Everything else is the ordinary train.
+    FTrainSettings S;
+    S.CarCount = 4;
+    S.RowsPerCar = 1;
+    S.SeatPitchM = 3.60;     // the two seats of a row: 1.8 m either side
+    S.PodWidthM = 1.10;
+    return S;
+}
+
+void TestAWingCarIsTwoPODSAndTheSEATSPlaceThem()
+{
+    std::printf("A wing car is two pods, placed by the seats rather than by a second setting\n");
+
+    const FTrackProfile P;
+    const FTrainSettings D;          // default: ONE shell
+    const FTrainSettings S = WingTrain();
+
+    // ONE FIELD IS THE WHOLE TYPE. The shipped train is untouched, which is what
+    // keeps every measured figure in this project valid.
+    assert(D.PodWidthM == 0.0);
+    assert(CarColumns(D).size() == 1);
+    assert(CarColumns(D)[0].CentreY == 0.0);
+    assert(CarColumns(D)[0].SeatSpreadM == D.SeatPitchM * 0.5);
+
+    const std::vector<FCarColumn> Cols = CarColumns(S);
+    assert(Cols.size() == 2);
+    // THE POD IS BUILT AROUND THE SEAT, not the seat placed in the pod: the
+    // camera and the felt-G offset both read SeatPitchM, so a pod centred
+    // anywhere else would be a second answer to where the rider is.
+    assert(std::fabs(Cols[0].CentreY - S.SeatPitchM * 0.5) < 1e-12);
+    assert(std::fabs(Cols[1].CentreY + S.SeatPitchM * 0.5) < 1e-12);
+    assert(Cols[0].SeatSpreadM == 0.0 && "one seat per pod, on its centreline");
+    assert(!Cols[0].bOverWheels && "nothing is under a pod");
+
+    // AND THE CAMERA AGREES. SeatByIndex is handed SeatPitchM * 0.5 by the actor,
+    // so this is the number the eye and the outer-seat G are both computed at.
+    const FSeat Left = SeatByIndex(0, S.CarCount, S.SeatPitchM * 0.5, S.RowsPerCar);
+    assert(std::fabs(Left.LateralM - Cols[0].CentreY) < 1e-12
+           && "the rider would sit somewhere the mesh does not draw a pod");
+
+    const double H = 1.1;
+    const FTrainMesh C = BuildCarMesh(S, H, P);
+    assert(C.Body.NumTriangles() > 0);
+    CheckWindingAgreesWithNormals(C.Body, "wing body");
+    assert(BoundaryEdges(C.Body) == 0 && "a pod is closed geometry like any other shell");
+    assert(SignedVolume(C.Body) > 0.0);
+
+    // TWO SHELLS, ONE EITHER SIDE, AND NOTHING OVER THE TRACK. The gap between
+    // the pods is the whole silhouette: a rider on a wing coaster has open air
+    // above and below them, which is why the type exists.
+    double LeftMin = 1e9, RightMax = -1e9;
+    for (const FVec3& V : C.Body.Position)
+    {
+        if (V.Y > 0.0) { LeftMin = std::min(LeftMin, V.Y); }
+        else           { RightMax = std::max(RightMax, V.Y); }
+    }
+    assert(LeftMin > 0.5 && RightMax < -0.5 && "the pods have closed over the track");
+
+    // AND CLEAR OF THE BOGIE SIDEWAYS, which the shell keep-out cannot see: that
+    // machinery watches a flank passing ABOVE a wheel, and a pod meets the same
+    // wheel from the side instead.
+    const double WheelOuter = P.Gauge * 0.5 + S.WheelWidthM * 0.5;
+    assert(LeftMin > WheelOuter && -RightMax > WheelOuter);
+    std::printf("  pods at +/-%.2f m, inner walls %.2f m out, wheels reach %.2f m\n",
+                Cols[0].CentreY, LeftMin, WheelOuter);
+
+    // THE SPARS REACH THEM. A pod hanging in the air with nothing running out to
+    // it is the supports' lesson one vehicle down.
+    double SparReach = 0.0;
+    for (const FVec3& V : C.Chassis.Position) { SparReach = std::max(SparReach, std::fabs(V.Y)); }
+    assert(SparReach > LeftMin - 0.05 && "nothing reaches the pods");
+    CheckWindingAgreesWithNormals(C.Chassis, "wing chassis");
+
+    // ONE SEAT AND ONE BAR PER POD. Two bars a row, not one spanning the track.
+    double SeatLeft = 0.0, SeatRight = 0.0;
+    for (const FVec3& V : C.Seats.Position)
+    {
+        if (V.Y > 0.0) { SeatLeft = std::max(SeatLeft, V.Y); }
+        else           { SeatRight = std::min(SeatRight, V.Y); }
+    }
+    assert(SeatLeft > 1.0 && SeatRight < -1.0 && "the seats did not go out with the pods");
+
+    const double RailZ = -H;
+    FMeshBuffer Bars;
+    for (const FCarColumn& Col : Cols)
+    {
+        AddRestraintBar(Bars, S, P, RailZ, RowCentreX(S, 0), 1.0,
+                        Col.CentreY, Col.HalfWidth, Col.bOverWheels);
+    }
+    double BarInner = 1e9;
+    for (const FVec3& V : Bars.Position) { BarInner = std::min(BarInner, std::fabs(V.Y)); }
+    assert(BarInner > 0.5 && "a bar is spanning the empty air over the track");
+    assert(BoundaryEdges(Bars) == 0);
+    std::printf("  seats out to %.2f m, one bar per pod, nothing nearer the centre than %.2f m\n",
+                SeatLeft, BarInner);
+
+    // ===================== AND THE AUDIT CATCHES THE THREE WAYS IT GOES WRONG =====================
+    //
+    // SILENT ON THE GOOD ONE FIRST, because a checker that complains about every
+    // wing car is a checker somebody switches off.
+    assert(AuditTrain(S, H, P, 400.0).empty());
+
+    FTrainSettings Narrow = S; Narrow.PodWidthM = 0.30;   // narrower than the seat
+    assert(!AuditTrain(Narrow, H, P, 400.0).empty());
+
+    FTrainSettings Merged = S; Merged.SeatPitchM = 0.80;  // pods through each other
+    assert(!AuditTrain(Merged, H, P, 400.0).empty());
+
+    FTrainSettings Inboard = S; Inboard.SeatPitchM = 1.20; Inboard.PodWidthM = 0.90;
+    assert(!AuditTrain(Inboard, H, P, 400.0).empty() && "a pod drawn through the bogie");
+
+    // The ordinary train stays silent, which is the assertion that says none of
+    // this reached the vehicle every other preset uses.
+    assert(AuditTrain(D, H, P, 400.0).empty());
+    std::printf("  three bad pods reported, the good one and the ordinary train silent\n");
+}
+
 int main()
 {
     // UNBUFFERED, so a failing assertion still shows the numbers printed
@@ -1073,6 +1195,7 @@ int main()
     TestADegenerateTrainBuildsNOTHINGRatherThanSomethingBroken();
     TestTheLapBarsSwingWithTheBankAndStayClosed();
     TestTheRidersEyeSitsInTheSeatTheMeshDraws();
+    TestAWingCarIsTwoPODSAndTheSEATSPlaceThem();
 
     std::printf("\ntest_trainmesh: all assertions passed.\n");
     return 0;
