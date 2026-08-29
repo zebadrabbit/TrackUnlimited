@@ -387,6 +387,36 @@ void TestTheBodyLeavesTheHEARTLINEInTheOpen()
     std::printf("  open on top: cabin floor %.2f m above the rails, rim at %.2f\n",
                 CabinZ - (-H), S.BodyHeightM);
 
+    // ---- AND CLOSED AT BOTH ENDS. The tub's caps close the shell's thickness
+    // and nothing else, so without a bulkhead the cabin is open front and
+    // back. Looked for as geometry: a body triangle within the end of the
+    // shell whose centroid is INSIDE the cabin — above the floor, between the
+    // walls — which the tub alone never has, because its cap triangles all lie
+    // in the shell material.
+    {
+        const double ShellHalf = (S.CarLengthM - S.BodyGapM) * 0.5;
+        const double Wi = S.BodyWidthM * 0.5 - S.BodyCornerRadiusM;
+        for (int End = 0; End < 2; ++End)
+        {
+            bool bClosed = false;
+            for (std::size_t t = 0; t + 2 < C.Body.Index.size(); t += 3)
+            {
+                FVec3 Cen{0.0, 0.0, 0.0};
+                bool bAtEnd = true;
+                for (int k = 0; k < 3; ++k)
+                {
+                    const FVec3& V = C.Body.Position[C.Body.Index[t + k]];
+                    Cen = Cen + V * (1.0 / 3.0);
+                    bAtEnd = bAtEnd && (End == 0 ? V.X : -V.X) > ShellHalf - S.EndPanelThickM - 0.02;
+                }
+                if (bAtEnd && Cen.Z > CabinZ + 0.05 && std::fabs(Cen.Y) < Wi - 0.05) { bClosed = true; }
+            }
+            assert(bClosed && "a bulkhead closes the cabin at each end");
+        }
+        std::printf("  and closed at both ends: a %.2f m bulkhead from the cabin floor to the rim\n",
+                    S.EndPanelThickM);
+    }
+
     // ---- SILENT ON AN ORDINARY TRAIN. The checks that matter are the ones that
     // say nothing about the normal case; one that complained about every vehicle
     // would be switched off within a day.

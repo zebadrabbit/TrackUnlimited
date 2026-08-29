@@ -98,11 +98,22 @@ within the hour. The section now goes up the outer flank, over a rolled rim, DOW
 wall and across a cabin floor: open on top because riders sit in it. The cabin floor sits
 just above the shoulder where the flank first reaches full width, so the cavity cannot poke
 out through the taper over the wheels — the rider sits on the wheel wells, as on a real
-car. Non-convex, so the end caps are ear-clipped rather than fanned; the bulkheads close
-the cavity and the tub is still watertight and outward-wound (1.377 m³ of shell, where the
-box enclosed 2.669). Two seats a row — squab and backrest, their own buffer because
-upholstery is not gelcoat — and the lap bar's hinge is DERIVED from the squab, since a bar
-hinged at an authored height swings over nobody.
+car. Non-convex, so the end caps are ear-clipped rather than fanned, and the tub is still
+watertight and outward-wound (1.428 m³ of shell with its bulkheads, where the box enclosed 2.669). Two seats a
+row — squab and backrest, their own buffer because upholstery is not gelcoat — and the lap
+bar's hinge is DERIVED from the squab, since a bar hinged at an authored height swings over
+nobody.
+
+**TWO ROWS, AND A BULKHEAD AT EACH END (2026-08-28).** One row left half of a 2.7 m shell
+empty on screen; `RowsPerCar` is 2 now, spaced evenly along the shell by `RowCentreX` so the
+pitch is the shell's rather than a second authored number, and the station reads the same
+number for its gates. And the tub's end caps close the SHELL'S THICKNESS and nothing else, so
+the first tub was open front and back — a front-row rider had nothing between their knees and
+the car ahead. `EndPanelThickM` is a bulkhead at each end, cabin floor to a centimetre under
+the rim, let INTO the walls and floor by 2 cm rather than butted against them (two closed
+bodies sharing a face weld into one with a doubled edge, the seats' lesson) and set 1 cm in
+from the end so its face is not coplanar with the cap. Asserted as geometry: a body triangle
+inside the cabin at each end, which the bare tub never has.
 
 **This is the only part with taste in it**, and the only part a later art pass would
 replace. Keep it a single function returning a cross-section, so replacing it is one edit.

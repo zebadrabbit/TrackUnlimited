@@ -144,6 +144,16 @@ struct FTrainSettings
     double SeatBackDepthM = 0.08;
     double SeatPitchM = 0.60;         // between the two seats of a row
 
+    // THE CABIN IS CLOSED AT BOTH ENDS (2026-08-28). The tub's end caps close
+    // the shell's own thickness and nothing else, so the first tub was open
+    // front and back and a rider in the front row had nothing between their
+    // knees and the car ahead — reported from a screenshot. A bulkhead at each
+    // end, cabin floor to rim, wall to wall; set 1 cm in from the end so its
+    // face is not coplanar with the tub's cap, and let INTO the walls and floor
+    // by 2 cm rather than butted against them, because two closed bodies
+    // sharing a face weld into one with a doubled edge (the seats' lesson).
+    double EndPanelThickM = 0.05;
+
     // ---- The chassis: what the body and the bogies both attach to, so
     // articulation has somewhere to happen.
     double ChassisWidthM = 0.50;
@@ -182,8 +192,11 @@ struct FTrainSettings
     //
     // RowsPerCar is the train's number and the station reads it — the gate per
     // seat row on the platform faces the bar it serves, so the two cannot be
-    // allowed to disagree about how many rows a car has.
-    int RowsPerCar = 1;
+    // allowed to disagree about how many rows a car has. TWO, since 2026-08-28:
+    // a 2.7 m shell has room for two rows and one left the car half empty on
+    // screen. Rows are spaced evenly along the shell (RowCentreX), so the
+    // pitch is the shell's and not a second authored number.
+    int RowsPerCar = 2;
     double BarDiameterM = 0.06;
     double BarHingeUpM = 0.05;        // above the squab: the hip, seated. DERIVED from the seat
     double BarHingeBackM = 0.15;      // behind the row centre, so it swings over the lap
@@ -657,22 +670,45 @@ inline FTrainMesh BuildCarMesh(const FTrainSettings& S, double HeartlineHeight,
                      S.TextureMetres, true, true);
     }
 
-    // ---- The seats: two a row on the cabin floor, a squab and a backrest each,
-    // so the lap bar has a lap to come down over. Boxes, swept along the car
-    // exactly as the shell is.
+    // A box swept along the car exactly as the shell is: the seats and the
+    // end panels are all this.
+    auto Box = [&](FMeshBuffer& Into, double X0, double X1, double Y, double Z0, double Z1, double HalfW)
+    {
+        if (!(X1 > X0) || !(Z1 > Z0) || !(HalfW > 0.0)) { return; }
+        const double Zc = (Z0 + Z1) * 0.5, Hh = (Z1 - Z0) * 0.5;
+        const std::vector<FVec2> Rect = {{HalfW, -Hh}, {HalfW, Hh}, {-HalfW, Hh}, {-HalfW, -Hh}};
+        std::vector<FTubeRing> Rings(2);
+        Rings[0] = {FVec3{X0, Y, Zc}, Across, Vertical, 0.0};
+        Rings[1] = {FVec3{X1, Y, Zc}, Across, Vertical, X1 - X0};
+        SweepSection(Into, Rings, Rect, S.TextureMetres, true, true);
+    };
+
+    // ---- The bulkheads: the cabin closed at both ends, floor to rim, let into
+    // the walls and the floor. See EndPanelThickM.
     {
         const FShellKeepOut K = ShellKeepOut(S, Profile);
         const double FloorZ = RailZ + CabinFloorHeight(S, K);
-        auto Box = [&](double X0, double X1, double Y, double Z0, double Z1, double HalfW)
+        // A centimetre under the rim: the let-in strip runs under the rolled
+        // corner, which is already dropping away there.
+        const double RimZ = RailZ + S.BodyHeightM - 0.01;
+        const double W = S.BodyWidthM * 0.5;
+        const double R = std::min(S.BodyCornerRadiusM, std::min(W, S.BodyHeightM * 0.5) * 0.9);
+        const double Let = std::min(0.02, R * 0.5);
+        const double T = std::min(S.EndPanelThickM, ShellHalf * 0.5);
+        for (int End = 0; End < 2; ++End)
         {
-            if (!(X1 > X0) || !(Z1 > Z0) || !(HalfW > 0.0)) { return; }
-            const double Zc = (Z0 + Z1) * 0.5, Hh = (Z1 - Z0) * 0.5;
-            const std::vector<FVec2> Rect = {{HalfW, -Hh}, {HalfW, Hh}, {-HalfW, Hh}, {-HalfW, -Hh}};
-            std::vector<FTubeRing> Rings(2);
-            Rings[0] = {FVec3{X0, Y, Zc}, Across, Vertical, 0.0};
-            Rings[1] = {FVec3{X1, Y, Zc}, Across, Vertical, X1 - X0};
-            SweepSection(M.Seats, Rings, Rect, S.TextureMetres, true, true);
-        };
+            const double X1 = ShellHalf - 0.01;
+            const double X0 = X1 - T;
+            Box(M.Body, End == 0 ? X0 : -X1, End == 0 ? X1 : -X0, 0.0,
+                FloorZ - Let, RimZ, W - R + Let);
+        }
+    }
+
+    // ---- The seats: two a row on the cabin floor, a squab and a backrest each,
+    // so the lap bar has a lap to come down over.
+    {
+        const FShellKeepOut K = ShellKeepOut(S, Profile);
+        const double FloorZ = RailZ + CabinFloorHeight(S, K);
         const int Rows = std::max(1, S.RowsPerCar);
         for (int r = 0; r < Rows; ++r)
         {
@@ -683,11 +719,11 @@ inline FTrainMesh BuildCarMesh(const FTrainSettings& S, double HeartlineHeight,
                 // The squab sits with its front third ahead of the row centre, and
                 // the backrest rises behind it, above the rim if it must — a
                 // headrest over the shell is what a real train has.
-                Box(RowX - S.SeatDepthM * 0.65, RowX + S.SeatDepthM * 0.35, Y,
+                Box(M.Seats, RowX - S.SeatDepthM * 0.65, RowX + S.SeatDepthM * 0.35, Y,
                     FloorZ, FloorZ + S.SeatHeightM, S.SeatWidthM * 0.5);
                 // 5 mm behind the squab rather than touching it: two boxes sharing a
                 // face are one mesh with a doubled edge, and the watertight check says so.
-                Box(RowX - S.SeatDepthM * 0.65 - S.SeatBackDepthM - 0.005, RowX - S.SeatDepthM * 0.65 - 0.005, Y,
+                Box(M.Seats, RowX - S.SeatDepthM * 0.65 - S.SeatBackDepthM - 0.005, RowX - S.SeatDepthM * 0.65 - 0.005, Y,
                     FloorZ, FloorZ + S.SeatHeightM + S.SeatBackHeightM, S.SeatWidthM * 0.5);
             }
         }
