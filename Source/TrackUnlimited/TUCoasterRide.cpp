@@ -36,11 +36,10 @@
 // error in the one configuration nobody compiles until release day.
 #include "DesktopPlatformModule.h"
 #include "Framework/Application/SlateApplication.h"
-#include "Framework/Application/IInputProcessor.h"
 #include "IDesktopPlatform.h"
-#include "Widgets/SViewport.h"
 #endif
 #include "Misc/App.h"
+#include "GameFramework/PlayerInput.h"
 #include "Kismet/GameplayStatics.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
@@ -2939,13 +2938,19 @@ void ATUCoasterRide::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 	// together so somebody can find them by walking the row, and six letters go
 	// back to the alphabet.
 	//
-	// THEY WERE LETTERS BECAUSE OF PIE. The editor binds F1-F8 to viewport view
-	// modes and its bindings are live while you are playing in it, so pressing
-	// one flipped the world to wireframe at the same moment the UI changed —
-	// which reads as the UI being broken. Standalone is the shipping path and
-	// the editor is not listening there, so that was a PIE artefact rather than
-	// a product constraint (decided 2026-08-26, applied here 2026-08-28). In PIE
-	// the double-fire is still real; run standalone.
+	// THEY WERE LETTERS BECAUSE F1 FLIPPED THE WORLD TO WIREFRAME, and this file
+	// spent months saying that was THE EDITOR answering to the same press. It was
+	// not, and the difference matters because every workaround aimed at the
+	// editor missed. The editor's view modes are Alt+2, Alt+3 and Alt+4
+	// (FEditorViewportCommands) and it never wanted F1 at all.
+	//
+	// They are DebugExecBindings in Engine/Config/BaseInput.ini — console
+	// commands run by our OWN UPlayerInput out of config in every non-Shipping
+	// build. So "run standalone" never avoided it either, and neither did
+	// focusing the game viewport or consuming the key in the binding stack: a
+	// debug exec binding is read from the raw key state and does not care what
+	// consumed what. Config/DefaultInput.ini removes the five that clash; see
+	// the comment there.
 	//
 	// WHAT STAYED ON A LETTER OR A NAMED KEY IS THE POINT: dispatch, the E-stop,
 	// the reset, acknowledge, save, undo, insert, remove. Those ACT on something,
@@ -3020,8 +3025,8 @@ void ATUCoasterRide::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 		&ATUCoasterRide::CycleAppMode);
 
 	// [F2] — every overlay off, for a screenshot. Back where it started: it was
-	// F2 originally, was moved to [U] when PIE's view modes fired alongside it,
-	// and standalone answers that objection.
+	// F2 originally and moved to [U] when "viewmode unlit" fired alongside it,
+	// which Config/DefaultInput.ini now removes at the source.
 	//
 	// Not routed through IsTypingInField, for the same reason none of these are:
 	// a function key is not part of a number the segment editor accepts.
@@ -3030,7 +3035,9 @@ void ATUCoasterRide::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 
 	// [F1] — options, in the frame's content slot. A key rather than a button so
 	// the screen is reachable before the main menu that will own it exists, and
-	// F1 because that is where every application in the world puts it.
+	// F1 because that is where every application in the world puts it. It opened
+	// the settings over a wireframe world until the "viewmode wireframe" debug
+	// exec binding was removed in Config/DefaultInput.ini.
 	PlayerInputComponent->BindKey(EKeys::F1, IE_Pressed, this,
 		&ATUCoasterRide::ToggleSettings);
 
@@ -3045,10 +3052,12 @@ void ATUCoasterRide::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 
 	// [M] — back to the MENU, and [K] saves.
 	//
-	// NOT Ctrl+S, and that is the F1 lesson rather than a preference. The editor
-	// binds Ctrl+S to Save Current Level and its bindings are live in PIE, so the
-	// familiar chord would save the level AND the track from one press — two
-	// different documents written by a keystroke aimed at one of them.
+	// NOT Ctrl+S, and this one really IS the editor rather than a preference —
+	// unlike the function keys, which turned out to be our own debug exec
+	// bindings. Ctrl+S is FLevelEditorCommands' Save Current Level, on the
+	// editor's Slate command list, live in PIE: the familiar chord would save the
+	// level AND the track from one press — two different documents written by a
+	// keystroke aimed at one of them.
 	//
 	// [K] is a poor mnemonic and it is the honest one: every letter that spells
 	// save is taken, [S] most of all — it is the movement key. A rebindable
@@ -3242,12 +3251,19 @@ void ATUCoasterRide::WriteKeyBindings() const
 
 bool ATUCoasterRide::RebindKey(const FString& Action, const FString& KeyName, bool bPersist)
 {
-	// F1-F12 WERE THE EDITOR'S, and are not any more. They were REFUSED here
-	// until 2026-08-26 (function keys are fine because the shipping path is
-	// standalone), then allowed with a warning that in PIE the editor's viewport
-	// view modes fired on the same press. That warning is gone with 2026-08-29's
-	// FTUEditorKeyGrab, which consumes a function key we are bound to before the
-	// editor's command list ever sees it -- so a rebind onto one needs no caveat.
+	// FUNCTION KEYS WERE REFUSED HERE until 2026-08-26, on the belief that the
+	// editor owned them. It never did: F1-F5 were DebugExecBindings run by our
+	// own UPlayerInput out of BaseInput.ini, and Config/DefaultInput.ini removes
+	// those five. The rest of the row is unclaimed by anything here, so a rebind
+	// onto one needs no caveat -- except F9 ("shot showui") and F11 (immersive),
+	// which are still live debug exec bindings and would fire alongside.
+	if (KeyName == TEXT("F9") || KeyName == TEXT("F11"))
+	{
+		UE_LOG(LogTUEvents, Warning,
+			TEXT("controls: [%s] is a debug exec binding as well (%s); "
+				 "remove it in Config/DefaultInput.ini to have the key to yourself"),
+			*KeyName, KeyName == TEXT("F9") ? TEXT("shot showui") : TEXT("immersive mode"));
+	}
 	const TArray<int32>* Idx = ActionBindingIndex.Find(Action);
 	if (!Idx || !InputComponent)
 	{
@@ -7226,9 +7242,54 @@ bool ATUCoasterRide::RunDocumentSmokeTest()
 		else { Files.Delete(*KeyBindingsPath(), false, true, true); }
 	}
 
+	// ===================== NOTHING ELSE ANSWERS TO F1-F5 =====================
+	//
+	// Config/DefaultInput.ini removes the five DebugExecBindings that ran
+	// "viewmode wireframe" and friends over the inspection keys. That removal is
+	// a TEXT MATCH against Engine/Config/BaseInput.ini and does nothing at all if
+	// either side drifts -- a different engine version, a space moved, F1's
+	// bIgnoreShift dropped -- and it fails SILENTLY, which is the whole reason
+	// this is here rather than in a comment saying "should be fine".
+	//
+	// Read off the CDO, which is where the merged config lands, so this is the
+	// same list UPlayerInput will consult at runtime.
+	{
+		TArray<FString> StillBound;
+		const FKey Ours[5] = {EKeys::F1, EKeys::F2, EKeys::F3, EKeys::F4, EKeys::F5};
+		if (const UPlayerInput* Defaults = GetDefault<UPlayerInput>())
+		{
+			for (const FKeyBind& Bind : Defaults->DebugExecBindings)
+			{
+				for (const FKey& K : Ours)
+				{
+					if (Bind.Key == K)
+					{
+						StillBound.Add(FString::Printf(TEXT("[%s] -> %s"),
+							*K.GetFName().ToString(), *Bind.Command));
+					}
+				}
+			}
+		}
+		if (StillBound.Num() > 0)
+		{
+			UE_LOG(LogTUEvents, Error,
+				TEXT("smoke: a debug exec binding still owns an inspection key: %s  "
+					 "(Config/DefaultInput.ini's -DebugExecBindings lines must match "
+					 "Engine/Config/BaseInput.ini exactly)"),
+				*FString::Join(StillBound, TEXT(", ")));
+			Failures.Add(TEXT("debug exec bindings"));
+		}
+		else
+		{
+			UE_LOG(LogTUEvents, Log,
+				TEXT("smoke: F1-F5 answer to nothing but us -- the viewmode debug exec "
+					 "bindings are removed"));
+		}
+	}
+
 	if (Failures.Num() > 0)
 	{
-		UE_LOG(LogTUEvents, Error, TEXT("smoke: %d of 11 checks failed: %s"),
+		UE_LOG(LogTUEvents, Error, TEXT("smoke: %d of 12 checks failed: %s"),
 			Failures.Num(), *FString::Join(Failures, TEXT(", ")));
 	}
 	return Failures.Num() == 0;
@@ -7384,120 +7445,9 @@ void ATUCoasterRide::CheckBindingsAgainstInput(const UInputComponent* Input) con
 	}
 }
 
-#if WITH_EDITOR
-// ===================== TAKING F1-F12 BACK FROM THE EDITOR =====================
-//
-// The function keys are OURS now (F1 settings, F2 overlays, F3 diagnostics, F4
-// the console, F5/F6 the graph) and in PIE the editor answered first: F1 flipped
-// the viewport to wireframe while the settings screen opened over it. That was
-// filed as "run standalone", and it is not good enough -- PIE is where the
-// developer works.
-//
-// A SLATE INPUT PREPROCESSOR, because it is the only thing that runs BEFORE the
-// editor's viewport command list. Everything else -- focusing the game viewport,
-// consuming the key in the player input -- happens downstream of where the
-// editor has already claimed it.
-//
-// NOT BY REBINDING THE EDITOR'S COMMANDS. FUICommandInfo::SetActiveChord writes
-// through to the person's saved keyboard shortcuts, so clearing F1 to win an
-// argument in PIE would leave their editor changed after the game shut down --
-// and after a crash, permanently. Consuming an event we were going to handle
-// anyway leaves nothing behind.
-//
-// WE ONLY TAKE WHAT WE ACTUALLY USE. A function key nothing here is bound to
-// passes straight through and the editor keeps it, so F7, F8 (eject) and F11
-// (immersive) still work while playing. And the key has to be aimed at the game
-// viewport: pressing F2 in the Content Browser is a rename, and a preprocessor
-// that stole it would be a far worse bug than the one it fixed.
-class FTUEditorKeyGrab : public IInputProcessor
-{
-public:
-	explicit FTUEditorKeyGrab(ATUCoasterRide* In) : Ride(In) {}
-
-	virtual void Tick(const float, FSlateApplication&, TSharedRef<ICursor>) override {}
-
-	virtual bool HandleKeyDownEvent(FSlateApplication&, const FKeyEvent& E) override
-	{
-		return Ride.IsValid() && Ride->GrabKeyFromTheEditor(E.GetKey(), true, E.IsRepeat());
-	}
-	virtual bool HandleKeyUpEvent(FSlateApplication&, const FKeyEvent& E) override
-	{
-		return Ride.IsValid() && Ride->GrabKeyFromTheEditor(E.GetKey(), false, false);
-	}
-	virtual const TCHAR* GetDebugName() const override { return TEXT("TUEditorKeyGrab"); }
-
-private:
-	TWeakObjectPtr<ATUCoasterRide> Ride;
-};
-
-// Is the keypress aimed at the game? The focused widget is usually the viewport
-// itself, but every UMG panel this project adds is a child of it, so the answer
-// is "the game viewport is somewhere up the focus chain" rather than "the
-// viewport IS focused" -- which would be false the moment somebody clicked a row.
-static bool GameViewportOwnsTheFocus()
-{
-	if (!FSlateApplication::IsInitialized() || !GEngine || !GEngine->GameViewport)
-	{
-		return false;
-	}
-	const TSharedPtr<SViewport> Game = GEngine->GameViewport->GetGameViewportWidget();
-	if (!Game.IsValid()) { return false; }
-
-	TSharedPtr<SWidget> W = FSlateApplication::Get().GetUserFocusedWidget(0);
-	while (W.IsValid())
-	{
-		if (W == Game) { return true; }
-		W = W->GetParentWidget();
-	}
-	return false;
-}
-
-bool ATUCoasterRide::GrabKeyFromTheEditor(const FKey& Key, bool bDown, bool bRepeat)
-{
-	if (!InputComponent || !GameViewportOwnsTheFocus()) { return false; }
-
-	// Modifiers must match exactly. Every binding here is unmodified, so
-	// Ctrl+F2 is not ours and the editor is welcome to it.
-	const FModifierKeysState Mods = FSlateApplication::Get().GetModifierKeys();
-	const EInputEvent Event = bDown ? IE_Pressed : IE_Released;
-
-	bool bFired = false;
-	for (const FInputKeyBinding& B : InputComponent->KeyBindings)
-	{
-		if (B.KeyEvent != Event || B.Chord.Key != Key) { continue; }
-		if (B.Chord.bShift != Mods.IsShiftDown()
-			|| B.Chord.bCtrl != Mods.IsControlDown()
-			|| B.Chord.bAlt != Mods.IsAltDown())
-		{
-			continue;
-		}
-		// SWALLOWED BUT NOT RUN on a repeat: holding F4 must not cycle the panel
-		// forty times a second, and the ordinary input path already filters
-		// repeats for us -- this is the one place that has to do it itself.
-		if (!bRepeat) { B.KeyDelegate.Execute(Key); }
-		bFired = true;
-	}
-	return bFired;
-}
-#endif
-
 void ATUCoasterRide::BeginPlay()
 {
 	Super::BeginPlay();
-
-#if WITH_EDITOR
-	// PIE ONLY. Standalone and a packaged build have no editor to argue with, and
-	// registering there would put a preprocessor in front of every keypress in
-	// the shipping path to fix a problem that does not exist in it.
-	if (GetWorld() && GetWorld()->WorldType == EWorldType::PIE)
-	{
-		EditorKeyGrab = MakeShared<FTUEditorKeyGrab>(this);
-		if (FSlateApplication::IsInitialized())
-		{
-			FSlateApplication::Get().RegisterInputPreProcessor(EditorKeyGrab, 0);
-		}
-	}
-#endif
 
 	// BEFORE ANYTHING ELSE READS ONE. The scan rate is restart-flagged, and this
 	// is the only moment it can be applied — RebuildFromSegments and the first
@@ -7729,19 +7679,6 @@ void ATUCoasterRide::BeginPlay()
 
 void ATUCoasterRide::EndPlay(const EEndPlayReason::Type Reason)
 {
-#if WITH_EDITOR
-	// THE EDITOR OUTLIVES THE GAME, so this comes off explicitly. A preprocessor
-	// left registered holds a weak pointer to a dead actor and swallows every
-	// function key in the editor for the rest of the session.
-	if (EditorKeyGrab.IsValid())
-	{
-		if (FSlateApplication::IsInitialized())
-		{
-			FSlateApplication::Get().UnregisterInputPreProcessor(EditorKeyGrab);
-		}
-		EditorKeyGrab.Reset();
-	}
-#endif
 	// Unregistered explicitly: the service holds the delegate, and a stale one
 	// fires into a destroyed actor.
 	if (PanelDrawHandle.IsValid())

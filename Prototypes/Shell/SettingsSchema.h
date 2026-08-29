@@ -240,13 +240,14 @@ inline std::vector<FSettingEntry> SettingsSchema()
     // it said F2 for the overlay toggle after F2 was given up to the editor's
     // wireframe view — and nothing could see it. Now something can.
     //
-    // AND F1-F6 ARE BACK, 2026-08-28. They were given up because the editor's own
-    // view-mode bindings are live in PIE and fired alongside ours; standalone is
-    // the shipping path and the editor is not listening there, so that was a PIE
-    // artefact rather than a product constraint. The six INSPECTION keys — the
-    // ones that put a picture of the ride's state on the screen and change
-    // nothing about the ride — now sit together where a person can find them by
-    // walking the row, and six letters go back to the alphabet.
+    // AND F1-F6 ARE BACK, 2026-08-28. They were given up on the belief that the
+    // EDITOR owned them and answered alongside ours. It did not: the editor's
+    // view modes are Alt+2/3/4, and what actually fired was DebugExecBindings in
+    // the engine's BaseInput.ini, run by our own UPlayerInput in any non-Shipping
+    // build. Config/DefaultInput.ini removes the five that clash. The six
+    // INSPECTION keys — the ones that put a picture of the ride's state on the
+    // screen and change nothing about the ride — now sit together where a person
+    // can find them by walking the row, and six letters go back to the alphabet.
     //
     // WHAT DID NOT MOVE IS THE POINT: dispatch, the E-stop, the reset, save,
     // undo, insert. Those act on something, and a row of identical grey keys is
