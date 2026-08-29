@@ -20,6 +20,7 @@
 //   part of this that a screenshot cannot check.
 
 #include "TrainMesh.h"
+#include "../TrainPhysics/Seat.h"
 
 #include <cassert>
 #include <cmath>
@@ -852,6 +853,40 @@ void TestADegenerateTrainBuildsNOTHINGRatherThanSomethingBroken()
 // row's bar must move ONLY when its own group does, because a stuck group is
 // exactly the fault a walk-round exists to find, and it is only findable if
 // the other bars come down around it.
+// ===================== THE EYE IS IN THE SEAT THE MESH DRAWS =====================
+//
+// Seat.h places a rider along the train and TrainMesh.h draws a squab: two
+// formulas for where a row is, and the camera sits on the first while the
+// picture shows the second. Asserted equal, row by row, and the eye it
+// produces is over the squab, behind the row centre and above the rim.
+void TestTheRidersEyeSitsInTheSeatTheMeshDraws()
+{
+    std::printf("The rider's eye sits in the seat the mesh draws\n");
+    const FTrackProfile P;
+    const FTrainSettings S;
+    const double H = 1.1;
+    const double Half = S.TrainLengthM() * 0.5;
+    for (int Car = 0; Car < S.CarCount; ++Car)
+    {
+        for (int Row = 0; Row < S.RowsPerCar; ++Row)
+        {
+            FSeat Seat; Seat.Car = Car; Seat.Row = Row;
+            const double FromSeat = SeatOffsetAlongM(Seat, S.CarCount, S.CarLengthM, S.RowsPerCar, S.BodyGapM);
+            const double FromMesh = Half - S.CarLengthM * (Car + 0.5) + RowCentreX(S, Row);
+            assert(std::fabs(FromSeat - FromMesh) < 1e-9 && "Seat.h and the mesh disagree about where a row is");
+        }
+    }
+    // The eye: over the rear of the squab (which runs from 0.65 of a seat depth
+    // behind the row centre to 0.35 ahead of it), and high enough to see out.
+    assert(S.RiderEyeBehindRowM > 0.0 && S.RiderEyeBehindRowM < S.SeatDepthM * 0.65);
+    const double EyeAboveRails = RiderEyeAboveHeartline(S, P, H) + H;
+    const double SquabTop = CabinFloorHeight(S, ShellKeepOut(S, P)) + S.SeatHeightM;
+    assert(EyeAboveRails > SquabTop + 0.5 && "a seated adult's eye, not a child's");
+    assert(EyeAboveRails > S.BodyHeightM && "the eye sees over the rim");
+    std::printf("  %d rows agree with the mesh; the eye is %.2f m over the squab and %.2f m over the rim\n",
+                S.CarCount * S.RowsPerCar, EyeAboveRails - SquabTop, EyeAboveRails - S.BodyHeightM);
+}
+
 void TestTheLapBarsSwingWithTheBankAndStayClosed()
 {
     std::printf("The lap bars swing with the bank, and are closed geometry at every angle\n");
@@ -973,6 +1008,7 @@ int main()
     TestATrainStraddlingTheSEAMWrapsRatherThanPilingUp();
     TestADegenerateTrainBuildsNOTHINGRatherThanSomethingBroken();
     TestTheLapBarsSwingWithTheBankAndStayClosed();
+    TestTheRidersEyeSitsInTheSeatTheMeshDraws();
 
     std::printf("\ntest_trainmesh: all assertions passed.\n");
     return 0;

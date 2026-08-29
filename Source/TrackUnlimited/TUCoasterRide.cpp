@@ -5032,9 +5032,13 @@ void ATUCoasterRide::DrawModeBanner(UCanvas* Canvas)
 	}
 	if (CameraMode == ETUCameraMode::Rider && CarCount > 0)
 	{
-		const FSeat Seat = SeatByIndex(RiderSeat, CarCount, 1.0);
-		Line += FString::Printf(TEXT("   car %d %s  [N]"),
-			Seat.Car + 1, Seat.LateralM > 0.0 ? TEXT("left") : TEXT("right"));
+		const int32 Rows = TrainMeshSettings().RowsPerCar;
+		const FSeat Seat = SeatByIndex(RiderSeat, CarCount, 1.0, Rows);
+		Line += Rows > 1
+			? FString::Printf(TEXT("   car %d row %d %s  [N]"),
+				Seat.Car + 1, Seat.Row + 1, Seat.LateralM > 0.0 ? TEXT("left") : TEXT("right"))
+			: FString::Printf(TEXT("   car %d %s  [N]"),
+				Seat.Car + 1, Seat.LateralM > 0.0 ? TEXT("left") : TEXT("right"));
 	}
 
 	// THE CLOCK IS ALWAYS STATED WHEN IT IS NOT 1x. A ride running at quarter
@@ -6855,7 +6859,7 @@ bool ATUCoasterRide::RunDocumentSmokeTest()
 			if (Diagnostics.At(i).Group == "Envelope") { ++EnvelopeRows; }
 		}
 		const FGVerdict Outer = JudgeRideProfile(OffsetProfile(Profile_,
-			TrainMeshSettings().BodyWidthM * 0.25));
+			TrainMeshSettings().SeatPitchM * 0.5));
 		const bool bJudged = Outer.SamplesJudged > 0;
 
 		if (!bTrackIsCircuit || !Profile_.bCompleted || Pads < 2 || Trims != 1
@@ -7789,7 +7793,8 @@ void ATUCoasterRide::BuildDiagnostics()
 	// to go and look at, never a repair.
 	if (Profile_.bCompleted)
 	{
-		const double OuterM = TrainMeshSettings().BodyWidthM * 0.25;
+		// The seat the mesh draws, not a fraction of the body width: one answer.
+		const double OuterM = TrainMeshSettings().SeatPitchM * 0.5;
 		struct { const char* Seat; double LateralM; } Seats[] = {{"centre", 0.0}, {"outer seat", OuterM}};
 		for (const auto& Seat : Seats)
 		{
@@ -11670,7 +11675,8 @@ static void SetNearPlaneMetres(double Metres)
 // unhiding means redrawing. Everything else is a per-frame gate.
 void ATUCoasterRide::NextRiderSeat()
 {
-	RiderSeat = (RiderSeat + 1) % FMath::Max(1, CarCount * 2);
+	// Every seat the mesh draws: two a row, RowsPerCar rows a car.
+	RiderSeat = (RiderSeat + 1) % FMath::Max(1, CarCount * TrainMeshSettings().RowsPerCar * 2);
 	UE_LOG(LogTUEvents, Log, TEXT("[N] seat %d"), RiderSeat);
 }
 
@@ -12045,12 +12051,17 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 	// WHERE THE RIDER IS SITTING IS A SEAT, not a fraction of a train. The
 	// continuous -1..+1 slider described a rider half in one car; a real ride
 	// has row 1 and row 2. Seat.h is the one answer for along, across and up,
-	// and the camera sits exactly in it -- the eye offset that used to be
-	// added here is the seat's VerticalM.
-	FSeat Seat = SeatByIndex(RiderSeat, CarCount,
-		TrainMeshSettings().BodyWidthM * 0.25);   // a seat each side of centre
-	Seat.VerticalM = RiderEyeAboveHeartlineM;     // the knob still owns the eye height
-	const double SeatOffset = SeatOffsetAlongM(Seat, CarCount, static_cast<double>(CarLengthM));
+	// and the camera sits exactly in it.
+	//
+	// AND THE SEAT IS THE ONE THE MESH DRAWS (2026-08-28): the same row
+	// spacing, the same seat pitch across, and an eye a seated adult's height
+	// over the squab, behind the row centre. Two rows a car put the old
+	// car-centre eye between the rows, looking at the back of a headrest.
+	const FTrainSettings TS = TrainMeshSettings();
+	FSeat Seat = SeatByIndex(RiderSeat, CarCount, TS.SeatPitchM * 0.5, TS.RowsPerCar);
+	Seat.VerticalM = RiderEyeAboveHeartline(TS, Profile, Track.GetHeartlineHeight());
+	const double SeatOffset = SeatOffsetAlongM(Seat, CarCount, static_cast<double>(CarLengthM),
+		TS.RowsPerCar, TS.BodyGapM) - TS.RiderEyeBehindRowM;
 	const FTrackFrame Frame = SeatFrame(Train->GetFrameAt(SeatOffset), Seat);
 	const FQuat Rotation = ToWorldRotation(Frame);
 

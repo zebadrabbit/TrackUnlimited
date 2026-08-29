@@ -19,8 +19,10 @@
 // it needs roll rate, which is the envelope's business -- but the number it
 // needs now exists.
 //
-// ponytail: one row per car. RowsPerCar is a parameter so a two-row car is a
-// number rather than a rewrite; nothing shipped has one.
+// Rows sit at the centres of equal slices of the SHELL — the car less its
+// coupling gap — which is exactly where TrainMesh.h draws the seats
+// (RowCentreX); test_trainmesh asserts the two agree. With no gap it is the
+// car, which is what the physics-only tests here use.
 
 #include "../TrackSpline/TrackSpline.h"
 
@@ -36,15 +38,18 @@ struct FSeat
 // Where along the train a seat is, as the offset GetFrameAt takes: +ahead of
 // the train's centre, -behind. Car 0 is at the nose, which is the same
 // reference PlaceCars and the stop marks use.
-inline double SeatOffsetAlongM(const FSeat& Seat, int CarCount, double CarLengthM, int RowsPerCar = 1)
+inline double SeatOffsetAlongM(const FSeat& Seat, int CarCount, double CarLengthM,
+                               int RowsPerCar = 1, double BodyGapM = 0.0)
 {
     if (CarCount <= 0 || !(CarLengthM > 0.0)) { return 0.0; }
     const int Car = Seat.Car < 0 ? 0 : (Seat.Car >= CarCount ? CarCount - 1 : Seat.Car);
     const int Rows = RowsPerCar < 1 ? 1 : RowsPerCar;
     const int Row = Seat.Row < 0 ? 0 : (Seat.Row >= Rows ? Rows - 1 : Seat.Row);
     const double Half = CarLengthM * static_cast<double>(CarCount) * 0.5;
-    // Rows sit at the centres of equal slices of the car.
-    const double RowInCar = CarLengthM * (static_cast<double>(Row) + 0.5) / static_cast<double>(Rows);
+    // Rows sit at the centres of equal slices of the shell, centred in the car.
+    const double Gap = BodyGapM > 0.0 && BodyGapM < CarLengthM ? BodyGapM : 0.0;
+    const double RowInCar = Gap * 0.5
+        + (CarLengthM - Gap) * (static_cast<double>(Row) + 0.5) / static_cast<double>(Rows);
     return Half - CarLengthM * static_cast<double>(Car) - RowInCar;
 }
 

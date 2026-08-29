@@ -115,6 +115,15 @@ bodies sharing a face weld into one with a doubled edge, the seats' lesson) and 
 from the end so its face is not coplanar with the cap. Asserted as geometry: a body triangle
 inside the cabin at each end, which the bare tub never has.
 
+**AND THE CAMERA SITS IN THE SEAT THE MESH DRAWS (2026-08-28).** The rider camera took its
+row from `Seat.h` with one row a car and its height from a 0.25 m knob over the heartline —
+so with two rows it sat between them, at a child's eye height, looking at a headrest. Now
+`SeatOffsetAlongM` takes the shell gap and lands on `RowCentreX` exactly (asserted row by
+row), the lateral is the seat pitch, and the eye is `RiderEyeAboveHeartline`: cabin floor,
+squab, then `RiderEyeAboveSeatM` (0.75), set `RiderEyeBehindRowM` (0.20) behind the row
+centre so it is over the hips. The knob is gone. Still cosmetic: G stays at the heartline.
+The envelope's "outer seat" is the seat pitch too, not a quarter of the body width.
+
 **This is the only part with taste in it**, and the only part a later art pass would
 replace. Keep it a single function returning a cross-section, so replacing it is one edit.
 

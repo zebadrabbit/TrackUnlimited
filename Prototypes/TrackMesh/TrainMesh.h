@@ -154,6 +154,15 @@ struct FTrainSettings
     // sharing a face weld into one with a doubled edge (the seats' lesson).
     double EndPanelThickM = 0.05;
 
+    // ---- The rider's eye, FROM THE SEAT (2026-08-28). The camera used to sit
+    // an authored 0.25 m over the heartline at the car's centre, which with two
+    // rows is between them and with seats is a child's eye over a squab that
+    // is now drawn. The seat is the one answer for where a rider is, so the eye
+    // is derived from it: over the rear of the squab, a seated adult's eye
+    // above it. Cosmetic — it moves the view and never a G figure.
+    double RiderEyeAboveSeatM = 0.75;
+    double RiderEyeBehindRowM = 0.20;  // behind the row centre: over the hips, not the knees
+
     // ---- The chassis: what the body and the bogies both attach to, so
     // articulation has somewhere to happen.
     double ChassisWidthM = 0.50;
@@ -548,6 +557,15 @@ inline double ShellShoulderHeight(const FTrainSettings& S, const FShellKeepOut& 
 inline double CabinFloorHeight(const FTrainSettings& S, const FShellKeepOut& K)
 {
     return std::min(ShellShoulderHeight(S, K) + S.CabinFloorClearM, S.BodyHeightM * 0.9);
+}
+
+// The rider's eye above the HEARTLINE — what FSeat::VerticalM wants — from the
+// seat the mesh draws: cabin floor, squab, then a seated adult's eye.
+inline double RiderEyeAboveHeartline(const FTrainSettings& S, const FTrackProfile& Profile,
+                                     double HeartlineHeight)
+{
+    return CabinFloorHeight(S, ShellKeepOut(S, Profile)) + S.SeatHeightM + S.RiderEyeAboveSeatM
+         - HeartlineHeight;
 }
 
 // Returned counter-clockwise in (AxisA = rider's left, AxisB = up), relative to
