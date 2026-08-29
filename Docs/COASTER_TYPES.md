@@ -100,6 +100,14 @@ face-off trains rather than for this — which is the good kind of accident.
 > argued. The vehicle is **two numbers**: `SeatPitchM` 2.80 (the two seats of a row, 1.4 m either
 > side) and `PodWidthM` 1.30 (a shell built around each seat instead of one spanning both).
 >
+> **Two shape corrections, both from screenshots and both the same root cause — a rule written and
+> only half-applied.** *"A pod is not over the wheels"* governed the two flank knees and not the
+> taper or the cabin floor, so a pod inherited the tub's shape: the tub narrows at the bottom to
+> clear its running and side-friction wheels, which put a pod's floor 0.47 m up a 0.90 m shell and
+> left the rider perched on the rim with 0.135 m of pod above the squab. A pod reaches full width
+> immediately above its bottom corner now and its floor sits at 0.21 m — 0.39 m of shell above the
+> squab, and the eye follows the seat down to 0.36 m over the rim.
+>
 > **Narrowed the same evening, from a screenshot.** The first try was 3.60 and 1.10 — 4.70 m of
 > vehicle either side of a 1.20 m gauge to carry *two* people, which read as two thin troughs on the
 > end of a lot of scaffolding rather than as a car. A real wing coaster is that wide because each

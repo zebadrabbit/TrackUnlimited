@@ -1155,6 +1155,33 @@ void TestAWingCarIsTwoPODSAndTheSEATSPlaceThem()
     std::printf("  seats out to %.2f m, one bar per pod, nothing nearer the centre than %.2f m\n",
                 SeatLeft, BarInner);
 
+    // ===================== AND THE RIDER SITS DOWN IN IT =====================
+    //
+    // The pod's floor was inheriting the TUB's, which is high up the shell
+    // because the tub has to taper past its wheels before it dares be full
+    // width. A pod has nothing under it, so a floor at the same height left
+    // 0.135 m of pod above the squab and a rider perched on the rim -- which is
+    // what the screenshot showed. Asserted against the shell rather than as a
+    // figure, so a taste change to the pod cannot quietly re-perch them.
+    const FShellKeepOut K = ShellKeepOut(S, P);
+    const double PodFloor = CabinFloorHeight(S, K, false);
+    const double TubFloor = CabinFloorHeight(S, K, true);
+    assert(PodFloor < TubFloor && "a pod is still tapering around wheels it does not have");
+    const double SquabTop = PodFloor + S.SeatHeightM;
+    assert(S.BodyHeightM - SquabTop > 0.30
+           && "the rider is perched on the rim rather than sitting down in the pod");
+    std::printf("  cabin floor %.2f m up a %.2f m pod (the tub's is %.2f), %.2f m of shell above the squab\n",
+                PodFloor, S.BodyHeightM, TubFloor, S.BodyHeightM - SquabTop);
+
+    // AND THE EYE FOLLOWS IT DOWN, because it is derived from the seat rather
+    // than authored -- but still clears the rim, or the lap is spent looking at
+    // the inside of a wall.
+    const double Eye = RiderEyeAboveHeartline(S, P, H) + H;
+    assert(Eye > S.BodyHeightM + 0.10 && "the rider cannot see out of the pod");
+    assert(Eye < RiderEyeAboveHeartline(FTrainSettings(), P, H) + H
+           && "the pod's eye should sit LOWER than the tub's, not higher");
+    std::printf("  eye %.2f m above the rails, %.2f m over the rim\n", Eye, Eye - S.BodyHeightM);
+
     // ===================== AND THE AUDIT CATCHES THE THREE WAYS IT GOES WRONG =====================
     //
     // SILENT ON THE GOOD ONE FIRST, because a checker that complains about every

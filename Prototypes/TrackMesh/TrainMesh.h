@@ -640,8 +640,19 @@ inline std::vector<FCarColumn> CarColumns(const FTrainSettings& S)
 // ARRIVE BEFORE THE WHEELS ARE PAST: the authored taper is taste and is honoured
 // wherever it is legal; below the running wheels it is not, so the taper gets
 // pushed UP rather than the shell being pushed OUT.
-// A POD HAS NO WHEELS UNDER IT, so the authored taste is simply honoured: there
-// is nothing down there to push it up. That is the whole of `bOverWheels` here.
+// ===================== A POD REACHES FULL WIDTH AT ONCE =====================
+//
+// The taper is not taste, it is the WHEELS: the tub narrows at the bottom to get
+// past the running and side-friction wheels, and reaches full width only once it
+// is clear of them. A pod has nothing under it at all, so there is nothing for it
+// to taper around and it goes full width immediately above its bottom corner.
+//
+// THIS WAS HALF-APPLIED AND IT SHOWED. `bOverWheels` was honoured for the two
+// knees in the section and NOT here, so a pod kept the tub's taper -- and with
+// it a cabin floor 0.465 m up a 0.90 m shell, which left 0.135 m of pod above
+// the squab and a rider perched on the rim instead of sitting down in the thing.
+// Reported from a screenshot; the rule was already written, only obeyed twice
+// out of four times.
 inline double ShellShoulderHeight(const FTrainSettings& S, const FShellKeepOut& K,
                                   bool bOverWheels = true)
 {
@@ -650,7 +661,7 @@ inline double ShellShoulderHeight(const FTrainSettings& S, const FShellKeepOut& 
     const double R = std::min(S.BodyCornerRadiusM, std::min(W, H) * 0.9);
     const double Shoulder = S.BodyHeightM - R;
     const double hAuthored = std::max(0.0, std::min(1.0, S.BodyTaperFraction)) * S.BodyHeightM;
-    if (!bOverWheels) { return std::min(hAuthored, Shoulder); }
+    if (!bOverWheels) { return std::min(R, Shoulder); }
     return std::max(std::min(hAuthored, Shoulder), std::min(K.RunTopM + 0.02, Shoulder));
 }
 
@@ -697,7 +708,13 @@ inline std::vector<FVec2> CarBodySection(const FTrainSettings& S,
     // CLAMPED, NOT REFUSED, and the audit reports what was asked for. A shell
     // merely narrower than requested is still a car; one drawn through its own
     // wheels is a defect, so the clamp fails in the direction that stays a car.
-    const double Wf = std::min(std::min(S.BodyFloorWidthM * 0.5, K.FloorHalfWidth), W);
+    // AND ITS FLOOR IS FULL WIDTH TOO, for the same reason: BodyFloorWidthM is
+    // how narrow the tub has to be to fit BETWEEN the side-friction wheels, and
+    // there are none under a pod. Less the rolled corner, so the bottom edge is
+    // a chamfer rather than a knife.
+    const double Wf = bOverWheels
+        ? std::min(std::min(S.BodyFloorWidthM * 0.5, K.FloorHalfWidth), W)
+        : std::max(0.05, W - R);
     const double Wm = std::min(std::max(Wf, K.MidHalfWidth), W);
 
     const double hFull = ShellShoulderHeight(S, K, bOverWheels);
