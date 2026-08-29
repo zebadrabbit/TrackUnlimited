@@ -215,19 +215,31 @@ struct FTrainSettings
     // pitch is the shell's and not a second authored number.
     int RowsPerCar = 2;
     double BarDiameterM = 0.06;
-    // AND THE PIVOT IS AT THE FRONT OF THE BAY, WHICH IS DERIVED (2026-08-28).
-    // 0.30 m ahead of the row centre was still an authored guess and it put the
-    // pivot in the rider's knees on a 1.35 m row — reported from a screenshot,
-    // *"move the pivot way further forward and leave enough space to sit"*. Both
-    // numbers now come off the row's own pitch: the hinge sits at the FRONT of
-    // the bay, on the divider ahead, less a clearance; the arm is whatever
-    // reaches back from there to leave a rider's depth clear of the backrest. So
-    // a longer car, or one row instead of two, moves them without retyping.
-    double BarHingeUpM = 0.06;        // above the squab: the thigh, seated. DERIVED from the seat
-    double BarHingeClearM = 0.12;     // hinge back from the front of the bay
-    double BarLapClearM = 0.35;       // closed, the crossbar stops this far ahead of the backrest
+
+    // AND THE PIVOT IS AT THE FLOOR, WHICH IS THE THIRD TRY (2026-08-28).
+    // It hinged behind the hip, then at the front of the bay at thigh height,
+    // and both were swing-arms reaching in over the lap from a pivot up in the
+    // air. From the Big Thunder Mountain reference the arrangement is different
+    // in kind: the bar runs ALL THE WAY DOWN TO THE CABIN FLOOR at the front
+    // edge of the seat, where a mechanical lock holds it — so the tube is the
+    // locking member, and the pivot is at the base of the car rather than
+    // anywhere a rider could see it. Closed it stands nearly UPRIGHT, leaning
+    // back over the lap by BarClosedLeanDeg; open it swings forward and down
+    // into the bay, out of the seat.
+    //
+    // Everything else derives from the SEAT, because the seat is what decides
+    // where a lap is: the pivot sits at the front edge of the squab, and the
+    // arm is whatever reaches from the floor to BarOverLapM above the squab.
+    //
+    // ponytail: our tub is a BUCKET — riders step down into it from above, so
+    // an open bar lying forward still leaves the way in clear. A real BTM car
+    // has a side access lane the bar blocks instead, which is a different car
+    // TYPE rather than a different bar; the typical types are their own job.
+    double BarHingeUpM = 0.03;        // pivot above the floor: the tube tangent to it
+    double BarOverLapM = 0.08;        // closed, the bar this far above the squab
+    double BarClosedLeanDeg = 15.0;   // closed: back from vertical, over the lap
+    double BarOpenLeanDeg = 45.0;     // open: forward of vertical, down into the bay
     double BarInsetM = 0.12;          // arms this far in from the shell's full width
-    double BarRaisedDeg = 100.0;      // fully open: past vertical, leaning away from the seat
 
     // ---- Tessellation. Coarser than the rails DELIBERATELY, the same argument
     // the support columns get eight sides on: a wheel is 300 mm across and there
@@ -277,16 +289,17 @@ inline double RowPitchM(const FTrainSettings& S)
 // than through it.
 inline double BarHingeAheadM(const FTrainSettings& S)
 {
-    return std::max(0.05, RowPitchM(S) * 0.5 - S.BarHingeClearM);
+    return S.SeatDepthM * 0.35;   // the squab's front edge, where the tube goes down
 }
 
-// And the arm is whatever reaches from there back over the lap, stopping a
-// rider's depth clear of the backrest — which is the space somebody sits in.
-// DERIVED, so it cannot be authored into the rider's chest.
+// And the arm reaches from the floor pivot to a lap bar's height above the
+// squab, at the angle it leans. DERIVED, so it cannot be authored long enough
+// to stand over the rider's head or short enough to grip nothing.
 inline double BarArmLengthM(const FTrainSettings& S)
 {
-    const double BackrestFront = -S.SeatDepthM * 0.65;   // the squab's rear, from the row centre
-    return std::max(0.05, BarHingeAheadM(S) - (BackrestFront + S.BarLapClearM));
+    const double Rise = S.SeatHeightM + S.BarOverLapM - S.BarHingeUpM;
+    const double Lean = S.BarClosedLeanDeg * (TrackMeshTwoPi / 360.0);
+    return std::max(0.05, Rise / std::max(0.1, std::cos(Lean)));
 }
 
 // SHORTER THAN HALF THE PITCH, ALWAYS. Two chassis that meet leave nowhere for
@@ -1011,12 +1024,16 @@ inline void AddRestraintBar(FMeshBuffer& Out, const FTrainSettings& S,
                             double RowX, double Position)
 {
     const double P = std::max(0.0, std::min(1.0, Position));
-    // THE HINGE IS ON THE SEAT, not at an authored height: the knee is where the
-    // squab puts it, and a bar hinged anywhere else swings over nobody.
-    const double HingeZ = RailZ + CabinFloorHeight(S, ShellKeepOut(S, Profile))
-                        + S.SeatHeightM + S.BarHingeUpM;
-    const double Swing = (1.0 - P) * S.BarRaisedDeg * (TrackMeshTwoPi / 360.0);
-    const FVec3 Dir{-std::cos(Swing), 0.0, std::sin(Swing)};
+    // THE PIVOT IS AT THE CABIN FLOOR, at the front edge of the squab: the tube
+    // runs the whole way down to where the lock is, which is what makes it the
+    // locking member rather than an arm swinging in from somewhere.
+    const double HingeZ = RailZ + CabinFloorHeight(S, ShellKeepOut(S, Profile)) + S.BarHingeUpM;
+    // Nearly upright either way, and the lean is what reads: closed it tips BACK
+    // over the lap, open it falls FORWARD into the bay. Interpolated in angle,
+    // so a bank in transit is a bar part way over.
+    const double Deg = P * (-S.BarClosedLeanDeg) + (1.0 - P) * S.BarOpenLeanDeg;
+    const double Lean = Deg * (TrackMeshTwoPi / 360.0);
+    const FVec3 Dir{std::sin(Lean), 0.0, std::cos(Lean)};
     const double HalfY = std::max(0.05, S.BodyWidthM * 0.5 - S.BarInsetM);
     const double R = S.BarDiameterM * 0.5;
     const double Arm = BarArmLengthM(S);

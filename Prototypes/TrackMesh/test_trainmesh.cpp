@@ -938,17 +938,30 @@ void TestTheLapBarsSwingWithTheBankAndStayClosed()
         assert(Length(Default.Restraints.Position[v] - Closed.Restraints.Position[v]) < 1e-12);
     }
 
-    // ---- CLOSED IS INSIDE THE SHELL, RAISED IS ABOVE THE RIM. The first is
-    // where a real lap bar is; the second is what makes an open bar readable
-    // from the platform, which is the whole point of drawing it.
+    // ---- CLOSED STANDS AT THE RIM, OPEN FALLS AWAY FROM IT. A floor-hinged bar
+    // is nearly upright when it is holding somebody and leans FORWARD when it
+    // lets go, so what reads from the platform is the angle rather than the
+    // height — and open is the LOWER of the two, which the swing-arm version had
+    // the other way round.
     const double RimZ = Cars[0].Frame.Position.Z - Heartline + S.BodyHeightM;
     const double SeatTopZ = Cars[0].Frame.Position.Z - Heartline
         + CabinFloorHeight(S, ShellKeepOut(S, P)) + S.SeatHeightM;
-    assert(MaxZ(Closed.Restraints) < RimZ);
+    assert(MaxZ(Closed.Restraints) < RimZ && "closed, the bar stays inside the shell");
     assert(MaxZ(Closed.Restraints) > SeatTopZ && "closed, the bar is over the lap, not the floor");
-    assert(MaxZ(Open.Restraints) > RimZ);
-    std::printf("  %d bars: closed tops out %.2f m under the rim, raised %.2f m over it\n",
-                Rows, RimZ - MaxZ(Closed.Restraints), MaxZ(Open.Restraints) - RimZ);
+    assert(MaxZ(Open.Restraints) < MaxZ(Closed.Restraints) && "open, it falls forward and down");
+    std::printf("  %d bars: closed tops out %.2f m under the rim, open drops %.2f m below that\n",
+                Rows, RimZ - MaxZ(Closed.Restraints),
+                MaxZ(Closed.Restraints) - MaxZ(Open.Restraints));
+
+    // ---- AND IT GOES ALL THE WAY DOWN TO THE FLOOR, where the lock is. That is
+    // the difference between this and a swing arm, and it is the only thing that
+    // makes the tube a locking member rather than decoration.
+    double LowZ = 1e9;
+    for (const FVec3& V : Closed.Restraints.Position) { LowZ = std::min(LowZ, V.Z); }
+    const double FloorZ = Cars[0].Frame.Position.Z - Heartline + CabinFloorHeight(S, ShellKeepOut(S, P));
+    assert(std::fabs(LowZ - FloorZ) < S.BarDiameterM && "the bar reaches the cabin floor");
+    std::printf("  and the tube reaches the floor, %.3f m off it, where the lock is\n",
+                std::fabs(LowZ - FloorZ));
 
     // ---- HINGED AT THE FRONT, COMING DOWN BACK OVER THE LAP. One bar in car
     // space: closed, it runs from ahead of the row centre back past it; open,
@@ -966,27 +979,28 @@ void TestTheLapBarsSwingWithTheBankAndStayClosed()
         double CMin, CMax, OMin, OMax;
         Span(1.0, CMin, CMax);
         Span(0.0, OMin, OMax);
-        // THE PIVOT IS AT THE FRONT OF THE BAY, not merely ahead of the squab:
-        // within the hinge clearance of the row's own front edge.
-        const double BayFront = RowX + RowPitchM(S) * 0.5;
-        assert(CMax > BayFront - S.BarHingeClearM - 0.02 && "the pivot is at the front of the bay");
-        assert(CMax < BayFront && "and inside it, on the divider rather than through it");
-        assert(OMin > RowX && "open, the bar stands clear ahead of the seat");
-
-        // CLOSED, IT COMES DOWN OVER THE SQUAB — which is the lap. The row
-        // CENTRE is not: the squab sits back from it, so a bar landing on the
-        // centre line would be over the knees.
+        // THE PIVOT IS AT THE FRONT EDGE OF THE SQUAB, on the floor: the tube
+        // goes down beside the seat rather than reaching in from the bay ahead.
         const double SquabBack = RowX - S.SeatDepthM * 0.65;
         const double SquabFront = RowX + S.SeatDepthM * 0.35;
+        assert(std::fabs(CMax - (SquabFront + S.BarDiameterM * 0.5)) < 0.02
+            && "the pivot is at the squab's front edge");
+        assert(OMin > SquabBack && "open, the bar has left the lap");
+        assert(OMax > CMax && "open, it leans forward past where it stood");
+
+        // CLOSED, IT LEANS BACK OVER THE SQUAB — which is the lap. The row CENTRE
+        // is not: the squab sits back from it, so a bar landing on the centre
+        // line would be over the knees.
         assert(CMin > SquabBack && CMin < SquabFront && "closed, the bar is over the squab");
 
-        // AND THERE IS ROOM TO SIT. The gap between the crossbar and the face of
-        // the backrest is where a person goes: an arm length authored a hand's
-        // width too long puts the bar in their chest, and nothing else says so.
+        // AND THERE IS ROOM TO SIT. The gap between the bar and the face of the
+        // backrest is where a person goes: an arm authored a hand's width too
+        // long puts the bar in their chest, and nothing else says so.
         const double Room = CMin - SquabBack;
         assert(Room > 0.30 && "a rider has to fit between the backrest and the bar");
-        std::printf("  pivot %.2f m ahead of the row (bay front %.2f), %.2f m of seat between backrest and closed bar\n",
-                    BarHingeAheadM(S), RowPitchM(S) * 0.5, Room);
+        std::printf("  pivot on the floor at the squab front, leaning %.0f deg back closed and %.0f deg forward open;"
+                    " %.2f m of seat behind it\n",
+                    S.BarClosedLeanDeg, S.BarOpenLeanDeg, Room);
     }
 
     // ---- ONE ROW RAISED MOVES ONE BAR. Bars are appended in row order, car by
@@ -1009,11 +1023,22 @@ void TestTheLapBarsSwingWithTheBankAndStayClosed()
     }
     std::printf("  raising row 3 alone moves row 3 alone\n");
 
-    // ---- HALF WAY IS BETWEEN, so a bank in transit reads as one.
+    // ---- HALF WAY IS BETWEEN, so a bank in transit reads as one. Measured on
+    // the LEAN — how far forward the top has swung — and NOT on a height: a bar
+    // that tips 15 deg back and 45 deg forward passes through vertical, so its
+    // height is the same at 15 forward as at 15 back and says nothing about
+    // which way it is going. The first version of this check asserted a height
+    // and was true only by accident of the old swing-arm arrangement.
     const FTrainMesh Half =
         BuildTrainMesh(Cars, Car, S, Heartline, std::vector<double>(Rows, 0.5));
-    assert(MaxZ(Half.Restraints) > MaxZ(Closed.Restraints));
-    assert(MaxZ(Half.Restraints) < MaxZ(Open.Restraints));
+    auto MaxX = [](const FMeshBuffer& M)
+    {
+        double X = -1e9;
+        for (const FVec3& V : M.Position) { X = std::max(X, V.X); }
+        return X;
+    };
+    assert(MaxX(Half.Restraints) > MaxX(Closed.Restraints));
+    assert(MaxX(Half.Restraints) < MaxX(Open.Restraints));
 
     // ---- ROWS RUN FRONT TO BACK INSIDE THE SHELL, the order the station lays
     // its gates in, so bar g and gate g face each other.

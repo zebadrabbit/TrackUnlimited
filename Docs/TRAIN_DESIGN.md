@@ -111,16 +111,32 @@ on the divider AHEAD of the rider, a thigh's height above the squab; closed, the
 BACK over the lap; open, it swings up past vertical (`BarRaisedDeg` 100°) so the seat is clear
 from above and riders step in past it.
 
-**AND BOTH THE PIVOT AND THE ARM ARE DERIVED FROM THE ROW'S PITCH.** 0.30 m ahead of the row
-centre was still a guess, and on a 1.35 m row it put the pivot in the rider's knees — reported
-from the next screenshot. `BarHingeAheadM(S)` is half a row's pitch less `BarHingeClearM`
-(0.12), so the pivot lands on the divider at the FRONT of the bay; `BarArmLengthM(S)` is
-whatever reaches from there back to `BarLapClearM` (0.35) ahead of the backrest face, which is
-the space a person sits in. A longer car, or one row instead of two, moves both without
-retyping either. Measured on the reference train: pivot **0.56 m** ahead of the row centre
-(bay front 0.68), **0.32 m** of clear seat between the backrest and the closed bar, the
-crossbar landing over the squab. Asserted as a span in car space — closed it is over the
-squab and not over the knees, open it stands entirely ahead of the seat.
+**AND THE PIVOT IS AT THE FLOOR — the third try, and the first that is the right ARRANGEMENT
+rather than the right number.** Behind the hip, then at the front of the bay at thigh height:
+both were swing arms reaching in over the lap from a pivot up in the air, and moving one only
+ever moved the guess. From the Big Thunder Mountain reference the real thing is different in
+kind — **the tube runs all the way down to the cabin floor at the front edge of the seat, where
+a mechanical lock holds it**. So the tube IS the locking member, the pivot is at the base of
+the car where nobody sees it, and the bar stands nearly upright: closed it leans back over the
+lap by `BarClosedLeanDeg` (15°), open it falls forward into the bay by `BarOpenLeanDeg` (45°).
+
+Everything else derives from the SEAT, since the seat is what decides where a lap is:
+`BarHingeAheadM(S)` is the squab's front edge, and `BarArmLengthM(S)` reaches from the floor to
+`BarOverLapM` (0.08) above the squab, at the angle it leans. Measured: closed **0.03 m under
+the rim**, open dropping **0.09 m** below that, the tube reaching within **0.022 m** of the
+floor, **0.33 m** of seat behind the closed bar.
+
+**Two assertions inverted, and both had been true by accident.** *Open is above the rim* was a
+property of the swing arm — a floor-hinged bar going open falls forward and DOWN, so what reads
+from the platform is the angle rather than the height. And *half way is higher than closed*
+was worse: the bar passes through vertical, so its height at 15° forward equals its height at
+15° back and says nothing about which way it is going. Half way is now measured on the LEAN,
+which is monotonic in the bank's position and stays true whatever the arrangement.
+
+**One thing is deliberately not modelled:** on a real BTM car the bar also blocks a side access
+lane. Our tub is a bucket — riders step down into it from above — so an open bar lying forward
+still leaves the way in clear. That is a different car TYPE rather than a different bar, and
+the typical types are their own job.
 
 **TWO ROWS, AND A BULKHEAD AT EACH END (2026-08-28).** One row left half of a 2.7 m shell
 empty on screen; `RowsPerCar` is 2 now, spaced evenly along the shell by `RowCentreX` so the
