@@ -577,11 +577,23 @@ inline FGVerdict JudgeRideProfile(const FRideProfile& P,
 // push toward their RIGHT (LateralG's positive sense), hence the sign below.
 // The finite difference for alpha is per-sample and noisy; the 5 Hz filter
 // the judge already applies is what makes it a measurement.
+//
+// ONE FORMULA, TWO CALLERS. OffsetProfile transforms a whole recorded run;
+// the live readout in the cockpit asks the same question of one instant, and
+// two copies of two lines is how a panel comes to disagree with the judge that
+// passed the ride. Both go through here.
+inline void OffsetFeltG(double LateralM, double OmegaRadPerSec, double AlphaRadPerSec2,
+                        double& VerticalG, double& LateralG)
+{
+    const double G = 9.80665;
+    VerticalG += AlphaRadPerSec2 * LateralM / G;
+    LateralG  += OmegaRadPerSec * OmegaRadPerSec * LateralM / G;
+}
+
 inline FRideProfile OffsetProfile(const FRideProfile& P, double LateralM)
 {
     FRideProfile Out = P;
     if (Out.Samples.size() < 2 || LateralM == 0.0) { return Out; }
-    const double G = 9.80665;
     const double ToRad = 3.14159265358979323846 / 180.0;
     for (std::size_t i = 0; i < Out.Samples.size(); ++i)
     {
@@ -592,8 +604,8 @@ inline FRideProfile OffsetProfile(const FRideProfile& P, double LateralM)
         const double Alpha = (Dt > 1e-9)
             ? (P.Samples[B].RollRateDegPerSec - P.Samples[A].RollRateDegPerSec) * ToRad / Dt
             : 0.0;
-        Out.Samples[i].VerticalG += Alpha * LateralM / G;
-        Out.Samples[i].LateralG  += Omega * Omega * LateralM / G;
+        OffsetFeltG(LateralM, Omega, Alpha,
+                    Out.Samples[i].VerticalG, Out.Samples[i].LateralG);
     }
     return Out;
 }

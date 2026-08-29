@@ -212,6 +212,20 @@ public:
 	void EndLookDrag() { bDraggingLook = false; }
 	void ApplyCursorMode();
 
+	/**
+	 * WHERE THE RIDER IS LOOKING, which is not where the car is pointing.
+	 *
+	 * An offset from the seat's own frame rather than a camera of its own, so it
+	 * rolls with the car -- turn your head on a corkscrew and the world still
+	 * goes round you. Clamped both ways and never wrapped; see FHeadLook.
+	 *
+	 * In RIDE the mouse is captured and this is free look with nothing held. On
+	 * the rider camera reached with [C] from Build or Operate the cursor is out
+	 * for the panels, so it follows the same right-drag every other camera uses.
+	 * [F] recentres, which is the same key that puts every other view straight.
+	 */
+	FHeadLook RiderHead;
+
 	/** Chase only: how far behind the train to sit, in metres. */
 	UPROPERTY(EditAnywhere, Category = "TrackUnlimited|Camera",
 		meta = (ClampMin = "2.0", UIMax = "60.0",
@@ -416,7 +430,7 @@ public:
 
 	/**
 	 * The generated control panel: an indicator per block, a VFD module per
-	 * powered run, a sequence readout per platform. [P] cycles operator ->
+	 * powered run, a sequence readout per platform. [F4] cycles operator ->
 	 * maintenance -> off.
 	 *
 	 * Two views rather than one because a real installation has two, and they are
@@ -1352,10 +1366,10 @@ private:
 	// already showed the panel beats a second binding nobody remembers.
 	void CyclePanelView()
 	{
-		// ASKING FOR ONE OVERLAY MEANS YOU WANT OVERLAYS. Without this the key
-		// appears dead while [F2] is holding everything off, and the state it
-		// silently changed underneath is waiting to surprise somebody later.
-		bHideOverlays = false;
+		// ASKING FOR ONE OVERLAY MEANS YOU WANT THAT ONE — and, since 2026-08-28,
+		// only that one. See LeaveHiddenForOne: it puts PanelView to Off on the
+		// way out of hidden, so the switch below lands on Operator.
+		LeaveHiddenForOne();
 		switch (PanelView)
 		{
 		case ETUPanelView::Operator:    PanelView = ETUPanelView::Maintenance; break;
@@ -2098,7 +2112,7 @@ private:
 	void Type8() { TypeDigit(8); } void Type9() { TypeDigit(9); }
 	void CommitField();
 	void CancelField();
-	void ToggleSegmentEditor() { bShowSegmentEditor = !bShowSegmentEditor; CancelField(); bHideOverlays = false; }
+	void ToggleSegmentEditor() { LeaveHiddenForOne(); bShowSegmentEditor = !bShowSegmentEditor; CancelField(); }
 
 	/** The authored value behind a field, and the way back. One place, so the
 	 *  panel and the model cannot disagree about which float is which. */
@@ -2176,7 +2190,7 @@ public:
 	 */
 	void EnterAppMode(EAppMode Wanted, bool bConfirmed = false);
 
-	/** [O] — the settings screen, hosted by the frame. Public because the page's
+	/** [F1] — the settings screen, hosted by the frame. Public because the page's
 	 *  own CLOSE button comes back through it. */
 	void ToggleSettings();
 
@@ -2454,12 +2468,39 @@ private:
 	/** What a mode DOES, once the session has allowed it. */
 	void ApplyAppMode(EAppMode Want);
 	void DrawDiagnosticsPanel(class UCanvas* Canvas);
-	void ToggleDiagnostics() { bShowDiagnostics = !bShowDiagnostics; bHideOverlays = false; }
+	void ToggleDiagnostics() { LeaveHiddenForOne(); bShowDiagnostics = !bShowDiagnostics; }
 	void CycleProfileChannel();
-	void ToggleProfileGraph() { bShowProfileGraph = !bShowProfileGraph; bHideOverlays = false; }
+	void ToggleProfileGraph() { LeaveHiddenForOne(); bShowProfileGraph = !bShowProfileGraph; }
 
 	/**
-	 * [U] — EVERY OVERLAY OFF, AND BACK EXACTLY AS IT WAS.
+	 * ONE KEY, ONE OVERLAY.
+	 *
+	 * Every overlay toggle used to clear bHideOverlays and nothing else, so with
+	 * the screenshot key down, asking for the graph brought back the console, the
+	 * diagnostics list and the segment editor along with it — two keys turning
+	 * each other on, which is exactly what somebody pressing one of them did not
+	 * ask for. Leaving the hide up instead is worse: the key looks dead and the
+	 * state it silently changed underneath is waiting to surprise them later,
+	 * which is why the clear was there in the first place.
+	 *
+	 * So the third answer: come out of hidden with everything DOWN, and let the
+	 * key that asked raise its own. Nothing at all happens when overlays are
+	 * already showing, so the ordinary press is untouched — this only bites on
+	 * the first press after [F2].
+	 */
+	void LeaveHiddenForOne()
+	{
+		if (!bHideOverlays) { return; }
+		bHideOverlays = false;
+		bShowTelemetry = false;
+		bShowDiagnostics = false;
+		bShowProfileGraph = false;
+		bShowSegmentEditor = false;
+		PanelView = ETUPanelView::Off;
+	}
+
+	/**
+	 * [F2] — EVERY OVERLAY OFF, AND BACK EXACTLY AS IT WAS.
 	 *
 	 * A MASTER GATE, NOT A SAVE-AND-RESTORE. The obvious version snapshots the
 	 * eight toggles, clears them, and puts them back — and it is wrong the moment
@@ -2474,6 +2515,10 @@ private:
 	 * The wireframe and the ride-profile trace are PERSISTENT debug lines drawn
 	 * once at BeginPlay, so they have to be flushed and redrawn rather than
 	 * merely skipped — which is why this is a function and not a one-line lambda.
+	 *
+	 * COMING OUT OF IT WITH ONE KEY IS THE EXCEPTION, and a deliberate one: see
+	 * LeaveHiddenForOne. Pressing this again restores everything; pressing an
+	 * overlay's own key instead raises that overlay alone.
 	 */
 	bool bHideOverlays = false;
 	void ToggleOverlays();
@@ -2482,6 +2527,18 @@ private:
 	/** [F] — frame the whole track. The thing you press constantly when a
 	 *  validation warning points somewhere and you have no idea where. */
 	void FrameWholeTrack();
+
+	/**
+	 * [F] IS "PUT THE VIEW STRAIGHT", and in a seat that means facing forward
+	 * again rather than leaving the seat to look at the layout. Its own handler
+	 * rather than a branch inside FrameWholeTrack, which seven other places call
+	 * for the framing and would then silently get the recentre instead.
+	 */
+	void PressFrameKey()
+	{
+		if (CameraMode == ETUCameraMode::Rider) { RiderHead.Recentre(); return; }
+		FrameWholeTrack();
+	}
 
 	/** Mouse wheel. Multiplicative, because the same notch has to mean the same
 	 *  proportion of the distance at 10 m and at 1000 m. */

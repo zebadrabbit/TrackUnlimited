@@ -241,7 +241,7 @@ void UTUSettingsWidget::BuildPageTabs()
 	{
 		UButton* Close = WidgetTree->ConstructWidget<UButton>();
 		UTextBlock* Label = WidgetTree->ConstructWidget<UTextBlock>();
-		Label->SetText(FText::FromString(TEXT("CLOSE  [O]")));
+		Label->SetText(FText::FromString(TEXT("CLOSE  [F1]")));
 		Label->SetColorAndOpacity(FSlateColor(FTUStyle::TextPrimary));
 		Close->AddChild(Label);
 		if (UHorizontalBoxSlot* S = PageTabs->AddChildToHorizontalBox(Close))

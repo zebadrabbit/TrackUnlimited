@@ -292,7 +292,7 @@ inline FTemplate TemplateAt(std::size_t i)
                 "specified as itself, and the fleet measured against the interlocking.",
                 "Change the mid-course brake's friction pad rate to 0. The pad and the "
                 "drive tyres are two separate machines on one stretch of track, so with "
-                "the pad gone the tyres alone have to stop the train — and the [V] "
+                "the pad gone the tyres alone have to stop the train — and the [F3] "
                 "panel says whether the block is long enough for that.",
                 ETemplatePreset::Showcase};
     case 4:

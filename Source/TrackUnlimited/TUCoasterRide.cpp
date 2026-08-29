@@ -2929,7 +2929,27 @@ void ATUCoasterRide::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 		&ATUCoasterRide::PressResetButton);
 	PlayerInputComponent->BindKey(EKeys::End, IE_Released, this,
 		&ATUCoasterRide::ReleaseResetButton);
-	PlayerInputComponent->BindKey(EKeys::P, IE_Pressed, this,
+	// ===================== THE INSPECTION KEYS ARE F1-F6 =====================
+	//
+	// Six keys that put a picture of the ride's state on the screen and change
+	// nothing about the ride: F1 settings, F2 every overlay off, F3 diagnostics,
+	// F4 the control panel, F5 the profile graph, F6 its channel. They sit
+	// together so somebody can find them by walking the row, and six letters go
+	// back to the alphabet.
+	//
+	// THEY WERE LETTERS BECAUSE OF PIE. The editor binds F1-F8 to viewport view
+	// modes and its bindings are live while you are playing in it, so pressing
+	// one flipped the world to wireframe at the same moment the UI changed —
+	// which reads as the UI being broken. Standalone is the shipping path and
+	// the editor is not listening there, so that was a PIE artefact rather than
+	// a product constraint (decided 2026-08-26, applied here 2026-08-28). In PIE
+	// the double-fire is still real; run standalone.
+	//
+	// WHAT STAYED ON A LETTER OR A NAMED KEY IS THE POINT: dispatch, the E-stop,
+	// the reset, acknowledge, save, undo, insert, remove. Those ACT on something,
+	// and a row of identical unlabelled grey keys is the wrong home for the
+	// control that stops a ride.
+	PlayerInputComponent->BindKey(EKeys::F4, IE_Pressed, this,
 		&ATUCoasterRide::CyclePanelView);
 	// NOT [A] — that is strafe-left, and acknowledging a fault every time somebody
 	// moved the free camera is exactly the kind of accidental press the whole
@@ -2963,17 +2983,19 @@ void ATUCoasterRide::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 	// once a validation warning points somewhere and you have no idea where. The
 	// wheel zooms multiplicatively, so one notch means the same proportion of the
 	// distance at 10 m and at 1000 m.
+	// IN A SEAT IT RECENTRES THE HEAD instead — same promise, and the layout is
+	// not what somebody riding it wants framed. See PressFrameKey.
 	PlayerInputComponent->BindKey(EKeys::F, IE_Pressed, this,
-		&ATUCoasterRide::FrameWholeTrack);
+		&ATUCoasterRide::PressFrameKey);
 
-	// THE RIDE PROFILE, as a graph you can read a number off. [G] cycles the
-	// channel and [H] hides it — one at a time rather than four overlaid, because
+	// THE RIDE PROFILE, as a graph you can read a number off. [F5] shows it and
+	// [F6] cycles the channel — one at a time rather than four overlaid, because
 	// four traces on one axis is a picture rather than a reading.
-	PlayerInputComponent->BindKey(EKeys::G, IE_Pressed, this,
+	PlayerInputComponent->BindKey(EKeys::F6, IE_Pressed, this,
 		&ATUCoasterRide::CycleProfileChannel);
-	PlayerInputComponent->BindKey(EKeys::H, IE_Pressed, this,
+	PlayerInputComponent->BindKey(EKeys::F5, IE_Pressed, this,
 		&ATUCoasterRide::ToggleProfileGraph);
-	PlayerInputComponent->BindKey(EKeys::V, IE_Pressed, this,
+	PlayerInputComponent->BindKey(EKeys::F3, IE_Pressed, this,
 		&ATUCoasterRide::ToggleDiagnostics);
 	// [Z] frames the selected segment; clicking a diagnostics row selects one and
 	// frames it in the same gesture, which is the whole point of a finding
@@ -2995,34 +3017,19 @@ void ATUCoasterRide::SetupPlayerInputComponent(UInputComponent* PlayerInputCompo
 	PlayerInputComponent->BindKey(EKeys::Tab, IE_Pressed, this,
 		&ATUCoasterRide::CycleAppMode);
 
-	// ===================== NO FUNCTION KEYS. THE EDITOR OWNS THEM. =====================
+	// [F2] — every overlay off, for a screenshot. Back where it started: it was
+	// F2 originally, was moved to [U] when PIE's view modes fired alongside it,
+	// and standalone answers that objection.
 	//
-	// [U] — every overlay off, for a screenshot. It was F2, and F2 is the
-	// editor's Unlit view mode; the settings key was F1, which is Wireframe.
-	// Both fired BOTH bindings in PIE, so the overlay toggled and the world
-	// changed rendering mode at the same time — which reads as the UI being
-	// broken rather than as a key collision.
-	//
-	// The rule is not "those two were unlucky": UE binds F1-F8 to viewport view
-	// modes, F8 to eject, F11 to immersive. In PIE the editor's bindings are live
-	// alongside ours, so a function key is never ours to take. Every binding in
-	// this file is now a letter, a bracket or a named key.
-	//
-	// [U] for UI, and it is not routed through IsTypingInField for the same
-	// reason the others are not: a letter bound here is not part of a number the
-	// segment editor accepts.
-	PlayerInputComponent->BindKey(EKeys::U, IE_Pressed, this,
+	// Not routed through IsTypingInField, for the same reason none of these are:
+	// a function key is not part of a number the segment editor accepts.
+	PlayerInputComponent->BindKey(EKeys::F2, IE_Pressed, this,
 		&ATUCoasterRide::ToggleOverlays);
 
-	// [O] — options, in the frame's content slot. A key rather than a button so
-	// the screen is reachable before the main menu that will own it exists.
-	//
-	// NOT F1. The editor binds F1 to a viewport view mode, so pressing it in PIE
-	// opened the settings AND flipped the viewport to wireframe — which read as
-	// the settings screen being broken when it was drawing correctly over a
-	// wireframe world. Same class of collision as [Backspace] being the E-stop
-	// and the editor's own function keys are just as owned as ours.
-	PlayerInputComponent->BindKey(EKeys::O, IE_Pressed, this,
+	// [F1] — options, in the frame's content slot. A key rather than a button so
+	// the screen is reachable before the main menu that will own it exists, and
+	// F1 because that is where every application in the world puts it.
+	PlayerInputComponent->BindKey(EKeys::F1, IE_Pressed, this,
 		&ATUCoasterRide::ToggleSettings);
 
 	// [T] — which train you are on. Not guarded against typing: a letter is not
@@ -4486,7 +4493,7 @@ void ATUCoasterRide::MenuAction(int32 Action)
 		}
 			else if (Action == -8)
 			{
-				// THE SAME SCREEN [O] OPENS, hosted by the frame. One settings
+				// THE SAME SCREEN [F1] OPENS, hosted by the frame. One settings
 				// screen reached two ways, rather than a menu-flavoured copy.
 				ToggleSettings();
 			}
@@ -7177,7 +7184,7 @@ bool ATUCoasterRide::RunDocumentSmokeTest()
 	// The settings page's key capture cannot be driven from here (it is UMG
 	// and needs a real key event), so what is proved is everything UNDER it:
 	// a rebind moves the LIVE chord, is written to the keys file, a conflict
-	// with another action is reported, an F key is refused, and the default
+	// with another action is reported, an F key is accepted, and the default
 	// restores. Done on [N], the newest binding, and put back after.
 	{
 		FString SavedKeys;
@@ -7201,8 +7208,11 @@ bool ATUCoasterRide::RunDocumentSmokeTest()
 				|| (C.ActionA == "key.train" && C.ActionB == "key.seat")) { ++Reported; }
 		}
 		// Function keys are ALLOWED since 2026-08-26 (standalone is the shipping
-		// path; in PIE the editor answers too, and the log says so).
-		const bool bAcceptsF = RebindKey(TEXT("key.seat"), TEXT("F5")) && LiveKeyFor(TEXT("key.seat")) == TEXT("F5");
+		// path; in PIE the editor answers too, and the log says so), and F1-F6
+		// are shipped defaults since 2026-08-28. F12 rather than one of those:
+		// this line is proving an F key is ACCEPTED, and picking one that is
+		// already somebody's default would prove a conflict at the same time.
+		const bool bAcceptsF = RebindKey(TEXT("key.seat"), TEXT("F12")) && LiveKeyFor(TEXT("key.seat")) == TEXT("F12");
 		const bool bRestored = RebindKey(TEXT("key.seat"), TEXT("N")) && LiveKeyFor(TEXT("key.seat")) == TEXT("N")
 			&& Bindings.Conflicts().empty();
 		if (!(bMoved && bWritten && Reported == 1 && bAcceptsF && bRestored))
@@ -7214,7 +7224,7 @@ bool ATUCoasterRide::RunDocumentSmokeTest()
 		}
 		else
 		{
-			UE_LOG(LogTUEvents, Log, TEXT("smoke: [N] rebinds live, persists, reports a clash with [T], accepts F5, restores"));
+			UE_LOG(LogTUEvents, Log, TEXT("smoke: [N] rebinds live, persists, reports a clash with [T], accepts F12, restores"));
 		}
 		if (bHadKeys) { FFileHelper::SaveStringToFile(SavedKeys, *KeyBindingsPath()); }
 		else { Files.Delete(*KeyBindingsPath(), false, true, true); }
@@ -7909,7 +7919,7 @@ void ATUCoasterRide::DrawDiagnosticsPanel(UCanvas* Canvas)
 
 	PanelTile(Canvas, Ox - 8.f, Oy - 8.f, W + 16.f, H + 16.f, PanelGround);
 	PanelLabel(Canvas, Ox, Oy,
-		FString::Printf(TEXT("DIAGNOSTICS   %s   [V] hide"),
+		FString::Printf(TEXT("DIAGNOSTICS   %s   [F3] hide"),
 			UTF8_TO_TCHAR(Diagnostics.Summary().c_str())),
 		Diagnostics.HasErrors() ? PanelRed : PanelDim);
 
@@ -8185,7 +8195,7 @@ void ATUCoasterRide::DrawProfileGraph(UCanvas* Canvas)
 	// the diagnostics model runs on, and the reason both say it.
 	const FChannelExtremes E = ExtremesOf(Values, Total);
 	PanelLabel(Canvas, Ox, Oy - 20.f,
-		FString::Printf(TEXT("%s  (%s)   [G] channel   [H] hide"), ChannelName, ChannelUnit),
+		FString::Printf(TEXT("%s  (%s)   [F6] channel   [F5] hide"), ChannelName, ChannelUnit),
 		PanelDim);
 	PanelLabel(Canvas, Ox + 240.f, Oy - 20.f,
 		FString::Printf(TEXT("peak %.2f at %.0f m      min %.2f at %.0f m"),
@@ -11726,7 +11736,7 @@ void ATUCoasterRide::ToggleOverlays()
 	// SAID ONCE, IN THE LOG, because the banner that would normally carry a hint
 	// is one of the things just hidden — and a screenshot mode that printed a
 	// caption over the screenshot would defeat itself.
-	UE_LOG(LogTUEvents, Log, TEXT("overlays %s  [U]"),
+	UE_LOG(LogTUEvents, Log, TEXT("overlays %s  [F2]"),
 		bHideOverlays ? TEXT("hidden") : TEXT("shown"));
 }
 
@@ -11793,7 +11803,7 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 	// THE MENU YIELDS TO A QUESTION. The confirm, the recovery offer and the
 	// settings page are above it (canvas, or the frame's slot); a widget that
 	// kept taking clicks under them would answer a question nobody asked it.
-	// THE EDITOR FOLLOWS ITS FLAG, which [B], [U] and the mode switch all flip
+	// THE EDITOR FOLLOWS ITS FLAG, which [B], [F2] and the mode switch all flip
 	// from different places; syncing here is one line against four call sites.
 	const bool bPanelsUp = !bHideOverlays
 		&& Session.Mode() != EAppMode::Boot && Session.Mode() != EAppMode::MainMenu
@@ -12295,7 +12305,23 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 		// about and what the banking is built around; moving it to suit a camera
 		// would change every G number on the ride to fix a framing problem. This
 		// is a cosmetic offset on the view alone and touches no physics.
-		Camera->SetWorldLocationAndRotation(ToWorld(Frame.Position), Rotation);
+		// AND THE RIDER CAN TURN THEIR HEAD. The one thing every on-ride video
+		// does that this could not: watch the drop fall away behind you, look
+		// across at the other seat, follow the lift as the train crests it.
+		//
+		// FREE-FLY'S CONVENTION AND ITS INVERT, not the orbit's, because this is
+		// the same gesture — you are turning your head rather than dragging a
+		// subject — and the whole reason those two settings were split is that a
+		// preference about one is not evidence about the other.
+		const float HeadSens = FMath::Clamp(LookSensitivity, 0.25f, 4.f) * 2.2f;
+		RiderHead.AddYaw(LookYaw * HeadSens * (bFlyInvertX ? -1.f : 1.f));
+		RiderHead.AddPitch(LookPitch * HeadSens * (bFlyInvertY ? -1.f : 1.f));
+
+		// COMPOSED IN THE SEAT'S FRAME, never in the world's. A world-space yaw
+		// would have the rider looking at the horizon through an inversion while
+		// the car went round them, which is a drone shot rather than a ride.
+		const FQuat Look = FRotator(RiderHead.PitchDeg, RiderHead.YawDeg, 0.0).Quaternion();
+		Camera->SetWorldLocationAndRotation(ToWorld(Frame.Position), Rotation * Look);
 		// Centimetres in a seat, or the restraint in front of the rider is clipped
 		// off — the other end of the same trade the orbit camera makes. 2 cm is
 		// twice the engine's own 1 cm floor, so it survives the clamp.
@@ -12344,7 +12370,21 @@ void ATUCoasterRide::Tick(float DeltaSeconds)
 	{
 		// What the RIDER feels, at whichever row they are sitting in — not the
 		// train's centre. That is the whole point of choosing a seat.
-		const FGForces G = Train->GetForcesAt(SeatOffset);
+		FGForces G = Train->GetForcesAt(SeatOffset);
+
+		// ===================== AND NOT ON THE HEARTLINE EITHER =====================
+		//
+		// GEnvelope has judged the OUTER SEAT since 2026-08-22 and this readout
+		// had gone on reporting the heartline, so the panel and the judge were
+		// two answers to one question — the thing this project treats as a defect
+		// everywhere else. Same two terms, same function, one instant instead of
+		// a whole run: alpha * y lifts the seat and omega^2 * y pulls it back in.
+		//
+		// The centre seat is y = 0 and reads exactly what it always did, which is
+		// why no measured figure moves.
+		double Omega = 0.0, Alpha = 0.0;
+		Train->RollMotionAt(SeatOffset, Omega, Alpha);
+		OffsetFeltG(Seat.LateralM, Omega, Alpha, G.Vertical, G.Lateral);
 		const double S = Train->GetDistance();
 		Telemetry(1, 0.f, FColor::White,
 			FString::Printf(TEXT("%6.1f km/h    %5.1f m along %.0f m    height %5.1f m"),

@@ -239,23 +239,35 @@ inline std::vector<FSettingEntry> SettingsSchema()
     // is reported. This table drifted from the bindings for exactly one commit —
     // it said F2 for the overlay toggle after F2 was given up to the editor's
     // wireframe view — and nothing could see it. Now something can.
+    //
+    // AND F1-F6 ARE BACK, 2026-08-28. They were given up because the editor's own
+    // view-mode bindings are live in PIE and fired alongside ours; standalone is
+    // the shipping path and the editor is not listening there, so that was a PIE
+    // artefact rather than a product constraint. The six INSPECTION keys — the
+    // ones that put a picture of the ride's state on the screen and change
+    // nothing about the ride — now sit together where a person can find them by
+    // walking the row, and six letters go back to the alphabet.
+    //
+    // WHAT DID NOT MOVE IS THE POINT: dispatch, the E-stop, the reset, save,
+    // undo, insert. Those act on something, and a row of identical grey keys is
+    // the wrong home for a control that stops a ride.
     {
         const char* Keys[][3] = {
             {"key.mode",        "Cycle mode",           "Tab"},
             {"key.camera",      "Cycle camera",         "C"},
             {"key.train",       "Next train",           "T"},
             {"key.seat",        "Next seat",            "N"},
-            {"key.frameAll",    "Frame whole track",    "F"},
+            {"key.frameAll",    "Frame whole track (in a seat: look forward again)", "F"},
             {"key.frameSel",    "Frame selection",      "Z"},
             {"key.segPrev",     "Previous segment",     "LeftBracket"},
             {"key.segNext",     "Next segment",         "RightBracket"},
             {"key.editor",      "Segment editor",       "B"},
-            {"key.diagnostics", "Diagnostics",          "V"},
-            {"key.graph",       "Cycle profile channel","G"},
-            {"key.graphHide",   "Hide profile graph",   "H"},
-            {"key.panel",       "Control panel",        "P"},
-            {"key.overlays",    "Hide all overlays",    "U"},
-            {"key.settings",    "Settings screen",      "O"},
+            {"key.diagnostics", "Diagnostics",          "F3"},
+            {"key.graph",       "Cycle profile channel","F6"},
+            {"key.graphHide",   "Show the profile graph","F5"},
+            {"key.panel",       "Control panel",        "F4"},
+            {"key.overlays",    "Hide all overlays",    "F2"},
+            {"key.settings",    "Settings screen",      "F1"},
             {"key.menu",        "Back to the menu",     "M"},
             // NOT Ctrl+S. The editor owns that chord and its bindings are live in
             // PIE, so the familiar one would save the level as well as the track.

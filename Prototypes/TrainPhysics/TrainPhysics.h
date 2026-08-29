@@ -562,6 +562,61 @@ public:
         return Samples[static_cast<std::size_t>(Index)];
     }
 
+    // ===================== THE ROLL A SEAT SWINGS ON =====================
+    //
+    // Angular rate and angular ACCELERATION of the rider's roll at an offset
+    // along the train -- the two quantities GEnvelope::OffsetFeltG needs to say
+    // what a seat off the heartline feels. The centre seat feels neither, which
+    // is why the heartline reading alone was the whole answer until seats had
+    // a lateral position.
+    //
+    // FROM ARC LENGTH, NOT FROM THE CLOCK. Roll is a property of the track, so
+    // omega = v * dRoll/ds and alpha = v^2 * d2Roll/ds2 -- differenced over the
+    // train's OWN sample points, which are already frames and already spaced by
+    // construction. A per-frame time difference would instead be a second
+    // derivative of a number that changes with the render rate, which is the
+    // noisiest thing a cockpit readout could be built on.
+    //
+    // OMITTED: the v-dot term, alpha += (dRoll/ds) * a. A train changing speed
+    // through a roll rolls faster as it goes, and on the layouts here that term
+    // is a few per cent of the other one. Add it the day a launch fires through
+    // a barrel roll.
+    //
+    // UNWRAPPED PAIRWISE, because resolved roll carries an atan2 term for
+    // world-bank segments and steps by 2pi with nothing physical happening --
+    // the same trap RideProfile's roll rate already avoids, and here it would
+    // put a several-thousand-g spike on the outer seat.
+    void RollMotionAt(double OffsetM, double& OmegaRadPerSec, double& AlphaRadPerSec2) const
+    {
+        OmegaRadPerSec = 0.0;
+        AlphaRadPerSec2 = 0.0;
+        const int N = static_cast<int>(Samples.size());
+        if (N < 3 || !(Config.TrainLength > 0.0)) { return; }
+
+        const double H = Config.TrainLength / (N - 1);
+        const double A = (OffsetM / Config.TrainLength + 0.5) * (N - 1);
+        int i = static_cast<int>(A + 0.5);
+        // One clear of each end so the three-point stencil fits. A seat in the
+        // nose is read off the nose's neighbours rather than not at all.
+        i = i < 1 ? 1 : (i > N - 2 ? N - 2 : i);
+
+        const double Back = UnwrapRoll(Samples[static_cast<std::size_t>(i)].Roll
+                                     - Samples[static_cast<std::size_t>(i - 1)].Roll);
+        const double Fore = UnwrapRoll(Samples[static_cast<std::size_t>(i + 1)].Roll
+                                     - Samples[static_cast<std::size_t>(i)].Roll);
+        const double V = VelocityMs;
+        OmegaRadPerSec  = (Fore + Back) / (2.0 * H) * V;
+        AlphaRadPerSec2 = (Fore - Back) / (H * H) * V * V;
+    }
+
+    static double UnwrapRoll(double D)
+    {
+        const double Pi = 3.14159265358979323846;
+        while (D >  Pi) { D -= 2.0 * Pi; }
+        while (D < -Pi) { D += 2.0 * Pi; }
+        return D;
+    }
+
     // Fore-aft G, the axis the track alone cannot know — what the rider feels
     // under launch and braking. Positive presses them back into the seat.
     // Averaged over the last step.

@@ -209,6 +209,43 @@ private:
     }
 };
 
+// ===================== THE RIDER'S HEAD =====================
+//
+// Turning your head in a seat, which is neither of the other two gestures. The
+// orbit drags the SUBJECT and the free camera flies; this one stays bolted to
+// the seat and only looks, so it is an offset from wherever the car is pointing
+// rather than a rotation of its own.
+//
+// CLAMPED ON BOTH AXES, never wrapped. FOrbitState wraps yaw because an orbit
+// really can go round and round; a neck cannot, and a look that wrapped would
+// leave somebody facing backwards with no idea how they got there.
+//
+// RECENTRED, NOT DECAYED. A head that sprang back to forward would fight
+// anybody watching the drop fall away behind them, which is most of what
+// looking around a coaster is for.
+struct FHeadLook
+{
+    double YawDeg = 0.0;
+    double PitchDeg = 0.0;
+
+    // Over one shoulder. About as far as a seated person turns with a restraint
+    // across their lap, and short of the 180 degrees that would put the wrap
+    // question back on the table.
+    static constexpr double YawLimit = 135.0;
+    static constexpr double PitchLimit = 80.0;
+
+    void AddYaw(double D)   { YawDeg = Clamped(YawDeg + D, YawLimit); }
+    void AddPitch(double D) { PitchDeg = Clamped(PitchDeg + D, PitchLimit); }
+
+    void Recentre() { YawDeg = 0.0; PitchDeg = 0.0; }
+    bool IsCentred() const { return YawDeg == 0.0 && PitchDeg == 0.0; }
+
+    static double Clamped(double V, double Limit)
+    {
+        return V < -Limit ? -Limit : (V > Limit ? Limit : V);
+    }
+};
+
 // ===================== SMOOTHING =====================
 //
 // Framing a segment should GLIDE rather than snap, because a snap loses the

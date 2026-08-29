@@ -818,7 +818,7 @@ panel telling its first lie:
 
 ### Two views, because a real installation has two
 
-`ETUPanelView`; `[P]` cycles **operator → maintenance → off**.
+`ETUPanelView`; `[F4]` cycles **operator → maintenance → off**.
 
 Not a difficulty setting, and not one screen at two detail levels. An operator dispatches trains and
 a maintainer diagnoses machines, and **motor current belongs to exactly one of them** — it is not on

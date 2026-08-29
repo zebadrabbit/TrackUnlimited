@@ -254,6 +254,11 @@ articulation are engineering; only the shell is taste.
 
 Riders; a second train style; per-seat lateral offset
 (that is the wing-coaster work, and `CarCount`'s own comment already notes *"a car is not a
-seat row yet"*); wheel spin; suspension travel; a train interior for rider-mode look-around
-(recorded as blocked on art in the Phase 2 camera card — this unblocks it, it does not
-deliver it).
+seat row yet"*); wheel spin; suspension travel.
+
+**Rider-mode look-around is no longer on this list (2026-08-29).** It stood here as blocked
+on art, and the interior it was waiting for is drawn: a tub with a rim, two rows of seats and
+a lap bar per row. `FHeadLook` in `CameraRig.h` is the whole of it — an offset composed in the
+seat's own frame so it rolls with the car, clamped at 135 and 80 degrees and never wrapped,
+because a neck is not an orbit. `[F]` recentres. What is still not here is a **rider**, so
+looking across at the next seat shows an empty one.

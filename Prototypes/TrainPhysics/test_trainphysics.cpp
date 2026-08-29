@@ -3,6 +3,7 @@
 
 #include "TrainPhysics.h"
 #include "RideProfile.h"
+#include "GEnvelope.h"
 
 #include <cassert>
 #include <cstdio>
@@ -1299,6 +1300,67 @@ static void TestAZoneWithNoPadIsBitIdentical()
     assert(Old.GetDistance() == New.GetDistance());
 }
 
+// ===================== WHAT THE OUTER SEAT FEELS, LIVE =====================
+
+static void TestTheOuterSeatsTermsAreReadableFromOneFrame()
+{
+    // GEnvelope judges the outer seat over a whole recorded run. The cockpit
+    // readout has one instant and no history, so it asks the TRACK instead:
+    // roll is a function of arc length, and the train already carries a row of
+    // frames spaced along itself, so omega = v * dRoll/ds falls straight out.
+    //
+    // A straight rolling 90 degrees over 60 m has a known dRoll/ds, so the
+    // reading is checked against arithmetic rather than against itself.
+    const double L = 60.0;
+    const double Twist = Pi * 0.5;
+    FTrackSegment Ramp;
+    Ramp.Length = L;
+    Ramp.RollStart = 0.0;
+    Ramp.RollEnd = Twist;
+
+    FTrack Track;
+    Track.AddSegment(MakeStraight(20.0));
+    Track.AddSegment(Ramp);
+    Track.AddSegment(MakeStraight(40.0, Twist));
+
+    FTrainConfig C = Frictionless();
+    C.TrainLength = 12.0;
+    FTrain Train(Track, C);
+    Train.Place(50.0, 20.0);          // mid-twist, well clear of both ends
+
+    double Omega = 0.0, Alpha = 0.0;
+    Train.RollMotionAt(0.0, Omega, Alpha);
+    const double Expect = Twist / L * Train.GetSpeed();
+    std::printf("  outer seat: omega %.4f rad/s against %.4f expected, alpha %.4f\n",
+                Omega, Expect, Alpha);
+    assert(Near(Omega, Expect, 1e-6));
+    // A LINEAR ramp has no second derivative, so the snap term is zero. That is
+    // the half people forget: a constant roll rate is comfortable, and it is
+    // ENTERING and LEAVING one that throws an outboard rider about.
+    assert(Near(Alpha, 0.0, 1e-6));
+
+    // And it goes through the same two lines the judge uses.
+    double VerticalG = 1.0, LateralG = 0.0;
+    OffsetFeltG(1.2, Omega, Alpha, VerticalG, LateralG);
+    assert(Near(VerticalG, 1.0, 1e-9));                       // no snap, no change
+    assert(Near(LateralG, Omega * Omega * 1.2 / 9.80665, 1e-12));
+    std::printf("  1.2 m out: %+.2f G lateral where the heartline reads 0.00\n", LateralG);
+
+    // THE CENTRE SEAT IS UNTOUCHED, which is what makes this an addition rather
+    // than a change to every number this project has already measured.
+    double CentreV = 1.0, CentreL = 0.0;
+    OffsetFeltG(0.0, Omega, Alpha, CentreV, CentreL);
+    assert(CentreV == 1.0 && CentreL == 0.0);
+
+    // A POINT TRAIN HAS NO FRAMES TO DIFFERENCE and says so by reading zero
+    // rather than by dividing by a length it does not have.
+    FTrain Point(Track, Frictionless());
+    Point.Place(50.0, 20.0);
+    double PO = 9.0, PA = 9.0;
+    Point.RollMotionAt(0.0, PO, PA);
+    assert(PO == 0.0 && PA == 0.0);
+}
+
 int main()
 {
     TestGravityIsExactEnergyExchange();
@@ -1337,6 +1399,7 @@ int main()
     TestThePadBitesAtItsOwnRateNotTheTransports();
     TestReleasingThePadLeavesTheTyresConveying();
     TestAZoneWithNoPadIsBitIdentical();
+    TestTheOuterSeatsTermsAreReadableFromOneFrame();
     std::printf("All train physics tests passed.\n");
     return 0;
 }

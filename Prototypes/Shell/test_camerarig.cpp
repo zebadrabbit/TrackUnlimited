@@ -263,6 +263,38 @@ void TestAnEMPTYLayoutDoesNotDivideByAnything()
     std::printf("  framing an empty document leaves the camera alone rather than at NaN\n");
 }
 
+void TestTheRIDERSHeadTurnsButDoesNotSpin()
+{
+    // A rider can look over their shoulder and cannot look behind themselves
+    // twice. FOrbitState WRAPS yaw, which is right for an orbit and would be a
+    // silent teleport here: keep dragging and the view comes round to forwards
+    // again with nothing on screen saying it did.
+    FHeadLook H;
+    assert(H.IsCentred());
+
+    for (int i = 0; i < 100; ++i) { H.AddYaw(10.0); }        // 1000 degrees of drag
+    assert(H.YawDeg == FHeadLook::YawLimit);
+    for (int i = 0; i < 200; ++i) { H.AddYaw(-10.0); }
+    assert(H.YawDeg == -FHeadLook::YawLimit);
+
+    for (int i = 0; i < 100; ++i) { H.AddPitch(10.0); }
+    assert(H.PitchDeg == FHeadLook::PitchLimit);
+    for (int i = 0; i < 200; ++i) { H.AddPitch(-10.0); }
+    assert(H.PitchDeg == -FHeadLook::PitchLimit);
+
+    // AND IT STAYS WHERE IT IS PUT. Nothing decays it back to forward, because
+    // watching the drop fall away behind you is the whole gesture.
+    H.Recentre();
+    H.AddYaw(40.0);
+    H.AddPitch(-15.0);
+    assert(H.YawDeg == 40.0 && H.PitchDeg == -15.0);
+    assert(!H.IsCentred());
+    H.Recentre();
+    assert(H.IsCentred());
+    std::printf("  the rider's head clamps at %.0f/%.0f deg and never wraps round to forwards\n",
+                FHeadLook::YawLimit, FHeadLook::PitchLimit);
+}
+
 } // namespace
 
 int main()
@@ -279,6 +311,7 @@ int main()
     TestSMOOTHINGIsFrameRateIndependent();
     TestEachMODERemembersItsOwnCamera();
     TestAnEMPTYLayoutDoesNotDivideByAnything();
+    TestTheRIDERSHeadTurnsButDoesNotSpin();
 
     std::printf("\ntest_camerarig: all assertions passed.\n");
     return 0;

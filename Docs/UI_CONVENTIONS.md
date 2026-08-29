@@ -225,7 +225,7 @@ Also weighed: the plan cites NL2's Steam Workshop as what sustained it for a dec
 community modded **tracks, trains and scenery**. Nobody mods NL2's UI.
 
 **What was built instead, because the good idea underneath was real.** `ETUPanelView` — the control
-panel has an **operator** view and a **maintenance** view, `[P]` cycles them.
+panel has an **operator** view and a **maintenance** view, `[F4]` cycles them.
 
 This is not a difficulty setting and not the same screen at two detail levels. It is the split every
 real installation already has, and honouring it makes the sim *more* faithful rather than less: an
